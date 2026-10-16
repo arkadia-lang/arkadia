@@ -689,9 +689,6 @@ func (c *Checker) convRow(r *syntax.RowE, env *tvEnv) Type {
 	var tail Type = emptyRow
 	if r.Tail != "" {
 		tail = c.tyVar(r.P, env, r.Tail, Row)
-	} else if env.arrows == arrowAmbient {
-		// in signatures, `<IO>` implicitly includes the ambient effects
-		tail = c.ambientRow(env)
 	}
 	return mkRow(labels, tail)
 }

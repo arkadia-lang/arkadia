@@ -1,0 +1,169 @@
+-- A JSON parser and printer written with algebraic effects:
+-- the input is threaded with State and errors use Fail.
+module Main
+
+import Std.State
+
+type Json
+  = JNull
+  | JBool Bool
+  | JNumber Float
+  | JString String
+  | JArray (List Json)
+  | JObject (List (String, Json))
+  deriving (Eq)
+
+-- ------------------------------------------------------------ printing
+
+render : Json -> String
+render JNull = "null"
+render (JBool True) = "true"
+render (JBool False) = "false"
+render (JNumber n) = renderNumber n
+render (JString s) = show s
+render (JArray xs) = "[" ++ joinWith "," (map render xs) ++ "]"
+render (JObject kvs) = "{" ++ joinWith "," (map (\(k, v) -> show k ++ ":" ++ render v) kvs) ++ "}"
+
+renderNumber : Float -> String
+renderNumber n
+  | toFloat (truncate n) == n = show (truncate n)
+  | otherwise = show n
+
+-- ------------------------------------------------------------ parsing
+
+alias Parser a = Unit -> <State (List Char), Fail> a
+
+peek : Unit -> <State (List Char)> Option Char
+peek () = head (get ())
+
+advance : Unit -> <State (List Char)> Unit
+advance () = modify (\cs -> drop 1 cs)
+
+expectChar : Char -> <State (List Char), Fail> Unit
+expectChar c = match peek () with
+  Some d | d == c -> advance ()
+  Some d -> fail "expected '${c}' but found '${d}'"
+  None -> fail "expected '${c}' but reached the end"
+
+skipSpaces : Unit -> <State (List Char)> Unit
+skipSpaces () = match peek () with
+  Some c | isSpace c ->
+    advance ()
+    skipSpaces ()
+  _ -> ()
+
+keyword : String -> Json -> <State (List Char), Fail> Json
+keyword word value =
+  forEach (chars word) expectChar
+  value
+
+value : Unit -> <State (List Char), Fail> Json
+value () =
+  skipSpaces ()
+  let v = match peek () with
+    Some 'n' -> keyword "null" JNull
+    Some 't' -> keyword "true" (JBool True)
+    Some 'f' -> keyword "false" (JBool False)
+    Some '"' -> JString (stringLit ())
+    Some '[' -> JArray (array ())
+    Some '{' -> JObject (object ())
+    Some c | isDigit c || c == '-' -> JNumber (number ())
+    Some c -> fail "unexpected character '${c}'"
+    None -> fail "unexpected end of input"
+  skipSpaces ()
+  v
+
+stringLit : Unit -> <State (List Char), Fail> String
+stringLit () =
+  expectChar '"'
+  let go acc = match peek () with
+    Some '"' ->
+      advance ()
+      fromChars (reverse acc)
+    Some '\\' ->
+      advance ()
+      let c = match peek () with
+        Some 'n' -> '\n'
+        Some 't' -> '\t'
+        Some c -> c
+        None -> fail "unterminated escape"
+      advance ()
+      go (c :: acc)
+    Some c ->
+      advance ()
+      go (c :: acc)
+    None -> fail "unterminated string"
+  go []
+
+number : Unit -> <State (List Char), Fail> Float
+number () =
+  let isNumChar c = isDigit c || c == '-' || c == '.' || c == 'e' || c == 'E' || c == '+'
+  let digits = takeWhile isNumChar (get ())
+  modify (dropWhile isNumChar)
+  orFail "invalid number" (parseFloat (fromChars digits))
+
+-- comma separated items until the closing character
+items : Char -> (Unit -> <State (List Char), Fail> a) -> <State (List Char), Fail> List a
+items close item =
+  skipSpaces ()
+  match peek () with
+    Some c | c == close ->
+      advance ()
+      []
+    _ ->
+      let first = item ()
+      let rest acc = match peek () with
+        Some ',' ->
+          advance ()
+          rest (item () :: acc)
+        _ ->
+          expectChar close
+          reverse acc
+      rest [first]
+
+array : Unit -> <State (List Char), Fail> List Json
+array () =
+  expectChar '['
+  items ']' value
+
+object : Unit -> <State (List Char), Fail> List (String, Json)
+object () =
+  expectChar '{'
+  items '}' member
+
+member : Unit -> <State (List Char), Fail> (String, Json)
+member () =
+  skipSpaces ()
+  let k = stringLit ()
+  skipSpaces ()
+  expectChar ':'
+  (k, value ())
+
+parse : String -> Result String Json
+parse input = runFail (\_ ->
+  let (v, rest) = runState (chars input) value
+  match rest with
+    [] -> v
+    _ -> fail "trailing input: ${fromChars rest}")
+
+-- ------------------------------------------------------------ queries
+
+field : String -> Json -> Option Json
+field k (JObject kvs) = lookup k kvs
+field _ _ = None
+
+main () =
+  let text = """
+    {"name": "Arkadia", "version": 0.1, "tags": ["strict", "effects"],
+     "features": {"gc": true, "native": true, "lazy": false}, "nothing": null}
+    """
+  match parse text with
+    Err e -> println "parse error: ${e}"
+    Ok json ->
+      println (render json)
+      println (withDefault "?" (map render (field "tags" json)))
+      printLn (map render (field "features" json >>= field "native"))
+  match parse "[1, 2,, 3]" with
+    Err e -> println "parse error: ${e}"
+    Ok j -> println (render j)
+  printLn (parse "{\"a\": [1, {\"b\": null}]}" == Ok (JObject [("a", JArray [JNumber 1.0, JObject [("b", JNull)]])]))

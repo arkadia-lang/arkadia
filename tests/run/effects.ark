@@ -11,7 +11,7 @@ runState init action =
     put s k -> \_ -> k () s
   run init
 
-modify : (s -> s) -> <State s> Unit
+modify : (s -> s) -> <State s | e> Unit
 modify f = put (f (get ()))
 
 effect Raise where
@@ -69,7 +69,7 @@ safeDiv a b = a / b
 -- effect polymorphism: map with an effectful function
 sumWithState : List Int -> <State Int> Unit
 sumWithState xs =
-  let _ = map (\x -> modify (+ x)) xs
+  let _ = mapList (\x -> modify (+ x)) xs
   ()
 
 main () =

@@ -1,0 +1,9 @@
+A: step 1
+main: forked workers
+B: step 1
+A: step 2
+main: exiting
+B: step 2
+A: step 3
+B done
+A done

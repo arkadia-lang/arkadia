@@ -5,10 +5,10 @@ effect State s where
   get : Unit -> s
   put : s -> Unit
 
-modify : (s -> s) -> <State s> Unit
+modify : (s -> s) -> <State s | e> Unit
 modify f = put (f (get ()))
 
-gets : (s -> a) -> <State s> a
+gets : (s -> a) -> <State s | e> a
 gets f = f (get ())
 
 -- Run a stateful computation, returning its result and the final state.

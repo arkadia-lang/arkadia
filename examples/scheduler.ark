@@ -1,0 +1,47 @@
+-- Cooperative threads implemented with an algebraic effect.
+--
+-- `yield` suspends the current thread: its continuation is put at the end
+-- of the run queue and resumed later by the scheduler.
+module Main
+
+effect Coop where
+  yield : Unit -> Unit
+  fork : (Unit -> <Coop, IO> Unit) -> Unit
+
+-- A suspended thread waits for the rest of the run queue.
+type Thread = Thread (List Thread -> <IO> Unit)
+
+private next : List Thread -> <IO> Unit
+next [] = ()
+next (Thread t :: rest) = t rest
+
+-- Each thread runs under its own handler instance; the run queue is passed
+-- through the handler clauses.
+private spawn : (Unit -> <Coop, IO> Unit) -> List Thread -> <IO> Unit
+spawn thread queue =
+  let run = handle thread () with
+    return _ -> \q -> next q
+    yield () k -> \q -> next (q ++ [Thread (\q2 -> k () q2)])
+    fork child k -> \q -> next (q ++ [Thread (\q2 -> k () q2), Thread (spawn child)])
+  run queue
+
+runThreads : (Unit -> <Coop, IO> Unit) -> <IO> Unit
+runThreads main = spawn main []
+
+worker : String -> Int -> Unit -> <Coop, IO> Unit
+worker name n () =
+  let loop i = match i > n with
+    True -> println "${name} done"
+    False ->
+      println "${name}: step ${i}"
+      yield ()
+      loop (i + 1)
+  loop 1
+
+main () =
+  runThreads (\_ ->
+    fork (worker "A" 3)
+    fork (worker "B" 2)
+    println "main: forked workers"
+    yield ()
+    println "main: exiting")

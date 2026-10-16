@@ -1,0 +1,3 @@
+-- The classic.
+main () =
+  println "Hello, Arkadia!"

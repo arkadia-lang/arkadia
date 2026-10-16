@@ -395,15 +395,18 @@ instance Monoid Ordering where
 -- Functor / Applicative / Monad / Foldable / Traversable
 -- ===================================================================
 
+-- Functor, Applicative and Monad take pure functions (`<>`): instances may
+-- run them later (parsers, state transformers, ...), outside the handlers
+-- of the caller. Use mapList / forEach / traverse for effectful mapping.
 class Functor f where
-  map : (a -> b) -> f a -> f b
+  map : (a -> <> b) -> f a -> f b
 
 class Functor f => Applicative f where
   pure : a -> f a
-  (<*>) : f (a -> b) -> f a -> f b
+  (<*>) : f (a -> <> b) -> f a -> f b
 
 class Applicative m => Monad m where
-  (>>=) : m a -> (a -> m b) -> m b
+  (>>=) : m a -> (a -> <> m b) -> m b
 
 class Foldable t where
   foldr : (a -> b -> b) -> b -> t a -> b
@@ -412,13 +415,13 @@ class Foldable t where
 class (Functor t, Foldable t) => Traversable t where
   traverse : Applicative f => (a -> f b) -> t a -> f (t b)
 
-(<$>) : Functor f => (a -> b) -> f a -> f b
+(<$>) : Functor f => (a -> <> b) -> f a -> f b
 (<$>) = map
 
 (<$) : Functor f => a -> f b -> f a
 x <$ fa = map (const x) fa
 
-andThen : Monad m => (a -> m b) -> m a -> m b
+andThen : Monad m => (a -> <> m b) -> m a -> m b
 andThen f m = m >>= f
 
 sequence : (Traversable t, Applicative f) => t (f a) -> f (t a)
@@ -462,7 +465,11 @@ minimum (x :: xs) = Some (foldl min x xs)
 -- List instances
 
 instance Functor List where
-  map f xs = reverse (mapRev f xs [])
+  map f xs = mapList f xs
+
+-- Map over a list with a function that may perform effects.
+mapList : (a -> b) -> List a -> List b
+mapList f xs = reverse (mapRev f xs [])
 
 private mapRev : (a -> b) -> List a -> List b -> List b
 mapRev _ [] acc = acc
@@ -594,7 +601,7 @@ concat : List (List a) -> List a
 concat xss = foldr append [] xss
 
 concatMap : (a -> List b) -> List a -> List b
-concatMap f xs = concat (map f xs)
+concatMap f xs = concat (mapList f xs)
 
 filter : (a -> Bool) -> List a -> List a
 filter p xs = reverse (filterAcc p xs [])
@@ -671,7 +678,7 @@ zipWithAcc f (x :: xs) (y :: ys) acc = zipWithAcc f xs ys (f x y :: acc)
 zipWithAcc _ _ _ acc = acc
 
 unzip : List (a, b) -> (List a, List b)
-unzip ps = (map fst ps, map snd ps)
+unzip ps = (mapList fst ps, mapList snd ps)
 
 enumerate : List a -> List (Int, a)
 enumerate xs = zip (range 0 (length xs)) xs

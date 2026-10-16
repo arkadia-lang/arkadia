@@ -36,6 +36,14 @@ func (c *Checker) unifyEff(pos diag.Pos, perf, ctx Type) []string {
 		if ue, ok := err.(*unifyError); ok && ue.msg != "" {
 			e.Notes = append(e.Notes, ue.msg)
 		}
+		_, ptail := flattenRow(Zonk(perf))
+		if _, ctail := flattenRow(Zonk(ctx)); isClosedRow(ctail) {
+			if _, rigid := ptail.(*TSkol); rigid {
+				e.Notes = append(e.Notes, "a function parameter with an unannotated arrow may perform any effect of the caller; if it is called inside a pure function (e.g. one stored in a data structure), require it to be pure with `<>`, as in `(a -> <> b)`, or add a row variable to the enclosing type")
+			} else {
+				e.Notes = append(e.Notes, "the context's effect row is closed; add a row variable to allow more effects, e.g. `<State s | e>`")
+			}
+		}
 		c.errs = append(c.errs, e)
 		return nil
 	}
@@ -44,6 +52,11 @@ func (c *Checker) unifyEff(pos diag.Pos, perf, ctx Type) []string {
 		names = append(names, labelName(l))
 	}
 	return names
+}
+
+func isClosedRow(t Type) bool {
+	_, ok := Prune(t).(*TRowEmpty)
+	return ok
 }
 
 // ------------------------------------------------------------------ instantiation

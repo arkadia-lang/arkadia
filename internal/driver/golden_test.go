@@ -17,6 +17,8 @@ func TestGolden(t *testing.T) {
 		t.Skip("golden tests build native executables")
 	}
 	files, _ := filepath.Glob("../../tests/run/*.ark")
+	examples, _ := filepath.Glob("../../examples/*.ark")
+	files = append(files, examples...)
 	bin := t.TempDir()
 	for _, f := range files {
 		name := strings.TrimSuffix(filepath.Base(f), ".ark")

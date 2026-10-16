@@ -55,7 +55,7 @@ main () =
   printLn (Array.sort (Array.fromList [3, 1, 2]))
   printLn (sum arr)
   -- deterministic random numbers
-  let rolls = runRandom 42 (\_ -> map (\_ -> randomInt 1 6) [1 .. 10])
+  let rolls = runRandom 42 (\_ -> mapList (\_ -> randomInt 1 6) [1 .. 10])
   printLn (all (\r -> r >= 1 && r <= 6) rolls, length rolls)
   printLn (runRandom 7 (\_ -> randomInt 1 1000) == runRandom 7 (\_ -> randomInt 1 1000))
   -- bits and strings

@@ -1,0 +1,5 @@
+{"name":"Arkadia","version":0.1,"tags":["strict","effects"],"features":{"gc":true,"native":true,"lazy":false},"nothing":null}
+["strict","effects"]
+Some "true"
+parse error: unexpected character ','
+True

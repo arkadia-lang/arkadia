@@ -4,7 +4,7 @@ module Std.Reader
 effect Reader r where
   ask : Unit -> r
 
-asks : (r -> a) -> <Reader r> a
+asks : (r -> a) -> <Reader r | e> a
 asks f = f (ask ())
 
 runReader : r -> (Unit -> <Reader r | e> a) -> <e> a
