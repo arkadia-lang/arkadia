@@ -289,6 +289,9 @@ func (l *lowerer) expr(e syntax.Expr) Expr {
 			}
 			return l.apply(l.ctorValue(ci), args)
 		}
+		if len(e.Masks) > 0 {
+			return l.maskedApply(e)
+		}
 		return l.apply(l.expr(e.Fun), l.exprs(e.Args))
 	case *syntax.ELam:
 		return l.lambda(e.Params, e.Body, e.P.String())
@@ -347,6 +350,44 @@ func (l *lowerer) expr(e syntax.Expr) Expr {
 		return l.expr(e.E)
 	}
 	panic(fmt.Sprintf("lower: %T", e))
+}
+
+// maskedApply lowers an application where some steps must run with
+// handlers masked. Arguments are evaluated first, outside any mask.
+func (l *lowerer) maskedApply(e *syntax.EApp) Expr {
+	f := l.expr(e.Fun)
+	var lets []*Let
+	var args []Expr
+	for _, a := range e.Args {
+		x := l.expr(a)
+		if !isAtomic(x) {
+			name := l.fresh("marg")
+			lets = append(lets, &Let{Name: name, Val: x})
+			x = &Var{name}
+		}
+		args = append(args, x)
+	}
+	cur := f
+	start := 0
+	for i := range args {
+		if effs, ok := e.Masks[i]; ok {
+			cur = &Mask{Effs: effs, Body: l.apply(cur, args[start:i+1])}
+			start = i + 1
+		}
+	}
+	var res Expr = l.apply(cur, args[start:])
+	for i := len(lets) - 1; i >= 0; i-- {
+		res = &Let{Name: lets[i].Name, Val: lets[i].Val, Body: res}
+	}
+	return res
+}
+
+func isAtomic(e Expr) bool {
+	switch e.(type) {
+	case *Var, *Global, *Lit:
+		return true
+	}
+	return false
 }
 
 func lit(e *syntax.ELit) Expr {
@@ -651,6 +692,8 @@ func Walk(e Expr, f func(Expr) bool) {
 		for _, p := range e.Parts {
 			Walk(p, f)
 		}
+	case *Mask:
+		Walk(e.Body, f)
 	}
 }
 
@@ -716,6 +759,8 @@ func Map(e Expr, f func(Expr) Expr) Expr {
 			n.Parts = append(n.Parts, Map(p, f))
 		}
 		return f(n)
+	case *Mask:
+		return f(&Mask{Effs: x.Effs, Body: Map(x.Body, f)})
 	}
 	return f(e)
 }

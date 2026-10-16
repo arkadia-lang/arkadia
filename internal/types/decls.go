@@ -128,7 +128,7 @@ func (c *Checker) processEffects() {
 			if len(op.Scheme.Preds) > 0 {
 				c.errorf(op.P, "effect operations cannot have class constraints")
 			}
-			t := c.convStar(op.Scheme.Type, env)
+			t := c.convSpine(op.Scheme.Type, env)
 			f, ok := t.(*TFun)
 			if !ok {
 				c.errorf(op.P, "operation '%s' must have a function type (use `Unit -> T` for operations without arguments)", op.Name)

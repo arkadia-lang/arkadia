@@ -1,0 +1,18 @@
+circle with area 3.0
+a rectangle of area 6.0
+60.0
+Pair 2 4
+Some 42
+[2, 4, 6]
+7
+[1, 2, 3, 5, 8, 9]
+280
+(True, True)
+([Red, Green, Blue], True)
+Node Leaf 1 Leaf
+Some 2
+[1, 10, 2, 20]
+Ok 2
+Some [1, 2, 3]
+None
+Some [1, 2]

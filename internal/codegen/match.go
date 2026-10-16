@@ -35,7 +35,12 @@ func irrefutable(p core.Pat) bool {
 func (c *ctx) match(m *core.Match, d dest) {
 	var scruts []val
 	for _, s := range m.Scruts {
-		scruts = append(scruts, c.atom(c.expr(s)))
+		v := c.expr(s)
+		if !v.atomic {
+			v = c.atom(v)
+			c.line("_ = %s", v.code)
+		}
+		scruts = append(scruts, v)
 	}
 	// a single irrefutable row needs no tests
 	if len(m.Rows) == 1 && m.Rows[0].Body != nil {

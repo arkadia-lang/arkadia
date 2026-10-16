@@ -561,6 +561,7 @@ type tvEnv struct {
 	fixed   bool     // reject unknown names
 	arrows  int
 	ambient Type
+	spine   int
 }
 
 func newTVEnv(gen bool, arrows int) *tvEnv {
@@ -686,6 +687,9 @@ func (c *Checker) convRow(r *syntax.RowE, env *tvEnv) Type {
 	var tail Type = emptyRow
 	if r.Tail != "" {
 		tail = c.tyVar(r.P, env, r.Tail, Row)
+	} else if env.arrows == arrowAmbient {
+		// in signatures, `<IO>` implicitly includes the ambient effects
+		tail = c.ambientRow(env)
 	}
 	return mkRow(labels, tail)
 }
@@ -747,10 +751,29 @@ func (c *Checker) convApp(con *syntax.TConE, args []syntax.TypeExpr, env *tvEnv)
 	return head, k
 }
 
+// convSpine converts the type of a definition. Along the spine of a
+// curried function type, unannotated intermediate arrows (partial
+// application) get their own polymorphic effect, while the final arrow gets
+// the ambient effect.
+func (c *Checker) convSpine(te syntax.TypeExpr, env *tvEnv) Type {
+	f, ok := te.(*syntax.TFunE)
+	if !ok || env.arrows != arrowAmbient || !env.gen {
+		return c.convStar(te, env)
+	}
+	if _, inner := f.Res.(*syntax.TFunE); !inner || f.Eff != nil {
+		return c.convStar(te, env)
+	}
+	a := c.convStar(f.Arg, env)
+	env.spine++
+	eff := env.addGen(fmt.Sprintf("ρ%d", env.spine), Row)
+	r := c.convSpine(f.Res, env)
+	return &TFun{Arg: a, Eff: eff, Res: r}
+}
+
 // convScheme converts a written signature to a closed scheme. Free type
 // variables are implicitly quantified.
 func (c *Checker) convScheme(se *syntax.SchemeE, env *tvEnv) *Scheme {
-	t := c.convStar(se.Type, env)
+	t := c.convSpine(se.Type, env)
 	var preds []Pred
 	for _, p := range se.Preds {
 		cl := c.lookupClass(p.P, p.Qual, p.Class)

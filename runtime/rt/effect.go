@@ -17,6 +17,7 @@ import "fmt"
 
 type frame struct {
 	eff    int
+	mask   bool // a mask frame hides the next handler of eff
 	h      *Handler
 	ch     chan msg
 	parent *frame
@@ -83,8 +84,20 @@ func effName(eff int) string {
 // Perform performs an effect operation.
 func Perform(eff, op int, args []Value) Value {
 	f := cur
-	for f != nil && f.eff != eff {
-		f = f.parent
+	skip := 0
+	for ; f != nil; f = f.parent {
+		if f.eff != eff {
+			continue
+		}
+		if f.mask {
+			skip++
+			continue
+		}
+		if skip > 0 {
+			skip--
+			continue
+		}
+		break
 	}
 	if f == nil {
 		name := effName(eff)
@@ -176,4 +189,16 @@ func (h *Handler) loop(f *frame, outer *frame) Value {
 		return r
 	})
 	return h.Ops[m.op](m.args, k)
+}
+
+// Mask runs body with the innermost handler of each listed effect hidden,
+// so that operations performed by body reach the next outer handler.
+func Mask(effs []int, body func() Value) Value {
+	saved := cur
+	for _, e := range effs {
+		cur = &frame{eff: e, mask: true, parent: cur}
+	}
+	v := body()
+	cur = saved
+	return v
 }

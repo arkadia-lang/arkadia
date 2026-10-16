@@ -1,0 +1,83 @@
+-- Pattern matching and guards
+type Expr
+  = Num Int
+  | Add Expr Expr
+  | Mul Expr Expr
+  | Neg Expr
+
+eval : Expr -> Int
+eval (Num n) = n
+eval (Add a b) = eval a + eval b
+eval (Mul a b) = eval a * eval b
+eval (Neg e) = negate (eval e)
+
+simplify : Expr -> Expr
+simplify (Add (Num 0) e) = simplify e
+simplify (Add e (Num 0)) = simplify e
+simplify (Mul (Num 1) e) = simplify e
+simplify (Mul e (Num 1)) = simplify e
+simplify (Mul (Num 0) _) = Num 0
+simplify (Add a b) = Add (simplify a) (simplify b)
+simplify (Mul a b) = Mul (simplify a) (simplify b)
+simplify (Neg (Neg e)) = simplify e
+simplify e = e
+
+render : Expr -> String
+render e = match e with
+  Num n | n < 0 -> "(${n})"
+        | otherwise -> show n
+  Add a b -> "(${render a} + ${render b})"
+  Mul a b -> "${render a} * ${render b}"
+  Neg x -> "-${render x}"
+
+fizz : Int -> String
+fizz n = match (n % 3, n % 5) with
+  (0, 0) -> "FizzBuzz"
+  (0, _) -> "Fizz"
+  (_, 0) -> "Buzz"
+  _ -> show n
+
+describe : List Int -> String
+describe [] = "empty"
+describe [x] = "one: ${x}"
+describe [x, y] = "two: ${x}, ${y}"
+describe all@(x :: _) = "many starting with ${x} (${length all})"
+
+grade : Int -> Char
+grade s
+  | s >= 90 = 'A'
+  | s >= 80 = 'B'
+  | s >= 70 = 'C'
+  | otherwise = 'F'
+
+greet : String -> String
+greet "world" = "Hello, World!"
+greet name = "Hi, ${name}"
+
+-- guards fall through to the next equation
+classify : Int -> String
+classify n | n > 100 = "big"
+classify 0 = "zero"
+classify n | even n = "even"
+classify _ = "odd"
+
+main () =
+  let e = Add (Mul (Num 1) (Num 7)) (Add (Num 0) (Neg (Neg (Num (-3)))))
+  println (render e)
+  println (render (simplify e))
+  printLn (eval e, eval (simplify e))
+  println (joinWith " " (map fizz [1 .. 15]))
+  println (describe [])
+  println (describe [1])
+  println (describe [1, 2])
+  println (describe [1, 2, 3])
+  println (fromChars (map grade [95, 85, 75, 10]))
+  println (greet "world")
+  println (greet "Arkadia")
+  println (joinWith "," (map classify [0, 1, 2, 101]))
+  let (a, (b, c)) = (1, (2, 3))
+  printLn (a + b + c)
+  printLn (match 'x' with
+    'a' -> 1
+    'x' -> 2
+    _ -> 3)

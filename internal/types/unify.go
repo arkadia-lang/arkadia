@@ -266,3 +266,65 @@ func (c *Checker) openFun(t Type) Type {
 	}
 	return &TFun{Arg: f.Arg, Eff: c.openRow(f.Eff), Res: c.openFun(f.Res)}
 }
+
+// subRow checks that the effects of row a are included in row b. It
+// behaves like unification except that a rigid or closed tail of a may be
+// used under extra labels of b (effect subsumption). Extra labels that sit
+// above a rigid tail are returned: the callee must run with those handlers
+// masked so that its own operations skip them.
+func (c *Checker) subRow(a, b Type) ([]Type, error) {
+	la, ta := flattenRow(a)
+	ta = Prune(ta)
+	if _, ok := ta.(*Meta); ok {
+		return nil, c.unify(a, b)
+	}
+	lb, tb := flattenRow(b)
+	used := make([]bool, len(lb))
+	var missing []Type
+	for _, l := range la {
+		found := false
+		for j, l2 := range lb {
+			if !used[j] && labelName(l2) == labelName(l) {
+				used[j] = true
+				found = true
+				if err := c.unify(l, l2); err != nil {
+					return nil, err
+				}
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, l)
+		}
+	}
+	var extra []Type
+	for j, l := range lb {
+		if !used[j] {
+			extra = append(extra, l)
+		}
+	}
+	tb = Prune(tb)
+	if _, ok := ta.(*TRowEmpty); ok {
+		if len(missing) == 0 {
+			return nil, nil
+		}
+		if m, ok := tb.(*Meta); ok {
+			return nil, c.bindMeta(m, mkRow(missing, c.newMeta(Row)))
+		}
+		return nil, c.missingEffect(missing, tb)
+	}
+	// rigid tail: b's tail must be the same variable
+	if tb == ta {
+		if len(missing) > 0 {
+			return nil, c.missingEffect(missing, tb)
+		}
+		return extra, nil
+	}
+	if m, ok := tb.(*Meta); ok {
+		return extra, c.bindMeta(m, mkRow(missing, ta))
+	}
+	if len(missing) > 0 {
+		return nil, c.missingEffect(missing, tb)
+	}
+	return nil, &unifyError{"effect rows do not match"}
+}

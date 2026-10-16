@@ -26,8 +26,9 @@ func (c *Checker) reportMismatch(pos diag.Pos, expected, actual Type, what strin
 }
 
 // unifyEff checks that effects performed (perf) are allowed by the context.
-func (c *Checker) unifyEff(pos diag.Pos, perf, ctx Type) {
-	if err := c.unify(c.openRow(perf), ctx); err != nil {
+func (c *Checker) unifyEff(pos diag.Pos, perf, ctx Type) []string {
+	extra, err := c.subRow(c.openRow(perf), ctx)
+	if err != nil {
 		pr := newPrinter()
 		pr.count(Zonk(perf))
 		pr.count(Zonk(ctx))
@@ -36,7 +37,13 @@ func (c *Checker) unifyEff(pos diag.Pos, perf, ctx Type) {
 			e.Notes = append(e.Notes, ue.msg)
 		}
 		c.errs = append(c.errs, e)
+		return nil
 	}
+	var names []string
+	for _, l := range extra {
+		names = append(names, labelName(l))
+	}
+	return names
 }
 
 // ------------------------------------------------------------------ instantiation
@@ -59,6 +66,9 @@ func (c *Checker) instantiate(sc *Scheme, pos diag.Pos) (Type, []*syntax.DictRef
 // ------------------------------------------------------------------ expressions
 
 func (c *Checker) checkExpr(e syntax.Expr, t Type, eff Type, what string) {
+	if lam, ok := e.(*syntax.ELam); ok && c.checkLam(lam, t) {
+		return
+	}
 	actual := c.inferExpr(e, eff)
 	c.unifyAt(e.EPos(), t, actual, what)
 }
@@ -79,7 +89,7 @@ func (c *Checker) inferExpr(e syntax.Expr, eff Type) Type {
 		return t
 	case *syntax.EApp:
 		ft := c.inferExpr(e.Fun, eff)
-		return c.applyArgs(e.Fun, ft, e.Args, eff)
+		return c.applyArgs(e, e.Fun, ft, e.Args, eff)
 	case *syntax.ELam:
 		return c.inferLam(e.Params, e.Body)
 	case *syntax.ELet:
@@ -205,11 +215,20 @@ func (c *Checker) inferVar(e *syntax.EVar) Type {
 	return c.openFun(t)
 }
 
-func (c *Checker) applyArgs(fun syntax.Expr, ft Type, args []syntax.Expr, eff Type) Type {
+func (c *Checker) applyArgs(app *syntax.EApp, fun syntax.Expr, ft Type, args []syntax.Expr, eff Type) Type {
 	for i, a := range args {
 		ft = Prune(ft)
 		if f, ok := ft.(*TFun); ok {
-			c.unifyEff(a.EPos(), f.Eff, eff)
+			if masks := c.unifyEff(a.EPos(), f.Eff, eff); len(masks) > 0 {
+				if app == nil {
+					c.errorf(a.EPos(), "internal limitation: effect masking is not supported for operators; use a function application")
+				} else {
+					if app.Masks == nil {
+						app.Masks = map[int][]string{}
+					}
+					app.Masks[i] = masks
+				}
+			}
 			c.checkExpr(a, f.Arg, eff, "this argument")
 			ft = f.Res
 			continue
@@ -250,7 +269,7 @@ func (c *Checker) inferBinOp(e *syntax.EBinOp, eff Type) Type {
 	} else {
 		ft = c.inferVar(e.Op)
 	}
-	return c.applyArgs(e.Op, ft, []syntax.Expr{e.Left, e.Right}, eff)
+	return c.applyArgs(nil, e.Op, ft, []syntax.Expr{e.Left, e.Right}, eff)
 }
 
 func (c *Checker) inferLam(params []syntax.Pattern, body syntax.Expr) Type {
@@ -267,6 +286,32 @@ func (c *Checker) inferLam(params []syntax.Pattern, body syntax.Expr) Type {
 	c.locals = saved
 	c.recordParamMatch(params)
 	return c.funType(pts, bodyEff, r)
+}
+
+// checkLam checks a lambda against a known function type, propagating
+// parameter types and the body's effect context inwards. It returns false
+// when the expected type is not (yet) a function type of enough arity.
+func (c *Checker) checkLam(lam *syntax.ELam, t Type) bool {
+	var arrows []*TFun
+	cur := t
+	for range lam.Params {
+		f, ok := Prune(cur).(*TFun)
+		if !ok {
+			return false
+		}
+		arrows = append(arrows, f)
+		cur = f.Res
+	}
+	saved := c.locals
+	seen := map[string]bool{}
+	for i, p := range lam.Params {
+		c.checkPat(p, arrows[i].Arg, seen)
+	}
+	last := arrows[len(arrows)-1]
+	c.checkExpr(lam.Body, last.Res, last.Eff, "the body of this function")
+	c.locals = saved
+	c.recordParamMatch(lam.Params)
+	return true
 }
 
 // funType builds a curried function type; only the last arrow carries the

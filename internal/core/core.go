@@ -90,6 +90,12 @@ type Handle struct {
 // Concat concatenates strings (interpolation).
 type Concat struct{ Parts []Expr }
 
+// Mask runs Body with the innermost handlers of the given effects hidden.
+type Mask struct {
+	Effs []string
+	Body Expr
+}
+
 func (*Var) isExpr()    {}
 func (*Global) isExpr() {}
 func (*Lit) isExpr()    {}
@@ -103,6 +109,7 @@ func (*If) isExpr()     {}
 func (*Select) isExpr() {}
 func (*Handle) isExpr() {}
 func (*Concat) isExpr() {}
+func (*Mask) isExpr()   {}
 
 type Pat interface{ isPat() }
 

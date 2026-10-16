@@ -1,0 +1,100 @@
+-- Algebraic effects
+effect State s where
+  get : Unit -> s
+  put : s -> Unit
+
+runState : s -> (Unit -> <State s | e> a) -> <e> (a, s)
+runState init action =
+  let run = handle action () with
+    return x -> \s -> (x, s)
+    get () k -> \s -> k s s
+    put s k -> \_ -> k () s
+  run init
+
+modify : (s -> s) -> <State s> Unit
+modify f = put (f (get ()))
+
+effect Raise where
+  raise : String -> a
+
+catch : (Unit -> <Raise | e> a) -> (String -> <e> a) -> <e> a
+catch action onErr =
+  handle action () with
+    raise msg _ -> onErr msg
+
+effect Log where
+  log : String -> Unit
+
+-- tail-resumptive handler (runs without goroutine switching)
+collectLogs : (Unit -> <Log | e> a) -> <e> (a, List String)
+collectLogs action =
+  let (r, logs) = runState [] (\_ ->
+    handle action () with
+      log msg k ->
+        modify (\l -> msg :: l)
+        k ())
+  (r, reverse logs)
+
+effect Yield a where
+  yield : a -> Unit
+
+-- generators via effects
+takeYields : Int -> (Unit -> <Yield a | e> Unit) -> <e> List a
+takeYields n gen =
+  let step = handle gen () with
+    return _ -> \_ -> []
+    yield x k -> \m ->
+      match m with
+        0 -> []
+        _ -> x :: k () (m - 1)
+  step n
+
+naturals : Int -> <Yield Int> Unit
+naturals n =
+  yield n
+  naturals (n + 1)
+
+counter : Unit -> <State Int, Log> Int
+counter () =
+  log "start"
+  modify (+ 1)
+  modify (* 10)
+  log "end"
+  get ()
+
+safeDiv : Int -> Int -> <Raise> Int
+safeDiv _ 0 = raise "division by zero"
+safeDiv a b = a / b
+
+-- effect polymorphism: map with an effectful function
+sumWithState : List Int -> <State Int> Unit
+sumWithState xs =
+  let _ = map (\x -> modify (+ x)) xs
+  ()
+
+main () =
+  printLn (runState 0 (\_ -> collectLogs counter))
+  println (catch (\_ -> show (safeDiv 10 2)) (\e -> "error: " ++ e))
+  println (catch (\_ -> show (safeDiv 10 0)) (\e -> "error: " ++ e))
+  printLn (takeYields 5 (\_ -> naturals 1))
+  printLn (snd (runState 0 (\_ -> sumWithState [1 .. 100])))
+  printLn (runFail (\_ -> orFail "missing" (head ([] : List Int))))
+  -- nested handlers of the same effect
+  let r = runState 1 (\_ ->
+    let inner = runState 100 (\_ ->
+      put (get () + 1)
+      get ())
+    put (get () + 10)
+    fst inner)
+  printLn r
+  -- many exceptions in a loop (continuations are discarded)
+  printLn (length (filterMap (\i -> catch (\_ -> Some (safeDiv 100 (i % 3))) (\_ -> None)) [1 .. 3000]))
+  -- a long tail-resumptive loop
+  let (_, n) = runState 0 (\_ -> loop 100000)
+  printLn n
+
+loop : Int -> <State Int> Unit
+loop 0 = ()
+loop i =
+  modify (+ 1)
+  loop (i - 1)

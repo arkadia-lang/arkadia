@@ -1,0 +1,52 @@
+-- Recursion: tail calls, mutual recursion, local functions, closures
+countDown : Int -> Int -> Int
+countDown 0 acc = acc
+countDown n acc = countDown (n - 1) (acc + 1)
+
+isEven : Int -> Bool
+isEven 0 = True
+isEven n = isOdd (n - 1)
+
+isOdd : Int -> Bool
+isOdd 0 = False
+isOdd n = isEven (n - 1)
+
+fib : Int -> Int
+fib n =
+  let go a b i
+    | i == 0 = a
+    | otherwise = go b (a + b) (i - 1)
+  go 0 1 n
+
+ackermann : Int -> Int -> Int
+ackermann 0 n = n + 1
+ackermann m 0 = ackermann (m - 1) 1
+ackermann m n = ackermann (m - 1) (ackermann m (n - 1))
+
+adders : List (Int -> Int)
+adders = map (\i -> \x -> x + i) [1, 2, 3]
+
+collatz : Int -> Int
+collatz n =
+  let steps x acc = match x with
+    1 -> acc
+    _ | even x -> steps (x / 2) (acc + 1)
+      | otherwise -> steps (3 * x + 1) (acc + 1)
+  steps n 0
+
+compose3 = (+ 1) >> (* 2) >> show
+
+main () =
+  printLn (countDown 10000000 0)
+  printLn (isEven 100001)
+  printLn (fib 90)
+  printLn (ackermann 2 3)
+  printLn (map (\f -> f 10) adders)
+  printLn (collatz 27)
+  println (compose3 4)
+  printLn (length [1 .. 1000000])
+  printLn (sum (map (\x -> x * 2) [1 .. 1000000]))
+  let deep n = match n with
+    0 -> 0
+    _ -> 1 + deep (n - 1)
+  printLn (deep 1000000)

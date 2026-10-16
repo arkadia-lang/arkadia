@@ -346,6 +346,15 @@ func (c *ctx) expr(e core.Expr) val {
 		return c.expr(e.Body)
 	case *core.Handle:
 		return c.handle(e)
+	case *core.Mask:
+		var ids []string
+		for _, eff := range e.Effs {
+			ids = append(ids, strconv.Itoa(c.g.effIDs[eff]))
+		}
+		s := c.sub()
+		s.indent = c.indent + 1
+		s.stmt(e.Body, dest{kind: dRet})
+		return boxed(fmt.Sprintf("rt.Mask([]int{%s}, func() rt.Value {\n%s%s})", strings.Join(ids, ", "), s.body.String(), strings.Repeat("\t", c.indent)))
 	case *core.If, *core.Match:
 		t := c.newTmp()
 		c.line("var %s rt.Value", t)

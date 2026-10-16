@@ -169,6 +169,10 @@ type EApp struct {
 	P    Pos
 	Fun  Expr
 	Args []Expr
+	// Masks[i] lists effects (global names) that must be masked while the
+	// application to argument i runs (filled by the checker when an
+	// effect row was subsumed under extra handlers).
+	Masks map[int][]string
 }
 type ELam struct {
 	P      Pos
