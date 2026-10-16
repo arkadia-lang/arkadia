@@ -353,7 +353,9 @@ func (c *Checker) processImports() {
 		if imp.Alias == "" && alias != imp.Path {
 			c.scope.Quals[imp.Path] = append(c.scope.Quals[imp.Path], ex)
 		}
-		if imp.All {
+		// `import M` brings every name into scope (unqualified and as M.x);
+		// `import M as X` only qualified; `import M (a, b)` selected names.
+		if imp.All || (imp.Alias == "" && imp.Names == nil) {
 			for n, v := range ex.Values {
 				addUnqual(c.scope.Values, n, v, ex.Module)
 			}

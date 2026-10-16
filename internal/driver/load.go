@@ -149,6 +149,28 @@ func (l *Loader) LoadFile(path string, extra ...string) (*Program, error) {
 	return l.check(m.Name)
 }
 
+// LoadModules loads the named modules (and their imports) without an entry
+// module; used for tests and documentation.
+func (l *Loader) LoadModules(names []string) (*Program, error) {
+	for _, name := range names {
+		if _, ok := l.mods[name]; ok {
+			continue
+		}
+		file, src, err := l.readModule(name)
+		if err != nil {
+			return nil, err
+		}
+		m, err := l.parse(file, src, name)
+		if err != nil {
+			return nil, err
+		}
+		if err := l.load(m); err != nil {
+			return nil, err
+		}
+	}
+	return l.check("")
+}
+
 func (l *Loader) check(main string) (*Program, error) {
 	fx := syntax.DefaultFixities()
 	var errs diag.List
