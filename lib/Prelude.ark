@@ -265,6 +265,10 @@ abs x
   | x < fromInt 0 = negate x
   | otherwise = x
 
+-- Truncated division and remainder.
+quotRem : Int -> Int -> (Int, Int)
+quotRem a b = (a / b, rem a b)
+
 even : Int -> Bool
 even n = n % 2 == 0
 
