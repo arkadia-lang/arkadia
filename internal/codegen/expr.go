@@ -478,7 +478,7 @@ func (c *ctx) callKnown(info *globalInfo, args []val) val {
 
 // directCall produces a saturated call; foreign primitives may be inlined.
 func (c *ctx) directCall(info *globalInfo, argCodes []string, args []val) val {
-	if info.kind == gForeign && len(args) == len(argCodes) {
+	if info.kind == gForeign && len(args) == len(argCodes) && !allConstant(args) {
 		if p, ok := prims[info.target]; ok {
 			conv := make([]any, len(args))
 			for i, a := range args {
@@ -488,6 +488,17 @@ func (c *ctx) directCall(info *globalInfo, argCodes []string, args []val) val {
 		}
 	}
 	return boxed(fmt.Sprintf("%s(%s)", info.name, strings.Join(argCodes, ", ")))
+}
+
+// allConstant reports whether all arguments are literals; inlining them
+// would make Go fold (and possibly reject, on overflow) the expression.
+func allConstant(args []val) bool {
+	for _, a := range args {
+		if !strings.HasPrefix(a.code, "int64(") && !strings.HasPrefix(a.code, "float64(") && !strings.HasPrefix(a.code, "rune(") && !strings.HasPrefix(a.code, "\"") {
+			return false
+		}
+	}
+	return true
 }
 
 type prim struct {
