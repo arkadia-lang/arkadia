@@ -247,13 +247,23 @@ func (c *Checker) inferVarInner(e *syntax.EVar) (Type, diag.Pos, string) {
 }
 
 func (c *Checker) applyArgs(app *syntax.EApp, fun syntax.Expr, ft Type, args []syntax.Expr, eff Type) Type {
+	effFailed := false
 	for i, a := range args {
 		ft = Prune(ft)
 		if f, ok := ft.(*TFun); ok {
 			// check the argument before the call's effect: arguments are
 			// evaluated first and may determine the callee's effect row
 			c.checkExpr(a, f.Arg, eff, "this argument")
-			if masks := c.unifyEff(a.EPos(), f.Eff, eff); len(masks) > 0 {
+			if effFailed {
+				// report an effect error once per application
+				c.subRow(c.openRow(f.Eff), eff)
+				ft = f.Res
+				continue
+			}
+			nerr := len(c.errs)
+			masks := c.unifyEff(a.EPos(), f.Eff, eff)
+			effFailed = len(c.errs) > nerr
+			if len(masks) > 0 {
 				if app == nil {
 					c.errorf(a.EPos(), "internal limitation: effect masking is not supported for operators; use a function application")
 				} else {

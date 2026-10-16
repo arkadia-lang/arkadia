@@ -184,6 +184,7 @@ git 依存は解決したコミットが `ark.lock` に記録されます。パ�
 - [`examples/scheduler.ark`](examples/scheduler.ark) — エフェクトで実装した協調スレッド
 - [`examples/json.ark`](examples/json.ark) — State と Fail エフェクトによる JSON パーサ
 - [`examples/calculator.ark`](examples/calculator.ark) — モナディックなパーサコンビネータ（高カインド）
+- [`examples/lisp.ark`](examples/lisp.ark) — クロージャ付きの小さな Lisp インタプリタ
 
 ## 実装の構成
 

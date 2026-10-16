@@ -658,9 +658,14 @@ func (c *Checker) convType(te syntax.TypeExpr, env *tvEnv) (Type, Kind) {
 	case *syntax.TFunE:
 		a := c.convStar(te.Arg, env)
 		var eff Type
-		if te.Eff != nil {
+		_, curried := te.Res.(*syntax.TFunE)
+		switch {
+		case te.Eff != nil:
 			eff = c.convRow(te.Eff, env)
-		} else {
+		case curried && env.arrows == arrowAmbient:
+			// partial application of a curried function is pure
+			eff = emptyRow
+		default:
 			eff = c.ambientRow(env)
 		}
 		r := c.convStar(te.Res, env)

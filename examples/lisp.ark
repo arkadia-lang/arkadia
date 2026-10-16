@@ -1,0 +1,139 @@
+-- A tiny Lisp interpreter: tokenizer, parser, and an evaluator with
+-- lexical closures. Errors are an effect, the environment is a Map.
+module Main
+
+import Std.Exn
+import Std.Map as Map
+
+type Value
+  = Num Int
+  | Sym String
+  | List (List Value)
+  | Fn (List String) Value Env
+  | Builtin String (List Value -> <Exn String> Value)
+  | Nil
+
+type Env = Env (Map.Map String Value)
+
+render : Value -> String
+render (Num n) = show n
+render (Sym s) = s
+render (List xs) = "(" ++ unwords (map render xs) ++ ")"
+render (Fn _ _ _) = "<lambda>"
+render (Builtin name _) = "<builtin ${name}>"
+render Nil = "nil"
+
+-- ------------------------------------------------------------ reader
+
+tokenize : String -> List String
+tokenize src = words (replace "(" " ( " (replace ")" " ) " src))
+
+parse : List String -> <Exn String> (Value, List String)
+parse [] = throw "unexpected end of input"
+parse ("(" :: rest) = parseList rest []
+parse (")" :: _) = throw "unexpected )"
+parse (tok :: rest) = match parseInt tok with
+  Some n -> (Num n, rest)
+  None -> (Sym tok, rest)
+
+parseList : List String -> List Value -> <Exn String> (Value, List String)
+parseList (")" :: rest) acc = (List (reverse acc), rest)
+parseList toks acc =
+  let (v, rest) = parse toks
+  parseList rest (v :: acc)
+
+-- ------------------------------------------------------------ evaluator
+
+lookupVar : String -> Env -> <Exn String> Value
+lookupVar name (Env m) = match Map.lookup name m with
+  Some v -> v
+  None -> throw "unbound symbol: ${name}"
+
+extend : List String -> List Value -> Env -> <Exn String> Env
+extend [] [] env = env
+extend (p :: ps) (a :: as) (Env m) = extend ps as (Env (Map.insert p a m))
+extend _ _ _ = throw "wrong number of arguments"
+
+truthy : Value -> Bool
+truthy Nil = False
+truthy (Num 0) = False
+truthy _ = True
+
+eval : Env -> Value -> <Exn String> Value
+eval env (Sym s) = lookupVar s env
+eval _ (List []) = Nil
+eval env (List [Sym "quote", x]) = x
+eval env (List [Sym "if", c, t, e]) = match truthy (eval env c) with
+  True -> eval env t
+  False -> eval env e
+eval env (List [Sym "lambda", List params, body]) = Fn (map symName params) body env
+eval env (List [Sym "let", List [Sym name, value], body]) =
+  let Env m = env
+  eval (Env (Map.insert name (eval env value) m)) body
+eval env (List (f :: args)) = apply (eval env f) (mapList (eval env) args)
+eval _ v = v
+
+symName : Value -> String
+symName (Sym s) = s
+symName v = render v
+
+apply : Value -> List Value -> <Exn String> Value
+apply (Builtin _ f) args = f args
+apply (Fn params body (Env closure)) args =
+  eval (extend params args (Env closure)) body
+apply v _ = throw "not a function: ${render v}"
+
+-- ------------------------------------------------------------ builtins
+
+arith : String -> (Int -> Int -> <> Int) -> Value
+arith name op = Builtin name (\args -> match args with
+  [Num a, Num b] -> Num (op a b)
+  _ -> throw "${name}: expected two numbers")
+
+compareB : String -> (Int -> Int -> <> Bool) -> Value
+compareB name op = Builtin name (\args -> match args with
+  [Num a, Num b] -> match op a b with
+    True -> Num 1
+    False -> Nil
+  _ -> throw "${name}: expected two numbers")
+
+globals : Env
+globals = Env (Map.fromList
+  [ ("+", arith "+" (+)), ("-", arith "-" (-)), ("*", arith "*" (*))
+  , ("<", compareB "<" (<)), ("=", compareB "=" (==))
+  , ("list", Builtin "list" (\args -> List args))
+  , ("car", Builtin "car" (\args -> match args with
+      [List (x :: _)] -> x
+      _ -> throw "car: expected a non-empty list"))
+  , ("cdr", Builtin "cdr" (\args -> match args with
+      [List (_ :: xs)] -> List xs
+      _ -> throw "cdr: expected a non-empty list"))
+  ])
+
+-- `define`-free recursion through a Y-like fixpoint: (fix f) passes itself
+withFix : Env -> Env
+withFix (Env m) = Env (Map.insert "fix" (Builtin "fix" fixImpl) m)
+
+fixImpl : List Value -> <Exn String> Value
+fixImpl [f] = Builtin "fixed" (\args -> apply (apply f [fixImpl [f]]) args)
+fixImpl _ = throw "fix: expected one function"
+
+run : String -> String
+run src = match try (\_ -> eval (withFix globals) (fst (parse (tokenize src)))) with
+  Ok v -> render v
+  Err e -> "error: ${e}"
+
+main () =
+  let programs =
+    [ "(+ 1 (* 2 3))"
+    , "(list 1 2 (quote (a b)))"
+    , "((lambda (x y) (- x y)) 10 3)"
+    , "(let (twice (lambda (f x) (f (f x)))) (twice (lambda (n) (* n n)) 3))"
+    , "((fix (lambda (fact) (lambda (n) (if (< n 2) 1 (* n (fact (- n 1))))))) 10)"
+    , "(car (cdr (list 1 2 3)))"
+    , "(undefined 1)"
+    , "(+ 1 (quote x))"
+    , "((lambda (x) x))"
+    , "(+ 1"
+    ]
+  forEach programs (\p -> println "${p}\n  => ${run p}")

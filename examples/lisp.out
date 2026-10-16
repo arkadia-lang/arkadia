@@ -1,0 +1,20 @@
+(+ 1 (* 2 3))
+  => 7
+(list 1 2 (quote (a b)))
+  => (1 2 (a b))
+((lambda (x y) (- x y)) 10 3)
+  => 7
+(let (twice (lambda (f x) (f (f x)))) (twice (lambda (n) (* n n)) 3))
+  => 81
+((fix (lambda (fact) (lambda (n) (if (< n 2) 1 (* n (fact (- n 1))))))) 10)
+  => 3628800
+(car (cdr (list 1 2 3)))
+  => 2
+(undefined 1)
+  => error: unbound symbol: undefined
+(+ 1 (quote x))
+  => error: +: expected two numbers
+((lambda (x) x))
+  => error: wrong number of arguments
+(+ 1
+  => error: unexpected end of input
