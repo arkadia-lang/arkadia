@@ -1,0 +1,150 @@
+-- Persistent ordered maps (AVL trees).
+--
+--   import Std.Map as Map
+--   let m = Map.fromList [(1, "one"), (2, "two")]
+--   Map.lookup 1 m   -- Some "one"
+module Std.Map
+
+type Map k v = Tip | Bin Int k v (Map k v) (Map k v)
+
+empty : Map k v
+empty = Tip
+
+singleton : k -> v -> Map k v
+singleton k v = Bin 1 k v Tip Tip
+
+size : Map k v -> Int
+size m = Prelude.foldl (\n _ -> n + 1) 0 (values m)
+
+isEmpty : Map k v -> Bool
+isEmpty Tip = True
+isEmpty _ = False
+
+private height : Map k v -> Int
+height Tip = 0
+height (Bin h _ _ _ _) = h
+
+private node : k -> v -> Map k v -> Map k v -> Map k v
+node k v l r = Bin (1 + Prelude.max (height l) (height r)) k v l r
+
+private rotateRight : Map k v -> Map k v
+rotateRight (Bin _ k v (Bin _ lk lv ll lr) r) = node lk lv ll (node k v lr r)
+rotateRight m = m
+
+private rotateLeft : Map k v -> Map k v
+rotateLeft (Bin _ k v l (Bin _ rk rv rl rr)) = node rk rv (node k v l rl) rr
+rotateLeft m = m
+
+private balance : k -> v -> Map k v -> Map k v -> Map k v
+balance k v l r
+  | height l > height r + 1 = match l with
+      Bin _ _ _ ll lr | height lr > height ll -> rotateRight (node k v (rotateLeft l) r)
+      _ -> rotateRight (node k v l r)
+  | height r > height l + 1 = match r with
+      Bin _ _ _ rl rr | height rl > height rr -> rotateLeft (node k v l (rotateRight r))
+      _ -> rotateLeft (node k v l r)
+  | otherwise = node k v l r
+
+insert : Ord k => k -> v -> Map k v -> Map k v
+insert k v Tip = singleton k v
+insert k v (Bin h k2 v2 l r) = match compare k k2 with
+  LT -> balance k2 v2 (insert k v l) r
+  GT -> balance k2 v2 l (insert k v r)
+  EQ -> Bin h k v l r
+
+-- Insert, combining with an existing value: f new old.
+insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+insertWith f k v m = match lookup k m with
+  None -> insert k v m
+  Some old -> insert k (f v old) m
+
+lookup : Ord k => k -> Map k v -> Option v
+lookup _ Tip = None
+lookup k (Bin _ k2 v l r) = match compare k k2 with
+  LT -> lookup k l
+  GT -> lookup k r
+  EQ -> Some v
+
+findWithDefault : Ord k => v -> k -> Map k v -> v
+findWithDefault d k m = withDefault d (lookup k m)
+
+member : Ord k => k -> Map k v -> Bool
+member k m = isSome (lookup k m)
+
+private minBinding : Map k v -> Option (k, v)
+minBinding Tip = None
+minBinding (Bin _ k v Tip _) = Some (k, v)
+minBinding (Bin _ _ _ l _) = minBinding l
+
+delete : Ord k => k -> Map k v -> Map k v
+delete _ Tip = Tip
+delete k (Bin _ k2 v l r) = match compare k k2 with
+  LT -> balance k2 v (delete k l) r
+  GT -> balance k2 v l (delete k r)
+  EQ -> match minBinding r with
+    None -> l
+    Some (mk, mv) -> balance mk mv l (delete mk r)
+
+-- Update or remove a binding.
+alter : Ord k => (Option v -> Option v) -> k -> Map k v -> Map k v
+alter f k m = match f (lookup k m) with
+  None -> delete k m
+  Some v -> insert k v m
+
+adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
+adjust f k m = match lookup k m with
+  None -> m
+  Some v -> insert k (f v) m
+
+fromList : Ord k => List (k, v) -> Map k v
+fromList kvs = Prelude.foldl (\m (k, v) -> insert k v m) Tip kvs
+
+-- Bindings in ascending key order.
+toList : Map k v -> List (k, v)
+toList m = foldrWithKey (\k v acc -> (k, v) :: acc) [] m
+
+keys : Map k v -> List k
+keys m = foldrWithKey (\k _ acc -> k :: acc) [] m
+
+values : Map k v -> List v
+values m = foldrWithKey (\_ v acc -> v :: acc) [] m
+
+foldrWithKey : (k -> v -> b -> b) -> b -> Map k v -> b
+foldrWithKey _ z Tip = z
+foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
+
+foldlWithKey : (b -> k -> v -> b) -> b -> Map k v -> b
+foldlWithKey _ z Tip = z
+foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
+
+mapWithKey : (k -> a -> b) -> Map k a -> Map k b
+mapWithKey _ Tip = Tip
+mapWithKey f (Bin h k v l r) = Bin h k (f k v) (mapWithKey f l) (mapWithKey f r)
+
+filter : Ord k => (v -> Bool) -> Map k v -> Map k v
+filter p m = filterWithKey (\_ v -> p v) m
+
+filterWithKey : Ord k => (k -> v -> Bool) -> Map k v -> Map k v
+filterWithKey p m = foldlWithKey (\acc k v -> match p k v with
+    True -> insert k v acc
+    False -> acc) Tip m
+
+-- Left-biased union.
+union : Ord k => Map k v -> Map k v -> Map k v
+union a b = foldlWithKey (\acc k v -> insert k v acc) b a
+
+unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
+unionWith f a b = foldlWithKey (\acc k v -> insertWith f k v acc) b a
+
+instance Functor (Map k) where
+  map f m = mapWithKey (\_ v -> f v) m
+
+instance Foldable (Map k) where
+  foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
+  foldl f z m = foldlWithKey (\acc _ v -> f acc v) z m
+
+instance (Eq k, Eq v) => Eq (Map k v) where
+  a == b = toList a == toList b
+
+instance (Show k, Show v) => Show (Map k v) where
+  show m = "Map.fromList " ++ show (toList m)

@@ -915,7 +915,51 @@ func (p *parser) body() Expr {
 	if p.at(INDENT) {
 		return p.block()
 	}
-	return p.expr()
+	if p.at(KwLet) {
+		// `let x = e; body` on one line
+		return p.inlineBlock()
+	}
+	e := p.expr()
+	if p.at(SEMI) {
+		return p.inlineBlockFrom(e)
+	}
+	return e
+}
+
+func (p *parser) stmt() Stmt {
+	if p.at(KwLet) {
+		lp := p.next().Pos
+		b := p.letBind(lp)
+		if p.at(KwIn) {
+			p.next()
+			return &SExpr{E: &ELet{P: lp, Binds: []*Bind{b}, Body: p.body()}}
+		}
+		return &SLet{Bind: b}
+	}
+	return &SExpr{E: p.expr()}
+}
+
+// inlineBlock parses statements separated by ';' on one line.
+func (p *parser) inlineBlock() Expr {
+	pos := p.peek().Pos
+	stmts := []Stmt{p.stmt()}
+	for p.accept(SEMI) {
+		stmts = append(stmts, p.stmt())
+	}
+	if len(stmts) == 1 {
+		if e, ok := stmts[0].(*SExpr); ok {
+			return e.E
+		}
+	}
+	return &EBlock{P: pos, Stmts: stmts}
+}
+
+func (p *parser) inlineBlockFrom(first Expr) Expr {
+	stmts := []Stmt{&SExpr{E: first}}
+	for p.accept(SEMI) {
+		stmts = append(stmts, p.stmt())
+	}
+	return &EBlock{P: first.EPos(), Stmts: stmts}
 }
 
 func (p *parser) block() Expr {
@@ -935,7 +979,7 @@ func (p *parser) block() Expr {
 		} else {
 			stmts = append(stmts, &SExpr{E: p.expr()})
 		}
-		if p.accept(NEWLINE) {
+		if p.accept(NEWLINE) || p.accept(SEMI) {
 			if p.at(DEDENT) {
 				p.next()
 				break

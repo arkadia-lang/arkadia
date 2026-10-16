@@ -1,0 +1,15 @@
+-- Accumulated output as an algebraic effect.
+module Std.Writer
+
+effect Writer w where
+  tell : w -> Unit
+
+runWriter : Monoid w => (Unit -> <Writer w | e> a) -> <e> (a, w)
+runWriter action =
+  let run = handle action () with
+    return x -> \acc -> (x, acc)
+    tell w k -> \acc -> k () (acc <> w)
+  run empty
+
+execWriter : Monoid w => (Unit -> <Writer w | e> a) -> <e> w
+execWriter action = snd (runWriter action)

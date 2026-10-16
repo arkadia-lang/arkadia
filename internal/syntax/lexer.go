@@ -430,7 +430,7 @@ func (lx *lexer) punct() {
 	r := lx.peek()
 	single := map[rune]Kind{
 		'(': LPAREN, ')': RPAREN, '[': LBRACKET, ']': RBRACKET, '{': LBRACE, '}': RBRACE,
-		',': COMMA, '`': BACKTICK,
+		',': COMMA, '`': BACKTICK, ';': SEMI,
 	}
 	if k, ok := single[r]; ok {
 		lx.next()

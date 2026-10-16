@@ -772,9 +772,42 @@ func (c *Checker) convSpine(te syntax.TypeExpr, env *tvEnv) Type {
 	return &TFun{Arg: a, Eff: eff, Res: r}
 }
 
+func rowTails(te syntax.TypeExpr, acc map[string]bool) {
+	switch te := te.(type) {
+	case *syntax.TFunE:
+		if te.Eff != nil && te.Eff.Tail != "" {
+			acc[te.Eff.Tail] = true
+		}
+		rowTails(te.Arg, acc)
+		rowTails(te.Res, acc)
+	case *syntax.TAppE:
+		rowTails(te.Fun, acc)
+		for _, a := range te.Args {
+			rowTails(a, acc)
+		}
+	case *syntax.TTupleE:
+		for _, e := range te.Elems {
+			rowTails(e, acc)
+		}
+	}
+}
+
 // convScheme converts a written signature to a closed scheme. Free type
 // variables are implicitly quantified.
 func (c *Checker) convScheme(se *syntax.SchemeE, env *tvEnv) *Scheme {
+	// A signature that names exactly one row variable uses it as the
+	// ambient effect of its unannotated arrows.
+	if env.arrows == arrowAmbient && env.gen && env.ambient == nil {
+		tails := map[string]bool{}
+		rowTails(se.Type, tails)
+		if len(tails) == 1 {
+			for name := range tails {
+				if _, taken := env.vars[name]; !taken {
+					env.ambient = env.addGen(name, Row)
+				}
+			}
+		}
+	}
 	t := c.convSpine(se.Type, env)
 	var preds []Pred
 	for _, p := range se.Preds {

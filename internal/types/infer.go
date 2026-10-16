@@ -219,6 +219,9 @@ func (c *Checker) applyArgs(app *syntax.EApp, fun syntax.Expr, ft Type, args []s
 	for i, a := range args {
 		ft = Prune(ft)
 		if f, ok := ft.(*TFun); ok {
+			// check the argument before the call's effect: arguments are
+			// evaluated first and may determine the callee's effect row
+			c.checkExpr(a, f.Arg, eff, "this argument")
 			if masks := c.unifyEff(a.EPos(), f.Eff, eff); len(masks) > 0 {
 				if app == nil {
 					c.errorf(a.EPos(), "internal limitation: effect masking is not supported for operators; use a function application")
@@ -229,7 +232,6 @@ func (c *Checker) applyArgs(app *syntax.EApp, fun syntax.Expr, ft Type, args []s
 					app.Masks[i] = masks
 				}
 			}
-			c.checkExpr(a, f.Arg, eff, "this argument")
 			ft = f.Res
 			continue
 		}

@@ -1,0 +1,19 @@
+-- Read-only environment as an algebraic effect.
+module Std.Reader
+
+effect Reader r where
+  ask : Unit -> r
+
+asks : (r -> a) -> <Reader r> a
+asks f = f (ask ())
+
+runReader : r -> (Unit -> <Reader r | e> a) -> <e> a
+runReader env action =
+  handle action () with
+    ask () k -> k env
+
+-- Run a sub-computation with a modified environment.
+local : (r -> r) -> (Unit -> <Reader r | e> a) -> <Reader r | e> a
+local f action =
+  let env = f (ask ())
+  runReader env action

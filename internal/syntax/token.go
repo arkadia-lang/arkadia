@@ -31,6 +31,7 @@ const (
 	LBRACE
 	RBRACE
 	COMMA
+	SEMI
 	BACKTICK
 	BACKSLASH
 	EQUALS // =
@@ -96,7 +97,7 @@ var kindNames = map[Kind]string{
 	LIDENT: "identifier", UIDENT: "constructor", OP: "operator", INT: "integer",
 	FLOAT: "float", STRING: "string", INTERP: "string", CHAR: "character",
 	LPAREN: "'('", RPAREN: "')'", LBRACKET: "'['", RBRACKET: "']'", LBRACE: "'{'",
-	RBRACE: "'}'", COMMA: "','", BACKTICK: "'`'", BACKSLASH: "'\\'", EQUALS: "'='",
+	RBRACE: "'}'", COMMA: "','", SEMI: "';'", BACKTICK: "'`'", BACKSLASH: "'\\'", EQUALS: "'='",
 	BAR: "'|'", ARROW: "'->'", COLON: "':'", DARROW: "'=>'", AT: "'@'", UNDERSCORE: "'_'",
 }
 

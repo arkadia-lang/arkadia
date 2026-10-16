@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -33,8 +34,19 @@ func Flush() { stdout.Flush() }
 // Main runs the program entry point and reports runtime errors.
 func Main(entry func()) {
 	debug.SetMaxStack(4 << 30)
+	if os.Getenv("GOGC") == "" {
+		// functional programs allocate many short-lived objects
+		debug.SetGCPercent(400)
+	}
+	if path := os.Getenv("ARKADIA_CPUPROFILE"); path != "" {
+		if f, err := os.Create(path); err == nil {
+			pprof.StartCPUProfile(f)
+			defer pprof.StopCPUProfile()
+		}
+	}
 	code := run(entry)
 	Flush()
+	pprof.StopCPUProfile()
 	os.Exit(code)
 }
 

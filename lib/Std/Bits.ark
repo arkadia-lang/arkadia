@@ -1,0 +1,27 @@
+-- Bitwise operations on Int (64-bit two's complement).
+module Std.Bits
+
+infixl 7 .&.
+infixl 5 .|.
+infixl 6 .^.
+infixl 8 <<<, >>>
+
+foreign (.&.) : Int -> Int -> Int = "rt.IntAnd"
+foreign (.|.) : Int -> Int -> Int = "rt.IntOr"
+foreign (.^.) : Int -> Int -> Int = "rt.IntXor"
+foreign (<<<) : Int -> Int -> Int = "rt.IntShl"
+foreign (>>>) : Int -> Int -> Int = "rt.IntShr"
+foreign shiftRightUnsigned : Int -> Int -> Int = "rt.IntUShr"
+foreign complement : Int -> Int = "rt.IntComplement"
+
+testBit : Int -> Int -> Bool
+testBit x i = (x >>> i) .&. 1 == 1
+
+popCount : Int -> Int
+popCount x = popAcc x 0 0
+
+private popAcc : Int -> Int -> Int -> Int
+popAcc x i acc
+  | i >= 64 = acc
+  | testBit x i = popAcc x (i + 1) (acc + 1)
+  | otherwise = popAcc x (i + 1) acc

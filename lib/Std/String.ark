@@ -1,0 +1,23 @@
+-- Additional string functions.
+module Std.String
+
+foreign indexOf : String -> String -> Option Int = "rt.StringIndexOf"
+foreign repeat : Int -> String -> String = "rt.StringRepeat"
+foreign reverse : String -> String = "rt.StringReverse"
+foreign charAt : Int -> String -> Option Char = "rt.StringCharAt"
+foreign trimStart : String -> String = "rt.StringTrimStart"
+foreign trimEnd : String -> String = "rt.StringTrimEnd"
+
+padLeft : Int -> Char -> String -> String
+padLeft n c s = repeat (n - stringLength s) (charToString c) ++ s
+
+padRight : Int -> Char -> String -> String
+padRight n c s = s ++ repeat (n - stringLength s) (charToString c)
+
+isEmpty : String -> Bool
+isEmpty s = s == ""
+
+capitalize : String -> String
+capitalize s = match chars s with
+  [] -> ""
+  c :: cs -> toUpper (charToString c) ++ fromChars cs

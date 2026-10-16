@@ -1,0 +1,27 @@
+-- Typed exceptions as an algebraic effect.
+module Std.Exn
+
+effect Exn e where
+  throw : e -> a
+
+-- Run a computation, turning a thrown exception into Err.
+try : (Unit -> <Exn e | r> a) -> <r> Result e a
+try action =
+  handle action () with
+    return x -> Ok x
+    throw e _ -> Err e
+
+catchExn : (Unit -> <Exn e | r> a) -> (e -> <r> a) -> <r> a
+catchExn action handler =
+  handle action () with
+    throw e _ -> handler e
+
+-- Re-raise an error result as an exception.
+rethrow : Result e a -> <Exn e> a
+rethrow (Ok x) = x
+rethrow (Err e) = throw e
+
+-- Turn an Option into a value or throw the given exception.
+expect : e -> Option a -> <Exn e> a
+expect _ (Some x) = x
+expect e None = throw e

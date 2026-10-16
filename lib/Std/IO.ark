@@ -1,0 +1,21 @@
+-- File system and process utilities.
+module Std.IO
+
+foreign appendFile : String -> String -> <IO> Result String Unit = "rt.AppendFile"
+foreign fileExists : String -> <IO> Bool = "rt.FileExists"
+foreign removeFile : String -> <IO> Result String Unit = "rt.RemoveFile"
+foreign listDir : String -> <IO> Result String (List String) = "rt.ListDir"
+foreign makeDir : String -> <IO> Result String Unit = "rt.MakeDir"
+
+-- Run a program: returns (exit code, stdout, stderr).
+foreign runCommand : String -> List String -> <IO> Result String (Int, String, String) = "rt.RunCommand"
+
+readLines : String -> <IO> Result String (List String)
+readLines path = map lines (readFile path)
+
+-- Read all lines from standard input.
+stdinLines : Unit -> <IO> List String
+stdinLines () =
+  match readLine () with
+    None -> []
+    Some l -> l :: stdinLines ()

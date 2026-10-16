@@ -20,9 +20,6 @@ func (c *Checker) collectTypeNames() {
 				k = &KArrow{kinds[i], k}
 			}
 			ti := &TypeInfo{Name: c.sym(d.Name), Kind: k, Params: d.Params, Module: c.modName, Pos: d.P}
-			if len(d.Ctors) == 0 && c.modName != PreludeMod {
-				c.errorf(d.P, "type '%s' has no constructors", d.Name)
-			}
 			c.g.Types[ti.Name] = ti
 			c.defineType(d.Name, ti, d.P)
 		case *syntax.DAlias:

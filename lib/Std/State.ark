@@ -1,0 +1,27 @@
+-- Mutable state as an algebraic effect.
+module Std.State
+
+effect State s where
+  get : Unit -> s
+  put : s -> Unit
+
+modify : (s -> s) -> <State s> Unit
+modify f = put (f (get ()))
+
+gets : (s -> a) -> <State s> a
+gets f = f (get ())
+
+-- Run a stateful computation, returning its result and the final state.
+runState : s -> (Unit -> <State s | e> a) -> <e> (a, s)
+runState init action =
+  let run = handle action () with
+    return x -> \s -> (x, s)
+    get () k -> \s -> k s s
+    put s k -> \_ -> k () s
+  run init
+
+evalState : s -> (Unit -> <State s | e> a) -> <e> a
+evalState init action = fst (runState init action)
+
+execState : s -> (Unit -> <State s | e> a) -> <e> s
+execState init action = snd (runState init action)

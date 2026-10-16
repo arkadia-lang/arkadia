@@ -1,0 +1,51 @@
+-- Pseudo-random numbers as an algebraic effect.
+module Std.Random
+
+import Std.Bits
+
+effect Random where
+  nextInt : Unit -> Int
+
+-- A uniformly distributed integer in [lo, hi].
+randomInt : Int -> Int -> <Random> Int
+randomInt lo hi =
+  let span = hi - lo + 1
+  lo + mod (shiftRightUnsigned (nextInt ()) 1) span
+
+-- A float in [0, 1).
+randomFloat : Unit -> <Random> Float
+randomFloat () = toFloat (shiftRightUnsigned (nextInt ()) 11) / 9007199254740992.0
+
+randomBool : Unit -> <Random> Bool
+randomBool () = testBit (nextInt ()) 7
+
+-- Pick a random element of a non-empty list.
+choose : List a -> <Random> Option a
+choose [] = None
+choose xs = nth (randomInt 0 (length xs - 1)) xs
+
+shuffle : List a -> <Random> List a
+shuffle xs = map snd (sortOn fst (map (\x -> (nextInt (), x)) xs))
+
+-- splitmix64 step
+private mix : Int -> Int
+mix z0 =
+  let z1 = (z0 .^. shiftRightUnsigned z0 30) * -4658895280553007687
+  let z2 = (z1 .^. shiftRightUnsigned z1 27) * -7723592293110705685
+  z2 .^. shiftRightUnsigned z2 31
+
+-- Run with a deterministic seed.
+runRandom : Int -> (Unit -> <Random | e> a) -> <e> a
+runRandom seed action =
+  let run = handle action () with
+    return x -> \_ -> x
+    nextInt () k -> \s ->
+      let s2 = s + -7046029254386353131
+      k (mix s2) s2
+  run seed
+
+foreign nanoTime : Unit -> <IO> Int = "rt.NanoTime"
+
+-- Run seeded from the clock.
+runRandomIO : (Unit -> <Random, IO | e> a) -> <IO | e> a
+runRandomIO action = runRandom (nanoTime ()) action
