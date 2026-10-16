@@ -74,3 +74,29 @@ func TestCompileErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestUnitTests builds the Arkadia unit tests with the test runner.
+func TestUnitTests(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a native executable")
+	}
+	f := "../../tests/unit/StdTests.ark"
+	l := NewLoader([]string{filepath.Dir(f)})
+	p, err := l.LoadModules([]string{"StdTests"})
+	if err != nil {
+		t.Fatal(l.Sources.Render(err, false))
+	}
+	exe := filepath.Join(t.TempDir(), "unit")
+	if err := Build(p, BuildOptions{Output: exe, Tests: true}); err != nil {
+		t.Fatal(l.Sources.Render(err, false))
+	}
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), "NO_COLOR=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("unit tests failed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "all ") {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+}

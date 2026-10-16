@@ -330,6 +330,18 @@ instance (Eq a, Eq b, Eq c, Eq d) => Eq (a, b, c, d) where
 instance (Show a, Show b, Show c, Show d) => Show (a, b, c, d) where
   show (a, b, c, d) = "(" ++ show a ++ ", " ++ show b ++ ", " ++ show c ++ ", " ++ show d ++ ")"
 
+instance (Eq a, Eq b, Eq c, Eq d, Eq e) => Eq (a, b, c, d, e) where
+  (a1, b1, c1, d1, e1) == (a2, b2, c2, d2, e2) = a1 == a2 && b1 == b2 && c1 == c2 && d1 == d2 && e1 == e2
+
+instance (Show a, Show b, Show c, Show d, Show e) => Show (a, b, c, d, e) where
+  show (a, b, c, d, e) = "(" ++ joinWith ", " [show a, show b, show c, show d, show e] ++ ")"
+
+instance (Eq a, Eq b, Eq c, Eq d, Eq e, Eq f) => Eq (a, b, c, d, e, f) where
+  (a1, b1, c1, d1, e1, f1) == (a2, b2, c2, d2, e2, f2) = a1 == a2 && b1 == b2 && c1 == c2 && d1 == d2 && e1 == e2 && f1 == f2
+
+instance (Show a, Show b, Show c, Show d, Show e, Show f) => Show (a, b, c, d, e, f) where
+  show (a, b, c, d, e, f) = "(" ++ joinWith ", " [show a, show b, show c, show d, show e, show f] ++ ")"
+
 instance Display String where
   display s = s
 

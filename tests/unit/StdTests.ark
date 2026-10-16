@@ -1,0 +1,73 @@
+-- Unit tests for the standard library, run with `ark test tests/unit/StdTests.ark`.
+module StdTests
+
+import Std.Map as Map
+import Std.Set as Set
+import Std.State
+import Std.Exn
+import Std.String as S
+
+test "sort is stable and ordered" =
+  assertEq (sortOn fst [(2, 'a'), (1, 'b'), (2, 'c'), (1, 'd')]) [(1, 'b'), (1, 'd'), (2, 'a'), (2, 'c')]
+
+test "reverse is an involution" =
+  let xs = [1 .. 100]
+  assertEq (reverse (reverse xs)) xs
+
+test "take and drop split a list" =
+  let xs = [1 .. 10]
+  assertEq (take 3 xs ++ drop 3 xs) xs
+
+test "range and inclusive range" =
+  assertEq (range 0 3) [0, 1, 2]
+  assertEq [1 .. 3] [1, 2, 3]
+  assertEq (range 3 3) []
+
+test "string functions" =
+  assertEq (split "," "a,b,,c") ["a", "b", "", "c"]
+  assertEq (trim "  x  ") "x"
+  assertEq (S.padRight 4 '.' "ab") "ab.."
+  assertEq (stringLength "日本語") 3
+
+test "show escapes strings" =
+  assertEq (show "a\"b\n") "\"a\\\"b\\n\""
+
+test "integer division and modulo" =
+  assertEq (7 / 2, 7 % 2, -7 / 2, -7 % 2, rem (-7) 2) (3, 1, -3, 1, -1)
+
+test "map insert lookup delete" =
+  let m = Map.fromList (zip [1 .. 50] (map show [1 .. 50]))
+  assertEq (Map.lookup 25 m) (Some "25")
+  assertEq (Map.lookup 25 (Map.delete 25 m)) None
+  assertEq (Map.size (Map.delete 25 m)) 49
+  assertEq (Map.keys (Map.fromList [(3, ()), (1, ()), (2, ())])) [1, 2, 3]
+
+test "map stays balanced under sequential inserts" =
+  let m = foldl (\acc k -> Map.insert k k acc) Map.empty [1 .. 2000]
+  assertEq (Map.size m) 2000
+  assertEq (sum (Map.values m)) 2001000
+
+test "set operations" =
+  let a = Set.fromList [1, 2, 3, 4]
+  let b = Set.fromList [3, 4, 5]
+  assertEq (Set.toList (Set.union a b)) [1, 2, 3, 4, 5]
+  assertEq (Set.toList (Set.intersection a b)) [3, 4]
+  assertEq (Set.toList (Set.difference a b)) [1, 2]
+
+test "state effect" =
+  assertEq (runState 1 (\_ -> modify (* 10); gets (+ 1))) (11, 10)
+
+test "exceptions" =
+  assertEq (try (\_ -> throw "e")) (Err "e" : Result String Int)
+  assertEq (try (\_ -> 5)) (Ok 5 : Result String Int)
+
+test "fail effect" =
+  assertEq (runFail (\_ -> fail "nope")) (Err "nope" : Result String Int)
+
+test "option and result helpers" =
+  assertEq (withDefault 0 (Some 3), withDefault 0 None) (3, 0)
+  assertEq (mapErr stringLength (Err "abc" : Result String Int)) (Err 3)
+  assertEq (sequence [Ok 1, Err "x", Ok 3]) (Err "x" : Result String (List Int))
+
+test "foldable on option" =
+  assertEq (sum (Some 5), sum (None : Option Int), toList (Some 'x')) (5, 0, ['x'])
