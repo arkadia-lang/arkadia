@@ -112,6 +112,14 @@ func (c *Checker) freshLocalID(name string) string {
 	return fmt.Sprintf("%s_%d", sanitize(name), c.nextLoc)
 }
 
+var opNames = map[rune]string{
+	'!': "bang", '#': "hash", '$': "dollar", '%': "pct", '&': "amp", '*': "star",
+	'+': "plus", '.': "dot", '/': "slash", '<': "lt", '=': "eq", '>': "gt",
+	'?': "qm", '@': "at", '\\': "bslash", '^': "caret", '|': "bar", '-': "minus",
+	'~': "tilde", ':': "colon",
+}
+
+// sanitize turns a name (possibly an operator) into an identifier fragment.
 func sanitize(name string) string {
 	var sb strings.Builder
 	for _, r := range name {
@@ -121,8 +129,10 @@ func sanitize(name string) string {
 			sb.WriteString("_q")
 		} else if r > 127 {
 			sb.WriteRune(r)
+		} else if n, ok := opNames[r]; ok {
+			sb.WriteString("_" + n)
 		} else {
-			sb.WriteString("op")
+			sb.WriteString("_op")
 		}
 	}
 	return sb.String()
