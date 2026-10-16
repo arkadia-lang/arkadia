@@ -3,3 +3,5 @@
 .ark/
 *.test
 /out/
+/editors/vscode/node_modules/
+*.vsix

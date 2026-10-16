@@ -28,9 +28,15 @@ type Program struct {
 type Loader struct {
 	SearchPaths []string // directories containing module sources
 	Sources     *diag.Sources
-	mods        map[string]*syntax.Module
-	order       []*syntax.Module
-	visiting    map[string]bool
+	// Overlay maps absolute file paths to unsaved editor contents.
+	Overlay map[string]string
+	// CollectInfo records identifier information for editor tooling.
+	CollectInfo bool
+	// Global is set after checking, even when checking fails.
+	Global   *types.Global
+	mods     map[string]*syntax.Module
+	order    []*syntax.Module
+	visiting map[string]bool
 }
 
 func NewLoader(paths []string) *Loader {
@@ -41,11 +47,22 @@ func modulePath(name string) string {
 	return filepath.Join(strings.Split(name, ".")...) + ".ark"
 }
 
+func (l *Loader) readFile(path string) ([]byte, error) {
+	if l.Overlay != nil {
+		if abs, err := filepath.Abs(path); err == nil {
+			if src, ok := l.Overlay[abs]; ok {
+				return []byte(src), nil
+			}
+		}
+	}
+	return os.ReadFile(path)
+}
+
 func (l *Loader) readModule(name string) (file, src string, err error) {
 	rel := modulePath(name)
 	for _, dir := range l.SearchPaths {
 		p := filepath.Join(dir, rel)
-		if data, err := os.ReadFile(p); err == nil {
+		if data, err := l.readFile(p); err == nil {
 			return p, string(data), nil
 		}
 	}
@@ -116,7 +133,7 @@ func (l *Loader) load(m *syntax.Module) error {
 
 // LoadFile loads an entry module from a file plus everything it imports.
 func (l *Loader) LoadFile(path string, extra ...string) (*Program, error) {
-	data, err := os.ReadFile(path)
+	data, err := l.readFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +205,8 @@ func (l *Loader) check(main string) (*Program, error) {
 		return nil, errs
 	}
 	g := types.NewGlobal()
+	g.CollectInfo = l.CollectInfo
+	l.Global = g
 	for _, m := range l.order {
 		if err := types.CheckModule(g, m); err != nil {
 			return nil, err

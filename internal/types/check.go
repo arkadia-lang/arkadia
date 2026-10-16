@@ -39,6 +39,7 @@ type local struct {
 }
 
 type localVar struct {
+	pos    diag.Pos
 	id     string
 	scheme *Scheme // nil when monomorphic
 	mono   Type
@@ -99,6 +100,13 @@ func (c *Checker) run() {
 	if len(c.errs) == 0 {
 		c.checkMatches()
 	}
+}
+
+func (c *Checker) record(pos diag.Pos, name string, t Type, sc *Scheme, def diag.Pos, kind string) {
+	if !c.g.CollectInfo || pos.Line == 0 {
+		return
+	}
+	c.g.Info = append(c.g.Info, &IdentInfo{Pos: pos, Len: len([]rune(name)), Name: name, Type: t, Scheme: sc, Def: def, Kind: kind})
 }
 
 func (c *Checker) errorf(pos diag.Pos, format string, args ...any) {

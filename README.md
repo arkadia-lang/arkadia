@@ -150,6 +150,7 @@ effect Yield a where
 | `ark test [file]` | `test "名前" = ...` 宣言を実行（`Fail` エフェクトで失敗を報告） |
 | `ark doc <Module>` | モジュールの公開 API を表示 |
 | `ark emit [file]` | 生成された Go コードを表示 |
+| `ark lsp` | Language Server（診断・ホバーで型表示・定義ジャンプ）。VS Code 拡張は [`editors/vscode`](editors/vscode) |
 
 `ark.toml`:
 
@@ -192,6 +193,8 @@ internal/types     カインド推論・型推論（HM + 型クラス + エフ�
 internal/core      中間言語 Core への変換（辞書・パターン・ハンドラ）
 internal/codegen   Core の最適化と Go コード生成
 internal/driver    モジュール読み込み・パッケージ管理・ビルド・テスト
+internal/lsp       Language Server Protocol 実装
+editors/vscode     VS Code 拡張（シンタックスハイライト + LSP クライアント）
 runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エフェクト）
 lib                標準ライブラリ（Arkadia で記述）
 ```

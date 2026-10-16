@@ -168,6 +168,30 @@ type Global struct {
 	Values    map[string]*ValueInfo // by symbol
 	Tests     []*TestInfo
 	nextID    int
+
+	// CollectInfo enables recording of identifier information for editor
+	// tooling (hover, go to definition).
+	CollectInfo bool
+	Info        []*IdentInfo
+}
+
+// IdentInfo describes an identifier occurrence for editor tooling.
+type IdentInfo struct {
+	Pos    diag.Pos
+	Len    int
+	Name   string
+	Type   Type    // monomorphic type at this occurrence (zonk before use)
+	Scheme *Scheme // for definitions with a polymorphic type
+	Def    diag.Pos
+	Kind   string // "local", "value", "constructor", "method", "operation", "definition"
+}
+
+// Describe renders the type information of an identifier.
+func (i *IdentInfo) Describe() string {
+	if i.Scheme != nil {
+		return i.Name + " : " + SchemeString(i.Scheme)
+	}
+	return i.Name + " : " + TypeString(Zonk(i.Type))
 }
 
 // TestInfo describes a `test` declaration.

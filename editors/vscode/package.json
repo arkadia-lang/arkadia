@@ -1,0 +1,38 @@
+{
+  "name": "arkadia",
+  "displayName": "Arkadia Lang",
+  "description": "Syntax highlighting and language server support for Arkadia",
+  "version": "0.1.0",
+  "publisher": "arkadia-lang",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:arkadia"],
+  "contributes": {
+    "languages": [{
+      "id": "arkadia",
+      "aliases": ["Arkadia", "arkadia"],
+      "extensions": [".ark"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "arkadia",
+      "scopeName": "source.arkadia",
+      "path": "./syntaxes/arkadia.tmLanguage.json"
+    }],
+    "configuration": {
+      "title": "Arkadia",
+      "properties": {
+        "arkadia.serverPath": {
+          "type": "string",
+          "default": "ark",
+          "description": "Path to the ark executable used to start the language server."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

@@ -420,8 +420,9 @@ func (c *Checker) inferLocalBind(b *syntax.Bind, eff Type) {
 	b.ID = c.freshLocalID(b.Name)
 	if b.Sig != nil {
 		sc := c.convScheme(b.Sig, newTVEnv(true, arrowAmbient))
-		c.pushLocal(b.Name, &localVar{id: b.ID, scheme: sc})
+		c.pushLocal(b.Name, &localVar{id: b.ID, scheme: sc, pos: b.P})
 		names := c.checkAgainst(b, sc, nil, false, eff)
+		c.record(b.P, b.Name, nil, sc, b.P, "local")
 		b.Info = &syntax.BindInfo{DictParams: names, Scheme: sc}
 		return
 	}
@@ -429,7 +430,7 @@ func (c *Checker) inferLocalBind(b *syntax.Bind, eff Type) {
 	saved := c.locals
 	c.level++
 	mono := c.freshType()
-	c.pushLocal(b.Name, &localVar{id: b.ID, mono: mono, group: gs})
+	c.pushLocal(b.Name, &localVar{id: b.ID, mono: mono, group: gs, pos: b.P})
 	c.pushWanted()
 	c.checkClauses(b, mono, eff)
 	ws := c.popWanted()
@@ -439,9 +440,11 @@ func (c *Checker) inferLocalBind(b *syntax.Bind, eff Type) {
 	gs.info.DictParams = names
 	b.Info = &syntax.BindInfo{DictParams: names, Group: gs.info, Scheme: scs[0]}
 	if len(scs[0].Kinds) == 0 && len(names) == 0 {
-		c.pushLocal(b.Name, &localVar{id: b.ID, mono: scs[0].Type})
+		c.pushLocal(b.Name, &localVar{id: b.ID, mono: scs[0].Type, pos: b.P})
+		c.record(b.P, b.Name, scs[0].Type, nil, b.P, "local")
 	} else {
-		c.pushLocal(b.Name, &localVar{id: b.ID, scheme: scs[0]})
+		c.pushLocal(b.Name, &localVar{id: b.ID, scheme: scs[0], pos: b.P})
+		c.record(b.P, b.Name, nil, scs[0], b.P, "local")
 	}
 }
 
@@ -621,6 +624,7 @@ func (c *Checker) checkTopBindings() {
 		}
 		names := c.checkAgainst(f.Bind, vi.Scheme, nil, false, nil)
 		f.Bind.Info = &syntax.BindInfo{DictParams: names, Scheme: vi.Scheme}
+		c.record(vi.Pos, vi.Name, nil, vi.Scheme, vi.Pos, "definition")
 	}
 	c.flushRoot()
 }
@@ -651,6 +655,7 @@ func (c *Checker) inferTopGroup(names []string, byName map[string]*syntax.DFun) 
 		vi.group = nil
 		vi.groupMono = nil
 		vi.Scheme = scs[i]
+		c.record(vi.Pos, vi.Name, nil, scs[i], vi.Pos, "definition")
 		vi.Bind.Info = &syntax.BindInfo{DictParams: dictNames, Group: gs.info, Scheme: scs[i]}
 	}
 }

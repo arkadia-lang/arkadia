@@ -29,6 +29,7 @@ Commands:
   test [file.ark]    run the project's tests (declarations ` + "`test \"name\" = ...`" + `)
   doc <Module>       show the public interface of a module
   emit [file.ark]    print the generated Go code
+  lsp                start the language server (stdio)
   version            print the version
 
 Run 'ark <command> -h' for the options of a command.

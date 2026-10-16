@@ -99,6 +99,7 @@ func (c *Checker) inferExpr(e syntax.Expr, eff Type) Type {
 		}
 		e.Con = ci
 		t, _ := c.instantiate(ci.Scheme, e.P)
+		c.record(e.P, e.Name, t, nil, ci.Type.Pos, "constructor")
 		return t
 	case *syntax.EApp:
 		ft := c.inferExpr(e.Fun, eff)
@@ -188,6 +189,16 @@ func (c *Checker) litType(e *syntax.ELit) Type {
 }
 
 func (c *Checker) inferVar(e *syntax.EVar) Type {
+	t, def, kind := c.inferVarInner(e)
+	name := e.Name
+	if e.Qual != "" && e.Qual[0] != '#' {
+		name = e.Qual + "." + e.Name
+	}
+	c.record(e.P, name, t, nil, def, kind)
+	return t
+}
+
+func (c *Checker) inferVarInner(e *syntax.EVar) (Type, diag.Pos, string) {
 	if e.Qual == "" {
 		if lv := c.lookupLocal(e.Name); lv != nil {
 			e.Ref = &syntax.VarRef{Local: true, ID: lv.id}
@@ -195,16 +206,23 @@ func (c *Checker) inferVar(e *syntax.EVar) Type {
 				e.Ref.Group = lv.group.info
 			}
 			if lv.scheme == nil {
-				return c.openFun(lv.mono)
+				return c.openFun(lv.mono), lv.pos, "local"
 			}
 			t, refs := c.instantiate(lv.scheme, e.P)
 			e.Dicts = refs
-			return c.openFun(t)
+			return c.openFun(t), lv.pos, "local"
 		}
 	}
 	v := c.lookupValue(e.P, e.Qual, e.Name)
 	if v == nil {
-		return c.freshType()
+		return c.freshType(), diag.Pos{}, ""
+	}
+	kind := "value"
+	switch {
+	case v.Method != nil:
+		kind = "method"
+	case v.Op != nil:
+		kind = "operation"
 	}
 	e.Ref = &syntax.VarRef{ID: v.Sym}
 	if v.Method != nil {
@@ -215,17 +233,17 @@ func (c *Checker) inferVar(e *syntax.EVar) Type {
 	}
 	if v.group != nil {
 		e.Ref.Group = v.group.info
-		return c.openFun(v.groupMono)
+		return c.openFun(v.groupMono), v.Pos, kind
 	}
 	if v.Scheme == nil {
 		// reference to a binding whose type is not known yet (should not
 		// happen thanks to dependency ordering)
 		c.errorf(e.P, "internal error: '%s' used before its type is known", e.Name)
-		return c.freshType()
+		return c.freshType(), v.Pos, kind
 	}
 	t, refs := c.instantiate(v.Scheme, e.P)
 	e.Dicts = refs
-	return c.openFun(t)
+	return c.openFun(t), v.Pos, kind
 }
 
 func (c *Checker) applyArgs(app *syntax.EApp, fun syntax.Expr, ft Type, args []syntax.Expr, eff Type) Type {
@@ -530,7 +548,8 @@ func (c *Checker) bindPatVar(pos diag.Pos, name string, t Type, seen map[string]
 	}
 	seen[name] = true
 	id := c.freshLocalID(name)
-	c.pushLocal(name, &localVar{id: id, mono: t})
+	c.pushLocal(name, &localVar{id: id, mono: t, pos: pos})
+	c.record(pos, name, t, nil, pos, "local")
 	return id
 }
 
