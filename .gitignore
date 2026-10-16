@@ -1,0 +1,5 @@
+/ark
+/bin/
+.ark/
+*.test
+/out/
