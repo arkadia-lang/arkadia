@@ -34,7 +34,7 @@ main () =
 | 代数的エフェクト | `effect` 宣言・`handle ... with` によるディープハンドラ。エフェクトは行多相の型で追跡され、未処理のエフェクトはコンパイルエラー |
 | GC | Go ランタイムの並行 GC を利用 |
 | ネイティブバイナリ | Arkadia → Go → `go build` で単一の静的バイナリを生成 |
-| 現代的なエコシステム | `ark` コマンド（new / build / run / check / test / doc）、`ark.toml` による依存管理（path / git）とロックファイル、テストランナー、Go への FFI |
+| 現代的なエコシステム | `ark` コマンド（new / build / run / check / test / doc / repl）、Language Server（VS Code 拡張付き）、`ark.toml` による依存管理（path / git）とロックファイル、テストランナー、Go への FFI |
 | 再帰とパターンマッチだけの制御 | `if` もループも無い。`match`・ガード・再帰（自己末尾呼び出しはループに最適化）だけ |
 | 空白区切りの関数適用 | `f x y` |
 | 全関数がカリー化 | `add 1` は部分適用。既知アリティの完全適用は直接呼び出しに最適化 |
@@ -149,6 +149,7 @@ effect Yield a where
 | `ark check [file]` | 型検査のみ |
 | `ark test [file]` | `test "名前" = ...` 宣言を実行（`Fail` エフェクトで失敗を報告） |
 | `ark doc <Module>` | モジュールの公開 API を表示 |
+| `ark repl` | 対話環境（式の評価、定義の追加、`:t` で型表示） |
 | `ark emit [file]` | 生成された Go コードを表示 |
 | `ark lsp` | Language Server（診断・ホバーで型表示・定義ジャンプ）。VS Code 拡張は [`editors/vscode`](editors/vscode) |
 

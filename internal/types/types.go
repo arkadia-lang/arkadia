@@ -601,3 +601,13 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// EffectLabels lists the effect labels of a row (for display).
+func EffectLabels(t Type) []string {
+	labels, _ := flattenRow(t)
+	var out []string
+	for _, l := range labels {
+		out = append(out, TypeString(l))
+	}
+	return out
+}

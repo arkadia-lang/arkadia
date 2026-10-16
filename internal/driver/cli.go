@@ -28,6 +28,7 @@ Commands:
   check [file.ark]   type check without building
   test [file.ark]    run the project's tests (declarations ` + "`test \"name\" = ...`" + `)
   doc <Module>       show the public interface of a module
+  repl               start an interactive session
   emit [file.ark]    print the generated Go code
   lsp                start the language server (stdio)
   version            print the version
@@ -57,6 +58,8 @@ func CLI(args []string) int {
 		return cmdDoc(rest)
 	case "emit":
 		return cmdEmit(rest)
+	case "repl":
+		return Repl(os.Stdin, os.Stdout)
 	case "version", "--version", "-v":
 		fmt.Println("ark", Version)
 		return 0
