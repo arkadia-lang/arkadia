@@ -82,6 +82,13 @@ func (p *parser) next() Token {
 	}
 	return t
 }
+
+// atWord reports whether the next token is the contextual keyword w.
+func (p *parser) atWord(w string) bool {
+	t := p.toks[p.i]
+	return t.Kind == LIDENT && t.Qual == "" && t.Text == w
+}
+
 func (p *parser) accept(k Kind) bool {
 	if p.at(k) {
 		p.next()
@@ -170,7 +177,8 @@ func (p *parser) qualifiedUpper() string {
 func (p *parser) importDecl() *Import {
 	pos := p.expect(KwImport).Pos
 	imp := &Import{P: pos, Path: p.qualifiedUpper()}
-	if p.accept(KwAs) {
+	if p.atWord("as") {
+		p.next()
 		imp.Alias = p.expect(UIDENT).Text
 	}
 	if p.at(LPAREN) {
@@ -264,8 +272,6 @@ func (p *parser) decl() Decl {
 		return d
 	case KwType:
 		return p.typeDecl()
-	case KwAlias:
-		return p.aliasDecl()
 	case KwClass:
 		return p.classDecl()
 	case KwInstance:
@@ -276,11 +282,15 @@ func (p *parser) decl() Decl {
 		return p.foreignDecl()
 	case KwInfixl, KwInfixr, KwInfix:
 		return p.fixityDecl()
-	case KwTest:
+	}
+	if p.atWord("test") && p.peekN(1).Kind == STRING {
 		p.next()
 		name := p.expect(STRING)
 		p.expect(EQUALS)
 		return &DTest{P: t.Pos, Name: name.Str, Body: p.body()}
+	}
+	if p.atWord("alias") && p.peekN(1).Kind == UIDENT {
+		return p.aliasDecl()
 	}
 	if s := p.trySig(); s != nil {
 		return s
@@ -391,14 +401,14 @@ func (p *parser) typeDecl() Decl {
 	pos := p.expect(KwType).Pos
 	name := p.expect(UIDENT).Text
 	d := &DType{P: pos, Name: name}
-	for p.at(LIDENT) {
+	for p.at(LIDENT) && !p.atWord("deriving") {
 		d.Params = append(d.Params, p.next().Text)
 	}
 	if p.accept(EQUALS) {
 		if p.at(INDENT) {
 			p.next()
 			for {
-				if p.at(KwDeriving) {
+				if p.atWord("deriving") {
 					d.Deriving = p.derivingClause()
 				} else {
 					p.accept(BAR)
@@ -421,14 +431,14 @@ func (p *parser) typeDecl() Decl {
 			}
 		}
 	}
-	if p.at(KwDeriving) {
+	if p.atWord("deriving") {
 		d.Deriving = p.derivingClause()
 	}
 	return d
 }
 
 func (p *parser) derivingClause() []string {
-	p.expect(KwDeriving)
+	p.next() // deriving
 	var names []string
 	if p.accept(LPAREN) {
 		for !p.at(RPAREN) {
@@ -447,14 +457,14 @@ func (p *parser) derivingClause() []string {
 func (p *parser) ctorDecl() *CtorDecl {
 	t := p.expect(UIDENT)
 	c := &CtorDecl{P: t.Pos, Name: t.Text}
-	for p.startsTypeAtom() {
+	for p.startsTypeAtom() && !p.atWord("deriving") {
 		c.Fields = append(c.Fields, p.typeAtom())
 	}
 	return c
 }
 
 func (p *parser) aliasDecl() Decl {
-	pos := p.expect(KwAlias).Pos
+	pos := p.next().Pos // alias
 	d := &DAlias{P: pos, Name: p.expect(UIDENT).Text}
 	for p.at(LIDENT) {
 		d.Params = append(d.Params, p.next().Text)

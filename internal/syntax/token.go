@@ -70,9 +70,7 @@ const (
 var keywords = map[string]Kind{
 	"module":   KwModule,
 	"import":   KwImport,
-	"as":       KwAs,
 	"type":     KwType,
-	"alias":    KwAlias,
 	"class":    KwClass,
 	"instance": KwInstance,
 	"effect":   KwEffect,
@@ -88,8 +86,6 @@ var keywords = map[string]Kind{
 	"infixr":   KwInfixr,
 	"infix":    KwInfix,
 	"private":  KwPrivate,
-	"test":     KwTest,
-	"deriving": KwDeriving,
 }
 
 var kindNames = map[Kind]string{

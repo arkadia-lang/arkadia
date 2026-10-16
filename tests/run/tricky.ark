@@ -1,0 +1,127 @@
+-- Corner cases for code generation and the type checker.
+import Std.State
+
+-- closures created inside a self-tail-recursive loop must capture the
+-- value of each iteration
+makeAdders : Int -> List (Int -> Int) -> List (Int -> Int)
+makeAdders 0 acc = acc
+makeAdders n acc = makeAdders (n - 1) ((\x -> x + n) :: acc)
+
+-- functions of arity > 4, partially and over-applied
+sum6 : Int -> Int -> Int -> Int -> Int -> Int -> Int
+sum6 a b c d e f = a + b + c + d + e + f
+
+pick : Int -> (Int -> Int) -> Int -> Int
+pick 0 f = f
+pick _ _ = \x -> x * 100
+
+type V3 = V3 Int Int Int
+  deriving (Show, Eq, Ord)
+
+type Big a = Big a a a a a
+  deriving (Show)
+
+effect Emit where
+  emit : Int -> Int -> Unit
+
+-- the continuation used in a non-tail position
+sumEmits : (Unit -> <Emit | e> Unit) -> <e> Int
+sumEmits action =
+  handle action () with
+    return _ -> 0
+    emit a b k -> a * b + k ()
+
+-- a fresh handler on every iteration of a loop
+countUp : Int -> Int -> Int
+countUp 0 acc = acc
+countUp n acc =
+  let (_, s) = runState acc (\_ -> modify (+ n))
+  countUp (n - 1) s
+
+effect Gen where
+  next : Int -> Unit
+
+type Stream = Done | More Int (Unit -> Stream)
+
+toStream : (Unit -> <Gen> Unit) -> <> Stream
+toStream g =
+  handle g () with
+    return _ -> Done
+    next x k -> More x (\_ -> k ())
+
+takeS : Int -> Stream -> List Int
+takeS 0 _ = []
+takeS _ Done = []
+takeS n (More x rest) = x :: takeS (n - 1) (rest ())
+
+evens : Int -> <Gen> Unit
+evens n =
+  next n
+  evens (n + 2)
+
+-- uses (==) through the Ord superclass
+dedupSorted : Ord a => List a -> List a
+dedupSorted (x :: y :: rest)
+  | x == y = dedupSorted (y :: rest)
+  | otherwise = x :: dedupSorted (y :: rest)
+dedupSorted xs = xs
+
+class Container f where
+  empty' : f a
+  insert' : a -> f a -> f a
+  items : f a -> List a
+
+instance Container List where
+  empty' = []
+  insert' x xs = x :: xs
+  items xs = xs
+
+fill : Container f => List a -> f a
+fill xs = foldr insert' empty' xs
+
+shadow : Int -> Int
+shadow x =
+  let x = x + 1
+  let f x = x * 2
+  match f x with
+    x | x > 10 -> x
+    x -> x + 1000
+
+unicode : String -> String
+unicode "こんにちは" = "hello"
+unicode s = s
+
+main () =
+  printLn (map (\f -> f 0) (makeAdders 4 []))
+  printLn (sum6 1 2 3 4 5 6)
+  let p = sum6 1 2
+  printLn (p 3 4 5 6, (p 10 10) 10 10)
+  printLn (pick 0 (+ 1) 5, pick 1 id 5)
+  printLn (map (V3 1 2) [3, 4], compare (V3 1 2 3) (V3 1 2 4), V3 0 0 0 == V3 0 0 0)
+  printLn (Big 1 2 3 4 5)
+  printLn (sumEmits (\_ -> emit 2 3; emit 4 5; emit 1 1))
+  printLn (countUp 100 0)
+  printLn (takeS 5 (toStream (\_ -> evens 0)))
+  let s1 = toStream (\_ -> evens 1)
+  let s2 = toStream (\_ -> evens 100)
+  printLn (zip (takeS 3 s1) (takeS 3 s2))
+  printLn (dedupSorted [1, 1, 2, 3, 3, 3, 4])
+  printLn (items (fill [1, 2, 3] : List Int))
+  printLn (shadow 2, shadow 10)
+  println (unicode "こんにちは" ++ " " ++ unicode "x")
+  let ops = [(+), (-), (*)]
+  printLn (map (\op -> op 10 3) ops)
+  printLn (foldMap (\x -> [x, x]) [1, 2])
+  printLn (map show [Some 1, None])
+  printLn (zipWith3 (\a b c -> a + b + c) [1, 2] [10, 20] [100, 200])
+  printLn (uncurry (+) (3, 4), curry fst 1 2)
+
+zipWith3 : (a -> b -> c -> d) -> List a -> List b -> List c -> List d
+zipWith3 f (a :: as) (b :: bs) (c :: cs) = f a b c :: zipWith3 f as bs cs
+zipWith3 _ _ _ _ = []
+
+uncurry : (a -> b -> c) -> (a, b) -> c
+uncurry f (a, b) = f a b
+
+curry : ((a, b) -> c) -> a -> b -> c
+curry f a b = f (a, b)

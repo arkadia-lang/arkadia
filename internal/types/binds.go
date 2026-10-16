@@ -418,10 +418,19 @@ func (c *Checker) inferLocalBind(b *syntax.Bind, eff Type) {
 		return
 	}
 	b.ID = c.freshLocalID(b.Name)
+	// value bindings are not recursive: in `let x = x + 1` the right-hand
+	// side refers to the outer x
+	recursive := bindArity(b) > 0
 	if b.Sig != nil {
 		sc := c.convScheme(b.Sig, newTVEnv(true, arrowAmbient))
-		c.pushLocal(b.Name, &localVar{id: b.ID, scheme: sc, pos: b.P})
+		lv := &localVar{id: b.ID, scheme: sc, pos: b.P}
+		if recursive {
+			c.pushLocal(b.Name, lv)
+		}
 		names := c.checkAgainst(b, sc, nil, false, eff)
+		if !recursive {
+			c.pushLocal(b.Name, lv)
+		}
 		c.record(b.P, b.Name, nil, sc, b.P, "local")
 		b.Info = &syntax.BindInfo{DictParams: names, Scheme: sc}
 		return
@@ -430,7 +439,9 @@ func (c *Checker) inferLocalBind(b *syntax.Bind, eff Type) {
 	saved := c.locals
 	c.level++
 	mono := c.freshType()
-	c.pushLocal(b.Name, &localVar{id: b.ID, mono: mono, group: gs, pos: b.P})
+	if recursive {
+		c.pushLocal(b.Name, &localVar{id: b.ID, mono: mono, group: gs, pos: b.P})
+	}
 	c.pushWanted()
 	c.checkClauses(b, mono, eff)
 	ws := c.popWanted()

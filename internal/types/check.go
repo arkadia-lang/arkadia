@@ -206,15 +206,19 @@ func (c *Checker) addCtors(ti *TypeInfo, names []string, fields [][]Type) {
 	}
 }
 
+// ctorScheme builds the type of a constructor function. Every arrow gets
+// its own effect variable: applying a constructor has no effect.
 func ctorScheme(nparams int, fields []Type, res Type) *Scheme {
-	kinds := make([]Kind, nparams+1)
+	kinds := make([]Kind, nparams, nparams+len(fields))
 	for i := 0; i < nparams; i++ {
 		kinds[i] = Star
 	}
-	kinds[nparams] = Row
 	t := res
 	for i := len(fields) - 1; i >= 0; i-- {
-		t = &TFun{Arg: fields[i], Eff: &TGen{nparams}, Res: t}
+		t = &TFun{Arg: fields[i], Eff: &TGen{nparams + i}, Res: t}
+	}
+	for range fields {
+		kinds = append(kinds, Row)
 	}
 	return &Scheme{Kinds: kinds, Type: t}
 }
@@ -643,7 +647,7 @@ func (c *Checker) convType(te syntax.TypeExpr, env *tvEnv) (Type, Kind) {
 		}
 		f, kf := c.convType(te.Fun, env)
 		for _, a := range te.Args {
-			at, ka := c.convType(a, env)
+			at, ka := c.convArg(a, env)
 			kr := Kind(newKVar(c.g))
 			if !unifyKind(kf, &KArrow{ka, kr}) {
 				c.errorf(a.TPos(), "kind mismatch: cannot apply a type of kind %s to %s", KindString(kf), KindString(ka))
@@ -664,7 +668,11 @@ func (c *Checker) convType(te syntax.TypeExpr, env *tvEnv) (Type, Kind) {
 	case *syntax.TTupleE:
 		var ts []Type
 		for _, e := range te.Elems {
-			ts = append(ts, c.convStar(e, env))
+			t, k := c.convArg(e, env)
+			if !unifyKind(k, Star) {
+				c.errorf(e.TPos(), "expected a type, but this has kind %s", KindString(k))
+			}
+			ts = append(ts, t)
 		}
 		if len(ts) > 12 {
 			c.errorf(te.P, "tuples may have at most 12 elements")
@@ -675,6 +683,19 @@ func (c *Checker) convType(te syntax.TypeExpr, env *tvEnv) (Type, Kind) {
 		return c.tUnit(), Star
 	}
 	panic(fmt.Sprintf("convType: %T", te))
+}
+
+// convArg converts a type argument (of a type constructor or tuple). In
+// signatures, unannotated arrows inside type arguments are pure: a
+// `List (Int -> Int)` holds pure functions.
+func (c *Checker) convArg(te syntax.TypeExpr, env *tvEnv) (Type, Kind) {
+	if env.arrows != arrowAmbient {
+		return c.convType(te, env)
+	}
+	env.arrows = arrowPure
+	t, k := c.convType(te, env)
+	env.arrows = arrowAmbient
+	return t, k
 }
 
 func (c *Checker) convStar(te syntax.TypeExpr, env *tvEnv) Type {
@@ -725,7 +746,7 @@ func (c *Checker) convApp(con *syntax.TConE, args []syntax.TypeExpr, env *tvEnv)
 		sub := newTVEnv(false, env.arrows)
 		sub.fixed = true
 		for i, p := range v.Params {
-			t, kk := c.convType(args[i], env)
+			t, kk := c.convArg(args[i], env)
 			sub.vars[p] = t
 			sub.kinds[p] = kk
 		}
@@ -747,7 +768,7 @@ func (c *Checker) convApp(con *syntax.TConE, args []syntax.TypeExpr, env *tvEnv)
 		return c.freshType(), newKVar(c.g)
 	}
 	for _, a := range args {
-		at, ka := c.convType(a, env)
+		at, ka := c.convArg(a, env)
 		kr := Kind(newKVar(c.g))
 		if !unifyKind(k, &KArrow{ka, kr}) {
 			c.errorf(a.TPos(), "kind mismatch: '%s' cannot be applied to a type of kind %s", con.Name, KindString(ka))
