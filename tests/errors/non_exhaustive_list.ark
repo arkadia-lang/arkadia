@@ -1,0 +1,5 @@
+f : List Int -> Int
+f [] = 0
+f [x] = x
+
+main () = println (show (f [1]))

@@ -1,0 +1,3 @@
+x = println "side effect"
+
+main () = println "x"

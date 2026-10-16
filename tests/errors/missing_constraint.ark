@@ -1,0 +1,4 @@
+showAll : List a -> String
+showAll xs = show xs
+
+main () = println (showAll [1])

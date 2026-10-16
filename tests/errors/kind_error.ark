@@ -1,0 +1,4 @@
+f : Option -> Int
+f _ = 1
+
+main () = println "x"

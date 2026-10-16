@@ -1,0 +1,8 @@
+class Greet a where
+  hello : a -> String
+  bye : a -> String
+
+instance Greet Int where
+  hello _ = "hi"
+
+main () = println "x"

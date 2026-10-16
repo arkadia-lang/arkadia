@@ -1,0 +1,4 @@
+id2 : a -> b
+id2 x = x
+
+main () = println "x"

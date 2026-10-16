@@ -102,6 +102,9 @@ func (p *parser) unexpected(what string) {
 	case DEDENT, NEWLINE:
 		p.fail(t.Pos, "unexpected end of line; expected %s", what)
 	}
+	if t.first {
+		p.fail(t.Pos, "unexpected %s at the start of a line; expected %s (check the indentation)", t, what)
+	}
 	p.fail(t.Pos, "unexpected %s; expected %s", t, what)
 }
 

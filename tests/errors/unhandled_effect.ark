@@ -1,0 +1,4 @@
+effect Ask where
+  ask : Unit -> Int
+
+main () = println (show (ask ()))

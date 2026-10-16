@@ -1,0 +1,7 @@
+effect E where
+  e : Unit -> Int
+
+pureFn : Int -> Int
+pureFn x = x + e ()
+
+main () = println "x"
