@@ -275,10 +275,10 @@ func (c *Checker) openFun(t Type) Type {
 func (c *Checker) subRow(a, b Type) ([]Type, error) {
 	la, ta := flattenRow(a)
 	ta = Prune(ta)
-	if _, ok := ta.(*Meta); ok {
+	lb, tb := flattenRow(b)
+	if _, ok := ta.(*Meta); ok && Prune(tb) != ta {
 		return nil, c.unify(a, b)
 	}
-	lb, tb := flattenRow(b)
 	used := make([]bool, len(lb))
 	var missing []Type
 	for _, l := range la {
@@ -304,6 +304,13 @@ func (c *Checker) subRow(a, b Type) ([]Type, error) {
 		}
 	}
 	tb = Prune(tb)
+	if m, ok := ta.(*Meta); ok && tb == ta {
+		// same open tail: a is included in b when its labels are
+		if len(missing) > 0 {
+			return nil, c.missingEffect(missing, m)
+		}
+		return extra, nil
+	}
 	if _, ok := ta.(*TRowEmpty); ok {
 		if len(missing) == 0 {
 			return nil, nil

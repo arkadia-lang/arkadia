@@ -402,6 +402,14 @@ func (c *ctx) global(sym string) val {
 }
 
 func (c *ctx) app(e *core.App) val {
+	if h, ok := e.Fn.(*core.Handle); ok && h.SRet != nil {
+		init := c.atom(c.expr(e.Args[0]))
+		res := c.handleState(h, init)
+		if len(e.Args) == 1 {
+			return res
+		}
+		return c.applyValue(c.atom(res), c.exprs(e.Args[1:]))
+	}
 	// known global function: call directly
 	if gl, ok := e.Fn.(*core.Global); ok {
 		info := c.g.globals[gl.Sym]
@@ -542,6 +550,51 @@ func (c *ctx) con(e *core.Con) val {
 
 // ---------------------------------------------------------------- handlers
 
+// handleState compiles a state-passing handler applied to its initial state.
+func (c *ctx) handleState(h *core.Handle, init val) val {
+	var sb strings.Builder
+	ind := strings.Repeat("\t", c.indent)
+	fmt.Fprintf(&sb, "rt.HandleState(&rt.Handler{Eff: %d, State: true, RetS: func(a0, a1 rt.Value) rt.Value {\n", c.g.effIDs[h.Eff])
+	sb.WriteString(c.fnBody(h.SRet, "a"))
+	fmt.Fprintf(&sb, "%s}, OpsS: []func([]rt.Value, rt.Value) rt.Value{\n", ind)
+	for _, op := range h.SOps {
+		s := c.sub()
+		s.indent = c.indent + 2
+		n := len(op.Params)
+		for i, p := range op.Params[:n-1] {
+			s.line("%s := args[%d]", local(p), i)
+			s.line("_ = %s", local(p))
+			s.vars[p] = ""
+		}
+		st := op.Params[n-1]
+		s.line("%s := st", local(st))
+		s.line("_ = %s", local(st))
+		s.vars[st] = ""
+		s.stmt(op.Body, dest{kind: dRet})
+		fmt.Fprintf(&sb, "%s\tfunc(args []rt.Value, st rt.Value) rt.Value {\n%s%s\t},\n", ind, s.body.String(), ind)
+	}
+	fmt.Fprintf(&sb, "%s}}, %s, func() rt.Value {\n", ind, init.code)
+	s := c.sub()
+	s.indent = c.indent + 1
+	s.stmt(h.Body, dest{kind: dRet})
+	fmt.Fprintf(&sb, "%s%s})", s.body.String(), ind)
+	return boxed(sb.String())
+}
+
+// fnBody compiles the body of a lambda whose parameters are named
+// prefix0, prefix1, ...
+func (c *ctx) fnBody(lam *core.Lam, prefix string) string {
+	s := c.sub()
+	s.indent = c.indent + 1
+	for i, p := range lam.Params {
+		s.line("%s := %s%d", local(p), prefix, i)
+		s.line("_ = %s", local(p))
+		s.vars[p] = ""
+	}
+	s.stmt(lam.Body, dest{kind: dRet})
+	return s.body.String()
+}
+
 func (c *ctx) handle(h *core.Handle) val {
 	var sb strings.Builder
 	ind := strings.Repeat("\t", c.indent)
@@ -570,7 +623,7 @@ func (c *ctx) handle(h *core.Handle) val {
 	for _, u := range h.UsesK {
 		fmt.Fprintf(&sb, "%v, ", u)
 	}
-	fmt.Fprintf(&sb, "}, Tail: %v}, func() rt.Value {\n", h.Tail)
+	fmt.Fprintf(&sb, "}, Tail: %v, Direct: %v}, func() rt.Value {\n", h.Tail, h.Direct)
 	s := c.sub()
 	s.indent = c.indent + 1
 	s.stmt(h.Body, dest{kind: dRet})

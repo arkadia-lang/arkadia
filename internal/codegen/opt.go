@@ -129,6 +129,22 @@ func (o *optimizer) node(e core.Expr) core.Expr {
 		if isAtom(x.Val) && x.Name != "_" {
 			return o.expr(subst(x.Body, map[string]core.Expr{x.Name: x.Val}))
 		}
+		// let run = handle ... in run s  ==>  (handle ...) s
+		if h, ok := x.Val.(*core.Handle); ok && h.SRet != nil {
+			if app, ok := x.Body.(*core.App); ok {
+				if v, ok := app.Fn.(*core.Var); ok && v.Name == x.Name {
+					used := false
+					for _, a := range app.Args {
+						if core.Mentions(a, x.Name) {
+							used = true
+						}
+					}
+					if !used {
+						return &core.App{Fn: h, Args: app.Args}
+					}
+				}
+			}
+		}
 	}
 	return e
 }

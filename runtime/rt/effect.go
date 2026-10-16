@@ -16,6 +16,7 @@ import "fmt"
 // Tail and the clauses run directly in the performing goroutine instead.
 
 type frame struct {
+	state  Value // current state of a state-passing handler
 	eff    int
 	mask   bool // a mask frame hides the next handler of eff
 	h      *Handler
@@ -66,6 +67,14 @@ type Handler struct {
 	// Tail is set when all clauses are tail-resumptive: clauses are called
 	// with a nil continuation and return the value to resume with.
 	Tail bool
+	// Direct handlers run in the current goroutine: clauses that use their
+	// continuation are tail-resumptive, the others abort with a panic
+	// caught by Handle.
+	Direct bool
+	// State marks a state-passing handler (see HandleState).
+	State bool
+	RetS  func(x, s Value) Value
+	OpsS  []func(args []Value, s Value) Value
 }
 
 // EffectNames is filled by generated code for error messages.
@@ -107,9 +116,19 @@ func Perform(eff, op int, args []Value) Value {
 		panic(&ArkError{Msg: "unhandled effect operation " + name})
 	}
 	saved := cur
-	if f.h.Tail {
+	if f.h.State {
+		cur = f.parent
+		r := f.h.OpsS[op](args, f.state).(*D2)
+		f.state = r.B
+		cur = saved
+		return r.A
+	}
+	if f.h.Tail || f.h.Direct {
 		cur = f.parent
 		r := f.h.Ops[op](args, nil)
+		if f.h.Direct && !f.h.UsesK[op] {
+			panic(&abortTo{f: f, v: r})
+		}
 		cur = saved
 		return r
 	}
@@ -123,8 +142,39 @@ func Perform(eff, op int, args []Value) Value {
 	return r.val
 }
 
+// abortTo unwinds to the Handle of frame f with the result v.
+type abortTo struct {
+	f *frame
+	v Value
+}
+
+func handleDirect(h *Handler, body func() Value) (result Value) {
+	outer := cur
+	f := &frame{eff: h.Eff, h: h, parent: outer}
+	defer func() {
+		if r := recover(); r != nil {
+			if a, ok := r.(*abortTo); ok && a.f == f {
+				cur = outer
+				result = a.v
+				return
+			}
+			panic(r)
+		}
+	}()
+	cur = f
+	v := body()
+	cur = outer
+	if h.Ret != nil {
+		return h.Ret(v)
+	}
+	return v
+}
+
 // Handle runs body under the handler h.
 func Handle(h *Handler, body func() Value) Value {
+	if h.Direct {
+		return handleDirect(h, body)
+	}
 	outer := cur
 	if h.Tail {
 		f := &frame{eff: h.Eff, h: h, parent: outer}
@@ -201,4 +251,16 @@ func Mask(effs []int, body func() Value) Value {
 	v := body()
 	cur = saved
 	return v
+}
+
+// HandleState runs body under a state-passing handler: each operation
+// clause maps (arguments, state) to (resume value, new state) and runs in
+// the performing goroutine.
+func HandleState(h *Handler, init Value, body func() Value) Value {
+	outer := cur
+	f := &frame{eff: h.Eff, h: h, parent: outer, state: init}
+	cur = f
+	v := body()
+	cur = outer
+	return h.RetS(v, f.state)
 }

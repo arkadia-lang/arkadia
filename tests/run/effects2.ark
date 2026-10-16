@@ -1,0 +1,46 @@
+-- Interaction between the different handler implementations.
+import Std.Exn
+import Std.State
+
+effect Yield where
+  yield : Int -> Unit
+
+-- non tail-resumptive: runs on its own goroutine
+collect : (Unit -> <Yield | e> Unit) -> <e> List Int
+collect gen =
+  handle gen () with
+    return _ -> []
+    yield x k -> x :: k ()
+
+effect Ask where
+  ask : Unit -> Int
+
+-- tail-resumptive
+withAsk : Int -> (Unit -> <Ask | e> a) -> <e> a
+withAsk n action =
+  handle action () with
+    ask () k -> k n
+
+main () =
+  -- an exception (direct handler) thrown inside a goroutine-based handler
+  printLn (try (\_ -> collect (\_ -> yield 1; yield 2; throw "boom")))
+  printLn (try (\_ -> collect (\_ -> yield 1; yield 2)))
+  -- exceptions caught inside, state outside
+  let (r, s) = runState 0 (\_ ->
+    let a = catchExn (\_ -> modify (+ 1); throw "x") (\_ -> 10)
+    modify (+ 100)
+    a)
+  printLn (r, s)
+  -- state handled inside a generator body
+  printLn (collect (\_ -> execState 5 (\_ -> yield (get ()); put 7; yield (get ())) |> yield))
+  -- reader inside exception inside generator
+  printLn (collect (\_ -> withAsk 42 (\_ -> match try (\_ -> yield (ask ()); throw 0) with
+    Ok _ -> ()
+    Err n -> yield n)))
+  -- many nested direct handlers
+  let deep n = match n with
+    0 -> throw "bottom"
+    _ -> match try (\_ -> deep (n - 1)) with
+      Ok v -> v
+      Err e -> throw (e ++ "!")
+  printLn (try (\_ -> deep 3))

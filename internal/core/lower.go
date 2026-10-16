@@ -352,6 +352,14 @@ func (l *lowerer) expr(e syntax.Expr) Expr {
 	panic(fmt.Sprintf("lower: %T", e))
 }
 
+func isWildLike(p syntax.Pattern) bool {
+	switch p.(type) {
+	case *syntax.PWild, *syntax.PUnit:
+		return true
+	}
+	return false
+}
+
 // maskedApply lowers an application where some steps must run with
 // handlers masked. Arguments are evaluated first, outside any mask.
 func (l *lowerer) maskedApply(e *syntax.EApp) Expr {
@@ -410,6 +418,11 @@ func (l *lowerer) lambda(params []syntax.Pattern, body syntax.Expr, where string
 	for _, p := range params {
 		if pv, ok := p.(*syntax.PVar); ok {
 			lam.Params = append(lam.Params, pv.ID)
+			pats = append(pats, &PWild{})
+			continue
+		}
+		if isWildLike(p) {
+			lam.Params = append(lam.Params, l.fresh("w"))
 			pats = append(pats, &PWild{})
 			continue
 		}
@@ -478,7 +491,8 @@ func (l *lowerer) handle(e *syntax.EHandle) Expr {
 	for _, c := range e.Ops {
 		clauses[c.Op.(*types.OpInfo).Index] = c
 	}
-	tail := true
+	tail, direct := true, true
+	var tailOK []bool
 	for i := range ei.Ops {
 		c := clauses[i]
 		lam := l.lambda(c.Params, c.Body, c.P.String()).(*Lam)
@@ -491,22 +505,121 @@ func (l *lowerer) handle(e *syntax.EHandle) Expr {
 		}
 		h.UsesK = append(h.UsesK, usesK)
 		h.Ops = append(h.Ops, lam)
-		if !usesK {
-			tail = false
-			continue
+		ok := false
+		if usesK {
+			_, ok = tailResume(lam.Body, k)
 		}
-		if _, ok := tailResume(lam.Body, k); !ok {
+		tailOK = append(tailOK, ok)
+		if !ok {
 			tail = false
+			if usesK {
+				direct = false
+			}
 		}
 	}
-	if tail {
-		for _, lam := range h.Ops {
-			k := lam.Params[len(lam.Params)-1]
-			lam.Body, _ = tailResume(lam.Body, k)
+	if direct {
+		for i, lam := range h.Ops {
+			if tailOK[i] {
+				k := lam.Params[len(lam.Params)-1]
+				if kp, ok := clauses[i].Params[len(clauses[i].Params)-1].(*syntax.PVar); ok {
+					k = kp.ID
+				}
+				lam.Body, _ = tailResume(lam.Body, k)
+			}
 		}
-		h.Tail = true
+		h.Tail = tail
+		h.Direct = !tail
+		return h
 	}
+	l.statePattern(h)
 	return h
+}
+
+// statePattern detects state-passing handlers and fills SRet/SOps.
+func (l *lowerer) statePattern(h *Handle) {
+	if h.Ret == nil || len(h.Ret.Params) != 1 {
+		return
+	}
+	inner, ok := h.Ret.Body.(*Lam)
+	if !ok || len(inner.Params) != 1 {
+		return
+	}
+	sret := &Lam{Params: []string{h.Ret.Params[0], inner.Params[0]}, Body: inner.Body}
+	var sops []*Lam
+	pair := l.tupleCtor(2)
+	for _, op := range h.Ops {
+		k := op.Params[len(op.Params)-1]
+		body, ok := op.Body.(*Lam)
+		if !ok || len(body.Params) != 1 {
+			return
+		}
+		nb, ok := tailResume2(body.Body, k, pair)
+		if !ok {
+			return
+		}
+		params := append(append([]string{}, op.Params[:len(op.Params)-1]...), body.Params[0])
+		sops = append(sops, &Lam{Params: params, Body: nb})
+	}
+	h.SRet, h.SOps = sret, sops
+}
+
+// tailResume2 rewrites `k v s` in tail position into the pair (v, s).
+func tailResume2(e Expr, k string, pair *types.CtorInfo) (Expr, bool) {
+	switch e := e.(type) {
+	case *App:
+		if v, ok := e.Fn.(*Var); ok && v.Name == k && len(e.Args) == 2 && !Mentions(e.Args[0], k) && !Mentions(e.Args[1], k) {
+			return &Con{Ctor: pair, Args: e.Args}, true
+		}
+	case *Let:
+		if Mentions(e.Val, k) {
+			return nil, false
+		}
+		b, ok := tailResume2(e.Body, k, pair)
+		if !ok {
+			return nil, false
+		}
+		return &Let{Name: e.Name, Val: e.Val, Body: b}, true
+	case *If:
+		if Mentions(e.Cond, k) {
+			return nil, false
+		}
+		t, ok1 := tailResume2(e.Then, k, pair)
+		f, ok2 := tailResume2(e.Else, k, pair)
+		if !ok1 || !ok2 {
+			return nil, false
+		}
+		return &If{Cond: e.Cond, Then: t, Else: f}, true
+	case *Match:
+		for _, s := range e.Scruts {
+			if Mentions(s, k) {
+				return nil, false
+			}
+		}
+		m := &Match{Scruts: e.Scruts, Where: e.Where}
+		for _, r := range e.Rows {
+			nr := &Row{Pats: r.Pats}
+			if r.Body != nil {
+				b, ok := tailResume2(r.Body, k, pair)
+				if !ok {
+					return nil, false
+				}
+				nr.Body = b
+			}
+			for _, g := range r.Guards {
+				if Mentions(g.Cond, k) {
+					return nil, false
+				}
+				b, ok := tailResume2(g.Body, k, pair)
+				if !ok {
+					return nil, false
+				}
+				nr.Guards = append(nr.Guards, &Guard{Cond: g.Cond, Body: b})
+			}
+			m.Rows = append(m.Rows, nr)
+		}
+		return m, true
+	}
+	return nil, false
 }
 
 // tailResume rewrites a clause body whose only use of k is a single
@@ -688,6 +801,12 @@ func Walk(e Expr, f func(Expr) bool) {
 		for _, o := range e.Ops {
 			Walk(o, f)
 		}
+		if e.SRet != nil {
+			Walk(e.SRet, f)
+		}
+		for _, o := range e.SOps {
+			Walk(o, f)
+		}
 	case *Concat:
 		for _, p := range e.Parts {
 			Walk(p, f)
@@ -745,12 +864,18 @@ func Map(e Expr, f func(Expr) Expr) Expr {
 	case *Select:
 		return f(&Select{Dict: Map(x.Dict, f), Slot: x.Slot})
 	case *Handle:
-		n := &Handle{Eff: x.Eff, Body: Map(x.Body, f), UsesK: x.UsesK, Tail: x.Tail}
+		n := &Handle{Eff: x.Eff, Body: Map(x.Body, f), UsesK: x.UsesK, Tail: x.Tail, Direct: x.Direct}
 		if x.Ret != nil {
 			n.Ret = &Lam{Params: x.Ret.Params, Body: Map(x.Ret.Body, f)}
 		}
 		for _, o := range x.Ops {
 			n.Ops = append(n.Ops, &Lam{Params: o.Params, Body: Map(o.Body, f)})
+		}
+		if x.SRet != nil {
+			n.SRet = &Lam{Params: x.SRet.Params, Body: Map(x.SRet.Body, f)}
+		}
+		for _, o := range x.SOps {
+			n.SOps = append(n.SOps, &Lam{Params: o.Params, Body: Map(o.Body, f)})
 		}
 		return f(n)
 	case *Concat:

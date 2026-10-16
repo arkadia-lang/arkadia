@@ -85,6 +85,15 @@ type Handle struct {
 	Ops   []*Lam
 	UsesK []bool
 	Tail  bool
+	// Direct is set when every clause either resumes in tail position or
+	// never resumes (abortive); such handlers run without goroutines.
+	Direct bool
+	// State-passing variant, set when the handler has the shape
+	//   return x -> \s -> r      op ... k -> \s -> ... k v s'
+	// SRet takes (x, s); SOps take (args..., s) and return the pair
+	// (v, s'). Used when the handler is immediately applied to a state.
+	SRet *Lam
+	SOps []*Lam
 }
 
 // Concat concatenates strings (interpolation).
