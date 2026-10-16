@@ -152,7 +152,7 @@ type EVar struct {
 // VarRef is the resolution of a variable occurrence.
 type VarRef struct {
 	Local  bool
-	ID     string // local unique id or global symbol
+	ID     string         // local unique id or global symbol
 	Group  *BindGroupInfo // non-nil for a monomorphic recursive reference
 	Method any            // *types.MethodInfo for class methods
 	Op     any            // *types.OpInfo for effect operations
@@ -242,7 +242,7 @@ type ESection struct {
 }
 type EInterp struct {
 	P     Pos
-	Parts []Expr // ELit strings and arbitrary expressions
+	Parts []Expr  // ELit strings and arbitrary expressions
 	Disp  []*EVar // display references for expression parts (filled by checker)
 }
 type EAnnot struct {
@@ -375,7 +375,7 @@ type Import struct {
 type ImportName struct {
 	P    Pos
 	Name string
-	Kind int // 0 value, 1 type/class/effect
+	Kind int  // 0 value, 1 type/class/effect
 	All  bool // T(..)
 }
 
@@ -470,3 +470,6 @@ type Module struct {
 	Imports []*Import
 	Decls   []Decl
 }
+
+// A DictRef can appear inside dictionary expressions (solved later).
+func (*DictRef) isDict() {}

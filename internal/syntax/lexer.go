@@ -51,7 +51,9 @@ func lexRaw(file, src string, line, col int) ([]Token, error) {
 
 func (lx *lexer) pos() diag.Pos { return diag.Pos{File: lx.file, Line: lx.line, Col: lx.col} }
 
-func (lx *lexer) errorf(p diag.Pos, f string, a ...any) { lx.errs = append(lx.errs, diag.Errorf(p, f, a...)) }
+func (lx *lexer) errorf(p diag.Pos, f string, a ...any) {
+	lx.errs = append(lx.errs, diag.Errorf(p, f, a...))
+}
 
 func (lx *lexer) peek() rune {
 	if lx.off >= len(lx.src) {

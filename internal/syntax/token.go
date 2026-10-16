@@ -33,12 +33,12 @@ const (
 	COMMA
 	BACKTICK
 	BACKSLASH
-	EQUALS   // =
-	BAR      // |
-	ARROW    // ->
-	COLON    // :
-	DARROW   // =>
-	AT       // @
+	EQUALS // =
+	BAR    // |
+	ARROW  // ->
+	COLON  // :
+	DARROW // =>
+	AT     // @
 	UNDERSCORE
 
 	// keywords

@@ -63,14 +63,14 @@ func ParseExprString(file, src string) (e Expr, err error) {
 
 // ------------------------------------------------------------ token helpers
 
-func (p *parser) peek() Token        { return p.toks[p.i] }
+func (p *parser) peek() Token { return p.toks[p.i] }
 func (p *parser) peekN(n int) Token {
 	if p.i+n < len(p.toks) {
 		return p.toks[p.i+n]
 	}
 	return p.toks[len(p.toks)-1]
 }
-func (p *parser) at(k Kind) bool     { return p.toks[p.i].Kind == k }
+func (p *parser) at(k Kind) bool { return p.toks[p.i].Kind == k }
 func (p *parser) atOp(op string) bool {
 	t := p.toks[p.i]
 	return t.Kind == OP && t.Text == op && t.Qual == ""
@@ -316,7 +316,7 @@ func (p *parser) funBind() *Bind {
 		p.next()
 		params = p.paramPatterns()
 	case p.isInfixDef():
-		left := p.patAtom()
+		left := p.patApp()
 		if p.at(BACKTICK) {
 			p.next()
 			name = p.expect(LIDENT).Text
@@ -324,7 +324,7 @@ func (p *parser) funBind() *Bind {
 		} else {
 			name = p.next().Text
 		}
-		right := p.patAtom()
+		right := p.patApp()
 		params = []Pattern{left, right}
 	case t.Kind == LIDENT && t.Qual == "":
 		p.next()
@@ -337,15 +337,25 @@ func (p *parser) funBind() *Bind {
 	return &Bind{P: t.Pos, Name: name, Clauses: []*Clause{{P: t.Pos, Params: params, Rhs: rhs}}}
 }
 
-func (p *parser) isInfixDef() bool {
-	t1 := p.peekN(1)
-	if p.peek().Kind != LIDENT && p.peek().Kind != UNDERSCORE {
+// isInfixDef speculatively parses a pattern and reports whether it is
+// followed by an operator, i.e. the equation defines an infix operator.
+func (p *parser) isInfixDef() (ok bool) {
+	if !p.startsPatAtom() {
 		return false
 	}
-	if t1.Kind == OP && t1.Text != ".." {
-		return true
-	}
-	return t1.Kind == BACKTICK
+	save := p.i
+	defer func() {
+		if r := recover(); r != nil {
+			if _, isB := r.(bailout); !isB {
+				panic(r)
+			}
+			ok = false
+		}
+		p.i = save
+	}()
+	p.patApp()
+	t := p.peek()
+	return t.Kind == OP || t.Kind == BACKTICK
 }
 
 func (p *parser) paramPatterns() []Pattern {
@@ -613,6 +623,7 @@ func (p *parser) fixityDecl() Decl {
 			continue
 		}
 		d.Ops = append(d.Ops, p.next().Text)
+		p.accept(COMMA)
 	}
 	if len(d.Ops) == 0 {
 		p.unexpected("operator")
@@ -713,6 +724,12 @@ func (p *parser) row() *RowE {
 	}
 	if p.accept(BAR) {
 		r.Tail = p.expect(LIDENT).Text
+	} else if n := len(r.Labels); n > 0 {
+		// `<e>` / `<IO, e>`: a trailing type variable is the row tail
+		if v, ok := r.Labels[n-1].(*TVarE); ok {
+			r.Tail = v.Name
+			r.Labels = r.Labels[:n-1]
+		}
 	}
 	p.skipTypeLayout()
 	if p.atOp(">") {

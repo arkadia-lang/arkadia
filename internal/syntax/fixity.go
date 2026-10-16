@@ -48,6 +48,7 @@ func (f Fixities) get(op string) Fixity {
 type fixResolver struct {
 	fx   Fixities
 	errs diag.List
+	n    int
 }
 
 // ResolveFixity rewrites every operator chain of the module into binary
@@ -138,6 +139,7 @@ func (r *fixResolver) expr(e Expr) Expr {
 		r.exprs(e.Elems)
 	case *ENeg:
 		e.E = r.expr(e.E)
+		return desugarNeg(e)
 	case *ESection:
 		if e.Left != nil {
 			e.Left = r.expr(e.Left)
@@ -145,8 +147,15 @@ func (r *fixResolver) expr(e Expr) Expr {
 		if e.Right != nil {
 			e.Right = r.expr(e.Right)
 		}
+		return r.desugarSection(e)
 	case *EInterp:
 		r.exprs(e.Parts)
+		for i, p := range e.Parts {
+			if l, ok := p.(*ELit); ok && l.Kind == LitString {
+				continue
+			}
+			e.Parts[i] = &EApp{P: p.EPos(), Fun: &EVar{P: p.EPos(), Qual: "#Prelude", Name: "display"}, Args: []Expr{p}}
+		}
 	case *EAnnot:
 		e.E = r.expr(e.E)
 	case *EBinOp:
@@ -193,4 +202,60 @@ func (r *fixResolver) chain(c *EOpChain) Expr {
 		reduce()
 	}
 	return out[0]
+}
+
+func desugarNeg(e *ENeg) Expr {
+	if l, ok := e.E.(*ELit); ok {
+		switch l.Kind {
+		case LitInt:
+			return &ELit{P: e.P, Kind: LitInt, Int: -l.Int}
+		case LitFloat:
+			return &ELit{P: e.P, Kind: LitFloat, Float: -l.Float}
+		}
+	}
+	return &EApp{P: e.P, Fun: &EVar{P: e.P, Qual: "#Prelude", Name: "negate"}, Args: []Expr{e.E}}
+}
+
+func isSimple(e Expr) bool {
+	switch e.(type) {
+	case *EVar, *ECon, *ELit, *EUnit:
+		return true
+	}
+	return false
+}
+
+// desugarSection turns (op e) into \x -> x op e and (e op) into \x -> e op x,
+// evaluating e once.
+func (r *fixResolver) desugarSection(s *ESection) Expr {
+	r.n++
+	x := "sec$" + itoa(r.n)
+	operand := s.Right
+	if operand == nil {
+		operand = s.Left
+	}
+	var binds []*Bind
+	if !isSimple(operand) {
+		t := "secv$" + itoa(r.n)
+		binds = append(binds, &Bind{P: s.P, Name: t, Clauses: []*Clause{{P: s.P, Rhs: &Rhs{Body: operand}}}})
+		operand = &EVar{P: s.P, Name: t}
+	}
+	xv := &EVar{P: s.P, Name: x}
+	var body Expr
+	if s.Right != nil {
+		body = &EBinOp{P: s.P, Op: s.Op, Left: xv, Right: operand}
+	} else {
+		body = &EBinOp{P: s.P, Op: s.Op, Left: operand, Right: xv}
+	}
+	var res Expr = &ELam{P: s.P, Params: []Pattern{&PVar{P: s.P, Name: x}}, Body: body}
+	if binds != nil {
+		res = &ELet{P: s.P, Binds: binds, Body: res}
+	}
+	return res
+}
+
+func itoa(n int) string {
+	if n < 10 {
+		return string(rune('0' + n))
+	}
+	return itoa(n/10) + string(rune('0'+n%10))
 }

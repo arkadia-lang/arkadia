@@ -1,0 +1,844 @@
+-- Prelude: imported implicitly by every module.
+module Prelude
+
+infixr 0 <|
+infixl 0 |>
+infixr 9 <<
+infixl 9 >>
+infixr 5 ++
+infixr 6 <>
+infix 4 ==, !=, <, <=, >, >=
+infixl 6 +, -
+infixl 7 *, /, %
+infixl 4 <$>, <*>, <$
+infixl 1 >>=
+infix 5 ..
+
+-- ===================================================================
+-- Core types
+-- ===================================================================
+
+type Ordering = LT | EQ | GT
+
+type Option a = None | Some a
+
+type Result e a = Ok a | Err e
+
+-- ===================================================================
+-- Basic functions
+-- ===================================================================
+
+id : a -> a
+id x = x
+
+const : a -> b -> a
+const x _ = x
+
+flip : (a -> b -> c) -> b -> a -> c
+flip f x y = f y x
+
+not : Bool -> Bool
+not True = False
+not False = True
+
+otherwise : Bool
+otherwise = True
+
+fst : (a, b) -> a
+fst (x, _) = x
+
+snd : (a, b) -> b
+snd (_, y) = y
+
+(|>) : a -> (a -> b) -> b
+x |> f = f x
+
+(<|) : (a -> b) -> a -> b
+f <| x = f x
+
+(>>) : (a -> b) -> (b -> c) -> a -> c
+(>>) f g x = g (f x)
+
+(<<) : (b -> c) -> (a -> b) -> a -> c
+(<<) f g x = f (g x)
+
+foreign error : String -> a = "rt.Error"
+
+-- `todo` marks unfinished code
+todo : Unit -> a
+todo _ = error "not implemented"
+
+-- ===================================================================
+-- Equality and ordering
+-- ===================================================================
+
+class Eq a where
+  (==) : a -> a -> Bool
+  (!=) : a -> a -> Bool
+  x != y = not (x == y)
+
+class Eq a => Ord a where
+  compare : a -> a -> Ordering
+  (<) : a -> a -> Bool
+  (<=) : a -> a -> Bool
+  (>) : a -> a -> Bool
+  (>=) : a -> a -> Bool
+  x < y = compare x y == LT
+  x <= y = compare x y != GT
+  x > y = compare x y == GT
+  x >= y = compare x y != LT
+
+max : Ord a => a -> a -> a
+max x y
+  | x >= y = x
+  | otherwise = y
+
+min : Ord a => a -> a -> a
+min x y
+  | x <= y = x
+  | otherwise = y
+
+-- Lexicographic combination used by derived Ord instances.
+lexicoOrder : List Ordering -> Ordering
+lexicoOrder [] = EQ
+lexicoOrder (EQ :: rest) = lexicoOrder rest
+lexicoOrder (o :: _) = o
+
+instance Eq Ordering where
+  LT == LT = True
+  EQ == EQ = True
+  GT == GT = True
+  _ == _ = False
+
+instance Show Ordering where
+  show LT = "LT"
+  show EQ = "EQ"
+  show GT = "GT"
+
+-- ===================================================================
+-- Primitive instances
+-- ===================================================================
+
+foreign primIntEq : Int -> Int -> Bool = "rt.IntEq"
+foreign primIntCompare : Int -> Int -> Ordering = "rt.IntCompare"
+foreign primIntLt : Int -> Int -> Bool = "rt.IntLt"
+foreign primIntLe : Int -> Int -> Bool = "rt.IntLe"
+foreign primIntGt : Int -> Int -> Bool = "rt.IntGt"
+foreign primIntGe : Int -> Int -> Bool = "rt.IntGe"
+foreign primFloatEq : Float -> Float -> Bool = "rt.FloatEq"
+foreign primFloatCompare : Float -> Float -> Ordering = "rt.FloatCompare"
+foreign primFloatLt : Float -> Float -> Bool = "rt.FloatLt"
+foreign primFloatLe : Float -> Float -> Bool = "rt.FloatLe"
+foreign primFloatGt : Float -> Float -> Bool = "rt.FloatGt"
+foreign primFloatGe : Float -> Float -> Bool = "rt.FloatGe"
+foreign primStringEq : String -> String -> Bool = "rt.StringEq"
+foreign primStringCompare : String -> String -> Ordering = "rt.StringCompare"
+foreign primCharEq : Char -> Char -> Bool = "rt.CharEq"
+foreign primCharCompare : Char -> Char -> Ordering = "rt.CharCompare"
+
+instance Eq Int where
+  (==) = primIntEq
+
+instance Ord Int where
+  compare = primIntCompare
+  (<) = primIntLt
+  (<=) = primIntLe
+  (>) = primIntGt
+  (>=) = primIntGe
+
+instance Eq Float where
+  (==) = primFloatEq
+
+instance Ord Float where
+  compare = primFloatCompare
+  (<) = primFloatLt
+  (<=) = primFloatLe
+  (>) = primFloatGt
+  (>=) = primFloatGe
+
+instance Eq String where
+  (==) = primStringEq
+
+instance Ord String where
+  compare = primStringCompare
+
+instance Eq Char where
+  (==) = primCharEq
+
+instance Ord Char where
+  compare = primCharCompare
+
+instance Eq Bool where
+  True == True = True
+  False == False = True
+  _ == _ = False
+
+instance Ord Bool where
+  compare False True = LT
+  compare True False = GT
+  compare _ _ = EQ
+
+instance Eq Unit where
+  _ == _ = True
+
+instance Ord Unit where
+  compare _ _ = EQ
+
+instance Eq a => Eq (List a) where
+  [] == [] = True
+  (x :: xs) == (y :: ys) = x == y && xs == ys
+  _ == _ = False
+
+instance Ord a => Ord (List a) where
+  compare [] [] = EQ
+  compare [] _ = LT
+  compare _ [] = GT
+  compare (x :: xs) (y :: ys) = match compare x y with
+    EQ -> compare xs ys
+    o -> o
+
+instance (Eq a, Eq b) => Eq (a, b) where
+  (a1, b1) == (a2, b2) = a1 == a2 && b1 == b2
+
+instance (Ord a, Ord b) => Ord (a, b) where
+  compare (a1, b1) (a2, b2) = lexicoOrder [compare a1 a2, compare b1 b2]
+
+instance (Eq a, Eq b, Eq c) => Eq (a, b, c) where
+  (a1, b1, c1) == (a2, b2, c2) = a1 == a2 && b1 == b2 && c1 == c2
+
+instance (Ord a, Ord b, Ord c) => Ord (a, b, c) where
+  compare (a1, b1, c1) (a2, b2, c2) = lexicoOrder [compare a1 a2, compare b1 b2, compare c1 c2]
+
+-- ===================================================================
+-- Numbers
+-- ===================================================================
+
+class Num a where
+  (+) : a -> a -> a
+  (-) : a -> a -> a
+  (*) : a -> a -> a
+  (/) : a -> a -> a
+  negate : a -> a
+  fromInt : Int -> a
+
+foreign primIntAdd : Int -> Int -> Int = "rt.IntAdd"
+foreign primIntSub : Int -> Int -> Int = "rt.IntSub"
+foreign primIntMul : Int -> Int -> Int = "rt.IntMul"
+foreign primIntDiv : Int -> Int -> Int = "rt.IntDiv"
+foreign primIntNeg : Int -> Int = "rt.IntNeg"
+foreign primFloatAdd : Float -> Float -> Float = "rt.FloatAdd"
+foreign primFloatSub : Float -> Float -> Float = "rt.FloatSub"
+foreign primFloatMul : Float -> Float -> Float = "rt.FloatMul"
+foreign primFloatDiv : Float -> Float -> Float = "rt.FloatDiv"
+foreign primFloatNeg : Float -> Float = "rt.FloatNeg"
+foreign toFloat : Int -> Float = "rt.IntToFloat"
+foreign truncate : Float -> Int = "rt.FloatTruncate"
+foreign round : Float -> Int = "rt.FloatRound"
+foreign floor : Float -> Int = "rt.FloatFloor"
+foreign ceil : Float -> Int = "rt.FloatCeil"
+foreign sqrt : Float -> Float = "rt.FloatSqrt"
+foreign pow : Float -> Float -> Float = "rt.FloatPow"
+foreign mod : Int -> Int -> Int = "rt.IntMod"
+foreign rem : Int -> Int -> Int = "rt.IntRem"
+
+instance Num Int where
+  (+) = primIntAdd
+  (-) = primIntSub
+  (*) = primIntMul
+  (/) = primIntDiv
+  negate = primIntNeg
+  fromInt x = x
+
+instance Num Float where
+  (+) = primFloatAdd
+  (-) = primFloatSub
+  (*) = primFloatMul
+  (/) = primFloatDiv
+  negate = primFloatNeg
+  fromInt = toFloat
+
+(%) : Int -> Int -> Int
+(%) = mod
+
+abs : (Ord a, Num a) => a -> a
+abs x
+  | x < fromInt 0 = negate x
+  | otherwise = x
+
+even : Int -> Bool
+even n = n % 2 == 0
+
+odd : Int -> Bool
+odd n = n % 2 != 0
+
+gcd : Int -> Int -> Int
+gcd a 0 = abs a
+gcd a b = gcd b (rem a b)
+
+-- ===================================================================
+-- Show / Display
+-- ===================================================================
+
+class Show a where
+  show : a -> String
+
+-- Human-readable conversion used by string interpolation.
+class Display a where
+  display : a -> String
+
+foreign showInt : Int -> String = "rt.ShowInt"
+foreign showFloat : Float -> String = "rt.ShowFloat"
+foreign showString : String -> String = "rt.ShowString"
+foreign showChar : Char -> String = "rt.ShowChar"
+foreign charToString : Char -> String = "rt.CharToString"
+
+instance Show Int where
+  show = showInt
+
+instance Show Float where
+  show = showFloat
+
+instance Show String where
+  show = showString
+
+instance Show Char where
+  show = showChar
+
+instance Show Bool where
+  show True = "True"
+  show False = "False"
+
+instance Show Unit where
+  show _ = "()"
+
+instance Show a => Show (List a) where
+  show xs = "[" ++ joinWith ", " (map show xs) ++ "]"
+
+instance (Show a, Show b) => Show (a, b) where
+  show (a, b) = "(" ++ show a ++ ", " ++ show b ++ ")"
+
+instance (Show a, Show b, Show c) => Show (a, b, c) where
+  show (a, b, c) = "(" ++ show a ++ ", " ++ show b ++ ", " ++ show c ++ ")"
+
+instance Display String where
+  display s = s
+
+instance Display Int where
+  display = showInt
+
+instance Display Float where
+  display = showFloat
+
+instance Display Char where
+  display = charToString
+
+instance Display Bool where
+  display = show
+
+instance Display Unit where
+  display _ = "()"
+
+instance Show a => Display (List a) where
+  display = show
+
+instance Show a => Display (Option a) where
+  display = show
+
+-- Helpers used by derived Show instances.
+foreign showArg : String -> String = "rt.ShowArg"
+
+showCon : String -> List String -> String
+showCon name [] = name
+showCon name args = name ++ " " ++ joinWith " " args
+
+-- ===================================================================
+-- Semigroup / Monoid
+-- ===================================================================
+
+class Semigroup a where
+  (<>) : a -> a -> a
+
+class Semigroup a => Monoid a where
+  empty : a
+
+(++) : Semigroup a => a -> a -> a
+(++) = (<>)
+
+foreign primStringConcat : String -> String -> String = "rt.StringConcat"
+
+instance Semigroup String where
+  (<>) = primStringConcat
+
+instance Monoid String where
+  empty = ""
+
+instance Semigroup (List a) where
+  (<>) = append
+
+instance Monoid (List a) where
+  empty = []
+
+instance Semigroup Ordering where
+  EQ <> o = o
+  o <> _ = o
+
+instance Monoid Ordering where
+  empty = EQ
+
+-- ===================================================================
+-- Functor / Applicative / Monad / Foldable / Traversable
+-- ===================================================================
+
+class Functor f where
+  map : (a -> b) -> f a -> f b
+
+class Functor f => Applicative f where
+  pure : a -> f a
+  (<*>) : f (a -> b) -> f a -> f b
+
+class Applicative m => Monad m where
+  (>>=) : m a -> (a -> m b) -> m b
+
+class Foldable t where
+  foldr : (a -> b -> b) -> b -> t a -> b
+  foldl : (b -> a -> b) -> b -> t a -> b
+
+class (Functor t, Foldable t) => Traversable t where
+  traverse : Applicative f => (a -> f b) -> t a -> f (t b)
+
+(<$>) : Functor f => (a -> b) -> f a -> f b
+(<$>) = map
+
+(<$) : Functor f => a -> f b -> f a
+x <$ fa = map (const x) fa
+
+andThen : Monad m => (a -> m b) -> m a -> m b
+andThen f m = m >>= f
+
+sequence : (Traversable t, Applicative f) => t (f a) -> f (t a)
+sequence = traverse id
+
+forEach : Foldable t => t a -> (a -> Unit) -> Unit
+forEach xs f = foldl (\_ x -> f x) () xs
+
+toList : Foldable t => t a -> List a
+toList xs = reverse (foldl (\acc x -> x :: acc) [] xs)
+
+foldMap : (Foldable t, Monoid m) => (a -> m) -> t a -> m
+foldMap f xs = foldr (\x acc -> f x <> acc) empty xs
+
+sum : (Foldable t, Num a) => t a -> a
+sum xs = foldl (+) (fromInt 0) xs
+
+product : (Foldable t, Num a) => t a -> a
+product xs = foldl (*) (fromInt 1) xs
+
+all : Foldable t => (a -> Bool) -> t a -> Bool
+all p xs = foldl (\acc x -> acc && p x) True xs
+
+any : Foldable t => (a -> Bool) -> t a -> Bool
+any p xs = foldl (\acc x -> acc || p x) False xs
+
+elem : (Foldable t, Eq a) => a -> t a -> Bool
+elem x xs = any (\y -> y == x) xs
+
+count : Foldable t => t a -> Int
+count xs = foldl (\n _ -> n + 1) 0 xs
+
+maximum : Ord a => List a -> Option a
+maximum [] = None
+maximum (x :: xs) = Some (foldl max x xs)
+
+minimum : Ord a => List a -> Option a
+minimum [] = None
+minimum (x :: xs) = Some (foldl min x xs)
+
+-- List instances
+
+instance Functor List where
+  map f xs = reverse (mapRev f xs [])
+
+private mapRev : (a -> b) -> List a -> List b -> List b
+mapRev _ [] acc = acc
+mapRev f (x :: xs) acc = mapRev f xs (f x :: acc)
+
+instance Applicative List where
+  pure x = [x]
+  fs <*> xs = concatMap (\f -> map f xs) fs
+
+instance Monad List where
+  xs >>= f = concatMap f xs
+
+instance Foldable List where
+  foldr f z xs = foldl (\acc x -> f x acc) z (reverse xs)
+  foldl f z [] = z
+  foldl f z (x :: xs) = foldl f (f z x) xs
+
+instance Traversable List where
+  traverse f xs = foldr (\x acc -> map (\y ys -> y :: ys) (f x) <*> acc) (pure []) xs
+
+-- Option instances
+
+instance Eq a => Eq (Option a) where
+  None == None = True
+  Some x == Some y = x == y
+  _ == _ = False
+
+instance Ord a => Ord (Option a) where
+  compare None None = EQ
+  compare None _ = LT
+  compare _ None = GT
+  compare (Some x) (Some y) = compare x y
+
+instance Show a => Show (Option a) where
+  show None = "None"
+  show (Some x) = "Some " ++ showArg (show x)
+
+instance Functor Option where
+  map _ None = None
+  map f (Some x) = Some (f x)
+
+instance Applicative Option where
+  pure x = Some x
+  Some f <*> Some x = Some (f x)
+  _ <*> _ = None
+
+instance Monad Option where
+  None >>= _ = None
+  Some x >>= f = f x
+
+instance Foldable Option where
+  foldr _ z None = z
+  foldr f z (Some x) = f x z
+  foldl _ z None = z
+  foldl f z (Some x) = f z x
+
+instance Traversable Option where
+  traverse _ None = pure None
+  traverse f (Some x) = map Some (f x)
+
+withDefault : a -> Option a -> a
+withDefault d None = d
+withDefault _ (Some x) = x
+
+isSome : Option a -> Bool
+isSome (Some _) = True
+isSome None = False
+
+isNone : Option a -> Bool
+isNone o = not (isSome o)
+
+-- Result instances
+
+instance (Eq e, Eq a) => Eq (Result e a) where
+  Ok x == Ok y = x == y
+  Err x == Err y = x == y
+  _ == _ = False
+
+instance (Show e, Show a) => Show (Result e a) where
+  show (Ok x) = "Ok " ++ showArg (show x)
+  show (Err e) = "Err " ++ showArg (show e)
+
+instance Functor (Result e) where
+  map f (Ok x) = Ok (f x)
+  map _ (Err e) = Err e
+
+instance Applicative (Result e) where
+  pure x = Ok x
+  Ok f <*> Ok x = Ok (f x)
+  Err e <*> _ = Err e
+  Ok _ <*> Err e = Err e
+
+instance Monad (Result e) where
+  Ok x >>= f = f x
+  Err e >>= _ = Err e
+
+instance Foldable (Result e) where
+  foldr f z (Ok x) = f x z
+  foldr _ z (Err _) = z
+  foldl f z (Ok x) = f z x
+  foldl _ z (Err _) = z
+
+mapErr : (e -> f) -> Result e a -> Result f a
+mapErr _ (Ok x) = Ok x
+mapErr f (Err e) = Err (f e)
+
+-- ===================================================================
+-- Lists
+-- ===================================================================
+
+length : List a -> Int
+length xs = lengthAcc xs 0
+
+private lengthAcc : List a -> Int -> Int
+lengthAcc [] n = n
+lengthAcc (_ :: xs) n = lengthAcc xs (n + 1)
+
+reverse : List a -> List a
+reverse xs = reverseOnto xs []
+
+private reverseOnto : List a -> List a -> List a
+reverseOnto [] acc = acc
+reverseOnto (x :: xs) acc = reverseOnto xs (x :: acc)
+
+append : List a -> List a -> List a
+append xs ys = reverseOnto (reverse xs) ys
+
+concat : List (List a) -> List a
+concat xss = foldr append [] xss
+
+concatMap : (a -> List b) -> List a -> List b
+concatMap f xs = concat (map f xs)
+
+filter : (a -> Bool) -> List a -> List a
+filter p xs = reverse (filterAcc p xs [])
+
+private filterAcc : (a -> Bool) -> List a -> List a -> List a
+filterAcc _ [] acc = acc
+filterAcc p (x :: xs) acc
+  | p x = filterAcc p xs (x :: acc)
+  | otherwise = filterAcc p xs acc
+
+filterMap : (a -> Option b) -> List a -> List b
+filterMap f xs = foldr (\x acc -> match f x with
+    Some y -> y :: acc
+    None -> acc) [] xs
+
+partition : (a -> Bool) -> List a -> (List a, List a)
+partition p xs = (filter p xs, filter (\x -> not (p x)) xs)
+
+head : List a -> Option a
+head [] = None
+head (x :: _) = Some x
+
+tail : List a -> Option (List a)
+tail [] = None
+tail (_ :: xs) = Some xs
+
+last : List a -> Option a
+last [] = None
+last [x] = Some x
+last (_ :: xs) = last xs
+
+nth : Int -> List a -> Option a
+nth _ [] = None
+nth 0 (x :: _) = Some x
+nth n (_ :: xs) = nth (n - 1) xs
+
+take : Int -> List a -> List a
+take n xs = reverse (takeAcc n xs [])
+
+private takeAcc : Int -> List a -> List a -> List a
+takeAcc n (x :: xs) acc
+  | n > 0 = takeAcc (n - 1) xs (x :: acc)
+takeAcc _ _ acc = acc
+
+drop : Int -> List a -> List a
+drop n (_ :: xs)
+  | n > 0 = drop (n - 1) xs
+drop _ xs = xs
+
+takeWhile : (a -> Bool) -> List a -> List a
+takeWhile p xs = reverse (takeWhileAcc p xs [])
+
+private takeWhileAcc : (a -> Bool) -> List a -> List a -> List a
+takeWhileAcc p (x :: xs) acc
+  | p x = takeWhileAcc p xs (x :: acc)
+takeWhileAcc _ _ acc = acc
+
+dropWhile : (a -> Bool) -> List a -> List a
+dropWhile p (x :: xs)
+  | p x = dropWhile p xs
+dropWhile _ xs = xs
+
+splitAt : Int -> List a -> (List a, List a)
+splitAt n xs = (take n xs, drop n xs)
+
+zip : List a -> List b -> List (a, b)
+zip xs ys = zipWith (\x y -> (x, y)) xs ys
+
+zipWith : (a -> b -> c) -> List a -> List b -> List c
+zipWith f xs ys = reverse (zipWithAcc f xs ys [])
+
+private zipWithAcc : (a -> b -> c) -> List a -> List b -> List c -> List c
+zipWithAcc f (x :: xs) (y :: ys) acc = zipWithAcc f xs ys (f x y :: acc)
+zipWithAcc _ _ _ acc = acc
+
+unzip : List (a, b) -> (List a, List b)
+unzip ps = (map fst ps, map snd ps)
+
+enumerate : List a -> List (Int, a)
+enumerate xs = zip (range 0 (length xs)) xs
+
+-- `range a b` is the list [a, a+1, ..., b-1]
+range : Int -> Int -> List Int
+range a b = rangeAcc a (b - 1) []
+
+private rangeAcc : Int -> Int -> List Int -> List Int
+rangeAcc a i acc
+  | i < a = acc
+  | otherwise = rangeAcc a (i - 1) (i :: acc)
+
+-- `a .. b` is the inclusive range [a, ..., b]; `[1 .. 10]` works too.
+(..) : Int -> Int -> List Int
+a .. b = range a (b + 1)
+
+replicate : Int -> a -> List a
+replicate n x = replicateAcc n x []
+
+private replicateAcc : Int -> a -> List a -> List a
+replicateAcc n x acc
+  | n <= 0 = acc
+  | otherwise = replicateAcc (n - 1) x (x :: acc)
+
+find : (a -> Bool) -> List a -> Option a
+find _ [] = None
+find p (x :: xs)
+  | p x = Some x
+  | otherwise = find p xs
+
+lookup : Eq k => k -> List (k, v) -> Option v
+lookup _ [] = None
+lookup k ((k2, v) :: rest)
+  | k == k2 = Some v
+  | otherwise = lookup k rest
+
+isEmpty : List a -> Bool
+isEmpty [] = True
+isEmpty _ = False
+
+intersperse : a -> List a -> List a
+intersperse _ [] = []
+intersperse _ [x] = [x]
+intersperse sep (x :: xs) = x :: sep :: intersperse sep xs
+
+-- Stable merge sort.
+sortBy : (a -> a -> Ordering) -> List a -> List a
+sortBy _ [] = []
+sortBy _ [x] = [x]
+sortBy cmp xs =
+  let (l, r) = splitAt (length xs / 2) xs
+  merge cmp (sortBy cmp l) (sortBy cmp r)
+
+private merge : (a -> a -> Ordering) -> List a -> List a -> List a
+merge cmp xs ys = mergeAcc cmp xs ys []
+
+private mergeAcc : (a -> a -> Ordering) -> List a -> List a -> List a -> List a
+mergeAcc _ [] ys acc = reverseOnto acc ys
+mergeAcc _ xs [] acc = reverseOnto acc xs
+mergeAcc cmp (x :: xs) (y :: ys) acc = match cmp y x with
+  LT -> mergeAcc cmp (x :: xs) ys (y :: acc)
+  _ -> mergeAcc cmp xs (y :: ys) (x :: acc)
+
+sort : Ord a => List a -> List a
+sort xs = sortBy compare xs
+
+sortOn : Ord b => (a -> b) -> List a -> List a
+sortOn f xs = sortBy (\x y -> compare (f x) (f y)) xs
+
+nub : Eq a => List a -> List a
+nub xs = reverse (nubAcc xs [])
+
+private nubAcc : Eq a => List a -> List a -> List a
+nubAcc [] acc = acc
+nubAcc (x :: xs) acc
+  | elem x acc = nubAcc xs acc
+  | otherwise = nubAcc xs (x :: acc)
+
+iterate : Int -> (a -> a) -> a -> List a
+iterate n f x
+  | n <= 0 = []
+  | otherwise = x :: iterate (n - 1) f (f x)
+
+-- ===================================================================
+-- Strings and characters
+-- ===================================================================
+
+foreign stringLength : String -> Int = "rt.StringLength"
+foreign chars : String -> List Char = "rt.StringChars"
+foreign fromChars : List Char -> String = "rt.StringFromChars"
+foreign joinWith : String -> List String -> String = "rt.StringJoin"
+foreign split : String -> String -> List String = "rt.StringSplit"
+foreign trim : String -> String = "rt.StringTrim"
+foreign toUpper : String -> String = "rt.StringToUpper"
+foreign toLower : String -> String = "rt.StringToLower"
+foreign contains : String -> String -> Bool = "rt.StringContains"
+foreign startsWith : String -> String -> Bool = "rt.StringStartsWith"
+foreign endsWith : String -> String -> Bool = "rt.StringEndsWith"
+foreign replace : String -> String -> String -> String = "rt.StringReplace"
+foreign substring : Int -> Int -> String -> String = "rt.StringSubstring"
+foreign parseInt : String -> Option Int = "rt.ParseInt"
+foreign parseFloat : String -> Option Float = "rt.ParseFloat"
+foreign charCode : Char -> Int = "rt.CharCode"
+foreign fromCharCode : Int -> Char = "rt.FromCharCode"
+foreign isDigit : Char -> Bool = "rt.CharIsDigit"
+foreign isAlpha : Char -> Bool = "rt.CharIsAlpha"
+foreign isSpace : Char -> Bool = "rt.CharIsSpace"
+foreign isUpper : Char -> Bool = "rt.CharIsUpper"
+foreign isLower : Char -> Bool = "rt.CharIsLower"
+
+lines : String -> List String
+lines s = split "\n" s
+
+unlines : List String -> String
+unlines ls = joinWith "\n" ls
+
+words : String -> List String
+words s = filter (\w -> w != "") (split " " (replace "\n" " " (replace "\t" " " s)))
+
+unwords : List String -> String
+unwords ws = joinWith " " ws
+
+concatStrings : List String -> String
+concatStrings ss = joinWith "" ss
+
+-- ===================================================================
+-- Input / output
+-- ===================================================================
+
+foreign print : String -> <IO> Unit = "rt.Print"
+foreign println : String -> <IO> Unit = "rt.Println"
+foreign eprintln : String -> <IO> Unit = "rt.Eprintln"
+foreign readLine : Unit -> <IO> Option String = "rt.ReadLine"
+foreign readAll : Unit -> <IO> String = "rt.ReadAll"
+foreign readFile : String -> <IO> Result String String = "rt.ReadFile"
+foreign writeFile : String -> String -> <IO> Result String Unit = "rt.WriteFile"
+foreign args : Unit -> <IO> List String = "rt.Args"
+foreign getEnv : String -> <IO> Option String = "rt.GetEnv"
+foreign exit : Int -> <IO> a = "rt.Exit"
+foreign clock : Unit -> <IO> Float = "rt.Clock"
+
+-- Print any showable value on its own line.
+printLn : Show a => a -> <IO> Unit
+printLn x = println (show x)
+
+-- Show a value for debugging (writes to stderr) and return it.
+foreign trace : String -> a -> a = "rt.Trace"
+
+-- ===================================================================
+-- Failure effect
+-- ===================================================================
+
+effect Fail where
+  fail : String -> a
+
+-- Run a computation that may fail, turning failure into an Err.
+runFail : (Unit -> <Fail | e> a) -> <e> Result String a
+runFail action =
+  handle action () with
+    return x -> Ok x
+    fail msg _ -> Err msg
+
+-- Turn an Option into a value or fail.
+orFail : String -> Option a -> <Fail> a
+orFail _ (Some x) = x
+orFail msg None = fail msg
+
+assert : Bool -> String -> <Fail> Unit
+assert True _ = ()
+assert False msg = fail msg
+
+assertEq : (Eq a, Show a) => a -> a -> <Fail> Unit
+assertEq actual expected
+  | actual == expected = ()
+  | otherwise = fail "expected ${show expected}, but got ${show actual}"
