@@ -154,6 +154,15 @@ func ArrayAppend(a, b Value) Value {
 	return &Array{S: append(append(c, x...), y...)}
 }
 
+func ArrayReverse(a Value) Value {
+	s := a.(*Array).S
+	c := make([]Value, len(s))
+	for i, x := range s {
+		c[len(s)-1-i] = x
+	}
+	return &Array{S: c}
+}
+
 // ArraySortBy sorts with a comparison function returning Ordering.
 func ArraySortBy(cmp, a Value) Value {
 	s := a.(*Array).S

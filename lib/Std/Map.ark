@@ -136,6 +136,99 @@ union a b = foldlWithKey (\acc k v -> insert k v acc) b a
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 unionWith f a b = foldlWithKey (\acc k v -> insertWith f k v acc) b a
 
+notMember : Ord k => k -> Map k v -> Bool
+notMember k m = not (member k m)
+
+-- Update or remove an existing binding; absent keys are left alone.
+update : Ord k => (v -> Option v) -> k -> Map k v -> Map k v
+update f k m = match lookup k m with
+  None -> m
+  Some v -> match f v with
+    None -> delete k m
+    Some v2 -> insert k v2 m
+
+-- Build a map, combining the values of duplicate keys: f new old.
+fromListWith : Ord k => (v -> v -> v) -> List (k, v) -> Map k v
+fromListWith f kvs = Prelude.foldl (\m (k, v) -> insertWith f k v m) Tip kvs
+
+-- Group list elements by a key, keeping their order.
+groupBy : Ord k => (a -> k) -> List a -> Map k (List a)
+groupBy f xs = map Prelude.reverse (Prelude.foldl (\m x -> insertWith (\new old -> new ++ old) (f x) [x] m) Tip xs)
+
+-- Bindings in descending key order.
+toDescList : Map k v -> List (k, v)
+toDescList m = foldlWithKey (\acc k v -> (k, v) :: acc) [] m
+
+lookupMin : Map k v -> Option (k, v)
+lookupMin m = minBinding m
+
+lookupMax : Map k v -> Option (k, v)
+lookupMax Tip = None
+lookupMax (Bin _ k v _ Tip) = Some (k, v)
+lookupMax (Bin _ _ _ _ r) = lookupMax r
+
+-- The binding with the largest key smaller than k.
+lookupLT : Ord k => k -> Map k v -> Option (k, v)
+lookupLT k m = lookupBelow (\c -> c == GT) k m None
+
+-- The binding with the largest key smaller than or equal to k.
+lookupLE : Ord k => k -> Map k v -> Option (k, v)
+lookupLE k m = lookupBelow (\c -> c != LT) k m None
+
+-- The binding with the smallest key greater than k.
+lookupGT : Ord k => k -> Map k v -> Option (k, v)
+lookupGT k m = lookupAbove (\c -> c == LT) k m None
+
+-- The binding with the smallest key greater than or equal to k.
+lookupGE : Ord k => k -> Map k v -> Option (k, v)
+lookupGE k m = lookupAbove (\c -> c != GT) k m None
+
+-- `ok (compare k k2)` says whether the node key k2 is a candidate.
+private lookupBelow : Ord k => (Ordering -> Bool) -> k -> Map k v -> Option (k, v) -> Option (k, v)
+lookupBelow _ _ Tip best = best
+lookupBelow ok k (Bin _ k2 v l r) best
+  | ok (compare k k2) = lookupBelow ok k r (Some (k2, v))
+  | otherwise = lookupBelow ok k l best
+
+private lookupAbove : Ord k => (Ordering -> Bool) -> k -> Map k v -> Option (k, v) -> Option (k, v)
+lookupAbove _ _ Tip best = best
+lookupAbove ok k (Bin _ k2 v l r) best
+  | ok (compare k k2) = lookupAbove ok k l (Some (k2, v))
+  | otherwise = lookupAbove ok k r best
+
+-- Keep the values mapped to Some.
+filterMap : Ord k => (a -> Option b) -> Map k a -> Map k b
+filterMap f m = foldlWithKey (\acc k v -> match f v with
+    Some w -> insert k w acc
+    None -> acc) Tip m
+
+partition : Ord k => (v -> Bool) -> Map k v -> (Map k v, Map k v)
+partition p m = (filter p m, filter (\v -> not (p v)) m)
+
+mapKeys : Ord k2 => (k -> k2) -> Map k v -> Map k2 v
+mapKeys f m = foldlWithKey (\acc k v -> insert (f k) v acc) Tip m
+
+-- Left-biased union of many maps.
+unions : Ord k => List (Map k v) -> Map k v
+unions ms = Prelude.foldl (\acc m -> union acc m) Tip ms
+
+-- Bindings of the first map whose keys are also in the second.
+intersection : Ord k => Map k a -> Map k b -> Map k a
+intersection a b = filterWithKey (\k _ -> member k b) a
+
+intersectionWith : Ord k => (a -> b -> c) -> Map k a -> Map k b -> Map k c
+intersectionWith f a b = foldlWithKey (\acc k x -> match lookup k b with
+    Some y -> insert k (f x y) acc
+    None -> acc) Tip a
+
+-- Bindings of the first map whose keys are not in the second.
+difference : Ord k => Map k a -> Map k b -> Map k a
+difference a b = filterWithKey (\k _ -> not (member k b)) a
+
+-- Run an action for every binding in ascending key order.
+forEachWithKey : Map k v -> (k -> v -> Unit) -> Unit
+forEachWithKey m f = foldlWithKey (\_ k v -> f k v) () m
+
 instance Functor (Map k) where
   map f m = mapWithKey (\_ v -> f v) m
 
@@ -145,6 +238,9 @@ instance Foldable (Map k) where
 
 instance (Eq k, Eq v) => Eq (Map k v) where
   a == b = toList a == toList b
+
+instance (Ord k, Ord v) => Ord (Map k v) where
+  compare a b = compare (toList a) (toList b)
 
 instance (Show k, Show v) => Show (Map k v) where
   show m = "Map.fromList " ++ show (toList m)

@@ -1,0 +1,82 @@
+-- Unit tests for Std.Map, Std.Set and Std.Array.
+module CollectionTests
+
+import Std.Map as Map
+import Std.Set as Set
+import Std.Array as Array
+import Std.State
+
+test "map update and construction" =
+  let m = Map.fromList [(1, "a"), (2, "b")]
+  assertEq (Map.toList (Map.update (\_ -> None) 1 m)) [(2, "b")]
+  assertEq (Map.toList (Map.update (\v -> Some (v ++ "!")) 2 m)) [(1, "a"), (2, "b!")]
+  assert (Map.notMember 3 m) "notMember"
+  assertEq (Map.toList (Map.fromListWith (+) [('a', 1), ('b', 2), ('a', 3)])) [('a', 4), ('b', 2)]
+  assertEq (Map.toList (Map.groupBy (\x -> x % 3) [1 .. 7])) [(0, [3, 6]), (1, [1, 4, 7]), (2, [2, 5])]
+
+test "map ordered queries" =
+  let m = Map.fromList (map (\k -> (k * 10, k)) [1 .. 9])
+  assertEq (Map.lookupMin m, Map.lookupMax m) (Some (10, 1), Some (90, 9))
+  assertEq (Map.lookupLT 50 m, Map.lookupLE 50 m) (Some (40, 4), Some (50, 5))
+  assertEq (Map.lookupGT 50 m, Map.lookupGE 55 m) (Some (60, 6), Some (60, 6))
+  assertEq (Map.lookupLT 10 m, Map.lookupGT 90 m) (None, None)
+  assertEq (Map.lookupMin (Map.empty : Map.Map Int Int)) None
+  assertEq (map fst (Map.toDescList m)) [90, 80, 70, 60, 50, 40, 30, 20, 10]
+
+test "map transformations" =
+  let m = Map.fromList [(1, 10), (2, 20), (3, 30)]
+  assertEq (Map.toList (Map.filterMap (\v -> match v > 10 with
+      True -> Some (v / 10)
+      False -> None) m)) [(2, 2), (3, 3)]
+  let (big, small) = Map.partition (\v -> v > 15) m
+  assertEq (Map.keys big, Map.keys small) ([2, 3], [1])
+  assertEq (Map.toList (Map.mapKeys negate m)) [(-3, 30), (-2, 20), (-1, 10)]
+
+test "map set operations" =
+  let a = Map.fromList [(1, 'a'), (2, 'b')]
+  let b = Map.fromList [(2, 'x'), (3, 'y')]
+  assertEq (Map.toList (Map.unions [a, b])) [(1, 'a'), (2, 'b'), (3, 'y')]
+  assertEq (Map.toList (Map.intersection a b)) [(2, 'b')]
+  assertEq (Map.toList (Map.intersectionWith (\x y -> [x, y]) a b)) [(2, ['b', 'x'])]
+  assertEq (Map.toList (Map.difference a b)) [(1, 'a')]
+  assert (a < b) "maps are ordered by their bindings"
+
+test "map iteration with effects" =
+  let (_, total) = runState 0 (\_ -> Map.forEachWithKey (Map.fromList [(1, 2), (3, 4)]) (\k v -> modify (+ (k * v))))
+  assertEq total 14
+
+test "set extras" =
+  let s = Set.fromList [5, 1, 3]
+  assertEq (Set.toList (Set.map (\x -> x % 2) s)) [1]
+  let (odds, evens) = Set.partition odd (Set.fromList [1 .. 5])
+  assertEq (Set.toList odds, Set.toList evens) ([1, 3, 5], [2, 4])
+  assertEq (Set.toList (Set.unions [Set.fromList [1], Set.fromList [2, 1]])) [1, 2]
+  assert (Set.isSubsetOf (Set.fromList [1, 3]) s && not (Set.isSubsetOf (Set.fromList [2]) s)) "isSubsetOf"
+  assert (Set.disjoint s (Set.fromList [2, 4]) && Set.notMember 2 s) "disjoint"
+  assertEq (Set.lookupMin s, Set.lookupMax s, Set.lookupGT 3 s, Set.lookupLE 2 s) (Some 1, Some 5, Some 5, Some 1)
+  assertEq (Set.toDescList s) [5, 3, 1]
+
+test "array basics" =
+  let a = Array.fromList [3, 1, 2]
+  assertEq (Array.toList (Array.reverse a)) [2, 1, 3]
+  assertEq (Array.first a, Array.last a, Array.last (Array.empty : Array.Array Int)) (Some 3, Some 2, None)
+  assert (Array.isEmpty (Array.empty : Array.Array Int) && not (Array.isEmpty a)) "isEmpty"
+  assertEq (Array.toList (Array.range 2 5)) [2, 3, 4]
+  assertEq (Array.toList (Array.update 1 (* 10) a)) [3, 10, 2]
+  assertEq (Array.toList (Array.swap 0 2 a)) [2, 1, 3]
+  assertEq (Array.toList (Array.concat [a, Array.singleton 9])) [3, 1, 2, 9]
+
+test "array traversals" =
+  let a = Array.fromList [10, 20, 30]
+  assertEq (Array.toList (Array.mapWithIndex (\i x -> i + x) a)) [10, 21, 32]
+  assertEq (Array.foldlWithIndex (\acc i x -> acc + i * x) 0 a) 80
+  assertEq (Array.toList (Array.filter (\x -> x > 15) a)) [20, 30]
+  assertEq (Array.find (\x -> x > 15) a, Array.findIndex (\x -> x > 15) a) (Some 20, Some 1)
+  assertEq (Array.toList (Array.zip a (Array.fromList ['x', 'y']))) [(10, 'x'), (20, 'y')]
+  assertEq (sum a, Array.toList (map (* 2) a)) (60, [20, 40, 60])
+  assertEq (traverse (\x -> Some x) a) (Some a)
+  assertEq (runFail (\_ -> Array.toList (Array.mapArray (\x -> orFail "zero" (Some (x / 10))) a))) (Ok [1, 2, 3])
+
+test "array binary search" =
+  let a = Array.fromList [1, 3, 5, 7, 9, 11]
+  assertEq (map (\x -> Array.binarySearch x a) [1, 7, 11, 4, 0, 12]) [Some 0, Some 3, Some 5, None, None, None]

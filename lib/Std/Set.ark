@@ -44,12 +44,55 @@ difference a b = fromList (Prelude.filter (\x -> not (member x b)) (toList a))
 filter : Ord a => (a -> Bool) -> Set a -> Set a
 filter p s = fromList (Prelude.filter p (toList s))
 
+notMember : Ord a => a -> Set a -> Bool
+notMember x s = not (member x s)
+
+map : Ord b => (a -> b) -> Set a -> Set b
+map f s = fromList (mapList f (toList s))
+
+partition : Ord a => (a -> Bool) -> Set a -> (Set a, Set a)
+partition p s = (filter p s, filter (\x -> not (p x)) s)
+
+unions : Ord a => List (Set a) -> Set a
+unions ss = Prelude.foldl union empty ss
+
+isSubsetOf : Ord a => Set a -> Set a -> Bool
+isSubsetOf a b = Prelude.all (\x -> member x b) (toList a)
+
+disjoint : Ord a => Set a -> Set a -> Bool
+disjoint a b = isEmpty (intersection a b)
+
+lookupMin : Set a -> Option a
+lookupMin (Set m) = Prelude.map fst (M.lookupMin m)
+
+lookupMax : Set a -> Option a
+lookupMax (Set m) = Prelude.map fst (M.lookupMax m)
+
+-- The largest element smaller than x, etc.
+lookupLT : Ord a => a -> Set a -> Option a
+lookupLT x (Set m) = Prelude.map fst (M.lookupLT x m)
+
+lookupLE : Ord a => a -> Set a -> Option a
+lookupLE x (Set m) = Prelude.map fst (M.lookupLE x m)
+
+lookupGT : Ord a => a -> Set a -> Option a
+lookupGT x (Set m) = Prelude.map fst (M.lookupGT x m)
+
+lookupGE : Ord a => a -> Set a -> Option a
+lookupGE x (Set m) = Prelude.map fst (M.lookupGE x m)
+
+toDescList : Set a -> List a
+toDescList s = Prelude.reverse (toList s)
+
 instance Foldable Set where
   foldr f z s = Prelude.foldr f z (toList s)
   foldl f z s = Prelude.foldl f z (toList s)
 
 instance Eq a => Eq (Set a) where
   a == b = toList a == toList b
+
+instance Ord a => Ord (Set a) where
+  compare a b = compare (toList a) (toList b)
 
 instance Show a => Show (Set a) where
   show s = "Set.fromList " ++ show (toList s)

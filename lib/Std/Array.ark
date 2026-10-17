@@ -20,15 +20,96 @@ foreign empty : Array a = "rt.ArrayEmpty"
 sort : Ord a => Array a -> Array a
 sort a = sortBy compare a
 
+-- Map with a function that may perform effects.
+foreign mapArray : (a -> b) -> Array a -> Array b = "rt.ArrayMap"
+foreign reverse : Array a -> Array a = "rt.ArrayReverse"
+
+isEmpty : Array a -> Bool
+isEmpty a = length a == 0
+
+singleton : a -> Array a
+singleton x = fromList [x]
+
+-- The integers [from, to) as an array.
+range : Int -> Int -> Array Int
+range from to = generate (to - from) (\i -> from + i)
+
+first : Array a -> Option a
+first a = get 0 a
+
+last : Array a -> Option a
+last a = get (length a - 1) a
+
+-- Apply a function to the element at an index (out of range: unchanged).
+update : Int -> (a -> a) -> Array a -> Array a
+update i f a = match get i a with
+  Some x -> set i (f x) a
+  None -> a
+
+swap : Int -> Int -> Array a -> Array a
+swap i j a = match (get i a, get j a) with
+  (Some x, Some y) -> set j x (set i y a)
+  _ -> a
+
+mapWithIndex : (Int -> a -> b) -> Array a -> Array b
+mapWithIndex f a = generate (length a) (\i -> f i (at i a))
+
+foldlWithIndex : (b -> Int -> a -> b) -> b -> Array a -> b
+foldlWithIndex f z a = Prelude.foldl (\acc i -> f acc i (at i a)) z (Prelude.range 0 (length a))
+
+filter : (a -> Bool) -> Array a -> Array a
+filter p a = fromList (Prelude.filter p (toList a))
+
+find : (a -> Bool) -> Array a -> Option a
+find p a = Prelude.find p (toList a)
+
+findIndex : (a -> Bool) -> Array a -> Option Int
+findIndex p a = findIndexFrom p a 0
+
+private findIndexFrom : (a -> Bool) -> Array a -> Int -> Option Int
+findIndexFrom p a i
+  | i >= length a = None
+  | p (at i a) = Some i
+  | otherwise = findIndexFrom p a (i + 1)
+
+zipWith : (a -> b -> c) -> Array a -> Array b -> Array c
+zipWith f a b = generate (Prelude.min (length a) (length b)) (\i -> f (at i a) (at i b))
+
+zip : Array a -> Array b -> Array (a, b)
+zip a b = zipWith (\x y -> (x, y)) a b
+
+concat : List (Array a) -> Array a
+concat as = Prelude.foldl append empty as
+
+-- Index of an element in an array sorted in ascending order.
+binarySearch : Ord a => a -> Array a -> Option Int
+binarySearch x a = search x a 0 (length a)
+
+private search : Ord a => a -> Array a -> Int -> Int -> Option Int
+search x a lo hi
+  | lo >= hi = None
+  | otherwise =
+      let mid = lo + (hi - lo) / 2
+      match compare x (at mid a) with
+        LT -> search x a lo mid
+        GT -> search x a (mid + 1) hi
+        EQ -> Some mid
+
 instance Functor Array where
-  map f a = fromList (Prelude.map f (toList a))
+  map f a = mapArray f a
 
 instance Foldable Array where
   foldl f z a = Prelude.foldl f z (toList a)
   foldr f z a = Prelude.foldr f z (toList a)
+
+instance Traversable Array where
+  traverse f a = map fromList (traverse f (toList a))
 
 instance Show a => Show (Array a) where
   show a = "Array.fromList " ++ show (toList a)
 
 instance Eq a => Eq (Array a) where
   a == b = toList a == toList b
+
+instance Ord a => Ord (Array a) where
+  compare a b = compare (toList a) (toList b)
