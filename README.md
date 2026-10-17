@@ -40,6 +40,7 @@ main () =
 | 全関数がカリー化 | `add 1` は部分適用。既知アリティの完全適用は直接呼び出しに最適化 |
 | インデントによるブロック | `=`, `->`, `where`, `with` の後の字下げがブロックになる |
 | ガード節 | 関数定義と `match` の両方で `\| 条件 = 式` / `\| 条件 -> 式` |
+| セルフホスト | コンパイラ自身を Arkadia で実装した `arkc`（[`selfhost/`](selfhost)）が、Go 実装と同一のコードを生成し自分自身をビルドできる |
 
 ## インストール
 
@@ -167,6 +168,21 @@ json  = { git = "https://example.com/arkadia-json.git", tag = "v0.1.0" }
 
 git 依存は解決したコミットが `ark.lock` に記録されます。パッケージの `native/*.go` はビルドに含まれ、`foreign` 宣言から Go の関数を呼び出せます。
 
+## セルフホスト
+
+[`selfhost/`](selfhost) には Arkadia で書かれた Arkadia コンパイラ `arkc` があります。
+字句解析から型推論（型クラス・エフェクト行）、Go コード生成、REPL、Language Server まで
+Go 実装を忠実に移植したもので、同じ入力に対してバイト単位で同一の Go コードを生成します。
+
+```sh
+make selfhost     # Go 実装で arkc をビルド → bin/arkc
+make bootstrap    # arkc で arkc を 2 世代ビルドし、生成コードとバイナリが一致する（固定点）ことを確認
+bin/arkc run examples/lisp.ark
+```
+
+`bin/arkc` は `ark` と同じコマンド（`new` / `build` / `run` / `check` / `test` / `doc` / `repl` / `emit` / `lsp`）を備えています。
+詳しくは [selfhost/README.md](selfhost/README.md) を参照してください。
+
 ## 標準ライブラリ
 
 | モジュール | 内容 |
@@ -198,6 +214,7 @@ internal/driver    モジュール読み込み・パッケージ管理・ビル�
 internal/lsp       Language Server Protocol 実装
 editors/vscode     VS Code 拡張（シンタックスハイライト + LSP クライアント）
 runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エフェクト）
+selfhost           Arkadia で書かれたコンパイラ arkc（セルフホスト版）
 lib                標準ライブラリ（Arkadia で記述）
 ```
 
