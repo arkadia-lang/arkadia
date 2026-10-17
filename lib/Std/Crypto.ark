@@ -4,6 +4,8 @@
 --   sha256 "abc"   -- "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 module Std.Crypto
 
+import Std.Encoding (base64UrlEncode)
+
 foreign md5 : String -> String = "rt.Md5"
 foreign sha1 : String -> String = "rt.Sha1"
 foreign sha256 : String -> String = "rt.Sha256"
@@ -12,8 +14,14 @@ foreign sha512 : String -> String = "rt.Sha512"
 -- hmacSha256 key message
 foreign hmacSha256 : String -> String -> String = "rt.HmacSha256"
 
--- n cryptographically secure random bytes.
+-- n cryptographically secure random bytes. The result is binary, not
+-- text; encode it (e.g. with hexEncode) before printing it.
 foreign randomBytes : Int -> <IO> String = "rt.RandomBytes"
+
+-- A random URL-safe token made from n random bytes (for session ids,
+-- API keys, ...).
+randomToken : Int -> <IO> String
+randomToken n = base64UrlEncode (randomBytes n)
 
 -- A random (version 4) UUID such as "3f1c9a5e-7b2d-4c8e-9a41-2f6b0d7e8c13".
 foreign uuid : Unit -> <IO> String = "rt.UUID4"

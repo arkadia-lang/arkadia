@@ -86,7 +86,8 @@ test "encodings and hashes" =
   assertEq (md5 "") "d41d8cd98f00b204e9800998ecf8427e"
   assertEq (sha1 "abc") "a9993e364706816aba3e25717850c26c9cd0d89d"
   assertEq (hmacSha256 "key" "The quick brown fox jumps over the lazy dog") "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
-  assertEq (stringLength (randomBytes 16), stringLength (uuid ())) (16, 36)
+  assertEq (stringLength (hexEncode (randomBytes 16)), stringLength (uuid ())) (32, 36)
+  assertEq (stringLength (randomToken 32)) 43
 
 test "command-line arguments" =
   let parsed = parseArgs ["output", "o"] ["-v", "--output=x", "in.txt", "-o", "y", "-ab", "--", "--z"]
