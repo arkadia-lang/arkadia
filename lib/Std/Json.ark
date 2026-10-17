@@ -1,0 +1,263 @@
+-- JSON values: parsing, printing and queries.
+--
+--   import Std.Json as Json
+--   match Json.parse "{\"name\": \"Arkadia\", \"tags\": [\"strict\"]}" with
+--     Ok v -> Json.field "name" v >>= Json.asString   -- Some "Arkadia"
+--     Err e -> ...
+module Std.Json
+
+import Std.Char as Char
+
+type Json
+  = JNull
+  | JBool Bool
+  | JNumber Float
+  | JString String
+  | JArray (List Json)
+  | JObject (List (String, Json))
+  deriving (Eq, Show)
+
+-- ===================================================================
+-- Building values
+-- ===================================================================
+
+int : Int -> Json
+int n = JNumber (toFloat n)
+
+object : List (String, Json) -> Json
+object kvs = JObject kvs
+
+array : List Json -> Json
+array xs = JArray xs
+
+-- An array of strings, numbers, ...: list JString ["a", "b"]
+list : (a -> Json) -> List a -> Json
+list f xs = JArray (mapList f xs)
+
+-- None becomes null.
+optional : (a -> Json) -> Option a -> Json
+optional _ None = JNull
+optional f (Some x) = f x
+
+-- ===================================================================
+-- Printing
+-- ===================================================================
+
+-- Compact JSON text.
+render : Json -> String
+render JNull = "null"
+render (JBool True) = "true"
+render (JBool False) = "false"
+render (JNumber n) = renderNumber n
+render (JString s) = quote s
+render (JArray xs) = "[" ++ joinWith "," (mapList render xs) ++ "]"
+render (JObject kvs) = "{" ++ joinWith "," (mapList (\(k, v) -> quote k ++ ":" ++ render v) kvs) ++ "}"
+
+-- Indented JSON text, `indent` spaces per level.
+renderPretty : Int -> Json -> String
+renderPretty indent v = pretty indent 0 v
+
+private pretty : Int -> Int -> Json -> String
+pretty _ _ (JArray []) = "[]"
+pretty _ _ (JObject []) = "{}"
+pretty ind depth (JArray xs) =
+  let pad = spaces (ind * (depth + 1))
+  "[\n" ++ joinWith ",\n" (mapList (\x -> pad ++ pretty ind (depth + 1) x) xs) ++ "\n" ++ spaces (ind * depth) ++ "]"
+pretty ind depth (JObject kvs) =
+  let pad = spaces (ind * (depth + 1))
+  let entry (k, v) = pad ++ quote k ++ ": " ++ pretty ind (depth + 1) v
+  "{\n" ++ joinWith ",\n" (mapList entry kvs) ++ "\n" ++ spaces (ind * depth) ++ "}"
+pretty _ _ v = render v
+
+private spaces : Int -> String
+spaces n = concatStrings (replicate n " ")
+
+-- Integral values print without a fraction; NaN and infinities become null.
+private renderNumber : Float -> String
+renderNumber n
+  | n != n = "null"
+  | n - n != 0.0 = "null"
+  | abs n < 1000000000000000.0 && toFloat (truncate n) == n = show (truncate n)
+  | otherwise = show n
+
+-- A JSON string literal.
+quote : String -> String
+quote s = "\"" ++ concatStrings (mapList escapeChar (chars s)) ++ "\""
+
+private escapeChar : Char -> String
+escapeChar '"' = "\\\""
+escapeChar '\\' = "\\\\"
+escapeChar '\n' = "\\n"
+escapeChar '\r' = "\\r"
+escapeChar '\t' = "\\t"
+escapeChar c
+  | charCode c < 32 = "\\u00" ++ hex2 (charCode c)
+  | otherwise = charToString c
+
+private hex2 : Int -> String
+hex2 n = fromChars (filterMap Char.intToDigit [n / 16, n % 16])
+
+instance Display Json where
+  display = render
+
+-- ===================================================================
+-- Parsing
+-- ===================================================================
+
+parse : String -> Result String Json
+parse input = runFail (\_ ->
+  let (v, rest) = value (chars input)
+  match skipSpace rest with
+    [] -> v
+    c :: _ -> fail "unexpected '${c}' after the JSON value")
+
+private skipSpace : List Char -> List Char
+skipSpace (c :: cs)
+  | c == ' ' || c == '\n' || c == '\r' || c == '\t' = skipSpace cs
+skipSpace cs = cs
+
+private value : List Char -> <Fail> (Json, List Char)
+value input = match skipSpace input with
+  [] -> fail "unexpected end of input"
+  '{' :: cs -> parseObject (skipSpace cs) []
+  '[' :: cs -> parseArray (skipSpace cs) []
+  '"' :: cs ->
+    let (s, rest) = parseString cs []
+    (JString s, rest)
+  'n' :: 'u' :: 'l' :: 'l' :: cs -> (JNull, cs)
+  't' :: 'r' :: 'u' :: 'e' :: cs -> (JBool True, cs)
+  'f' :: 'a' :: 'l' :: 's' :: 'e' :: cs -> (JBool False, cs)
+  c :: cs
+    | c == '-' || isDigit c -> parseNumber (c :: cs)
+    | otherwise -> fail "unexpected '${c}'"
+
+private parseArray : List Char -> List Json -> <Fail> (Json, List Char)
+parseArray (']' :: cs) [] = (JArray [], cs)
+parseArray input acc =
+  let (v, rest) = value input
+  match skipSpace rest with
+    ',' :: cs -> parseArray cs (v :: acc)
+    ']' :: cs -> (JArray (reverse (v :: acc)), cs)
+    _ -> fail "expected ',' or ']' in array"
+
+private parseObject : List Char -> List (String, Json) -> <Fail> (Json, List Char)
+parseObject ('}' :: cs) [] = (JObject [], cs)
+parseObject input acc = match skipSpace input with
+  '"' :: cs ->
+    let (k, rest) = parseString cs []
+    match skipSpace rest with
+      ':' :: rest2 ->
+        let (v, rest3) = value rest2
+        match skipSpace rest3 with
+          ',' :: cs2 -> parseObject cs2 ((k, v) :: acc)
+          '}' :: cs2 -> (JObject (reverse ((k, v) :: acc)), cs2)
+          _ -> fail "expected ',' or '}' in object"
+      _ -> fail "expected ':' after object key"
+  _ -> fail "expected a string key in object"
+
+private parseString : List Char -> List Char -> <Fail> (String, List Char)
+parseString [] _ = fail "unterminated string"
+parseString ('"' :: cs) acc = (fromChars (reverse acc), cs)
+parseString ('\\' :: cs) acc = match cs with
+  'n' :: rest -> parseString rest ('\n' :: acc)
+  't' :: rest -> parseString rest ('\t' :: acc)
+  'r' :: rest -> parseString rest ('\r' :: acc)
+  'b' :: rest -> parseString rest (fromCharCode 8 :: acc)
+  'f' :: rest -> parseString rest (fromCharCode 12 :: acc)
+  '/' :: rest -> parseString rest ('/' :: acc)
+  '\\' :: rest -> parseString rest ('\\' :: acc)
+  '"' :: rest -> parseString rest ('"' :: acc)
+  'u' :: rest ->
+    let (code, rest2) = hex4 rest
+    match (code >= 55296 && code <= 56319, rest2) with
+      (True, '\\' :: 'u' :: rest3) ->
+        -- a UTF-16 surrogate pair
+        let (low, rest4) = hex4 rest3
+        parseString rest4 (fromCharCode (65536 + (code - 55296) * 1024 + (low - 56320)) :: acc)
+      _ -> parseString rest2 (fromCharCode code :: acc)
+  _ -> fail "invalid escape in string"
+parseString (c :: cs) acc
+  | charCode c < 32 = fail "control character in string"
+  | otherwise = parseString cs (c :: acc)
+
+private hex4 : List Char -> <Fail> (Int, List Char)
+hex4 (a :: b :: c :: d :: rest) =
+  match traverse Char.digitToInt [a, b, c, d] with
+    Some ds -> (foldl (\acc x -> acc * 16 + x) 0 ds, rest)
+    None -> fail "invalid \\u escape"
+hex4 _ = fail "invalid \\u escape"
+
+private parseNumber : List Char -> <Fail> (Json, List Char)
+parseNumber input =
+  let isNumChar c = isDigit c || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E'
+  let text = takeWhile isNumChar input
+  match parseFloat (fromChars text) with
+    Some n -> (JNumber n, dropWhile isNumChar input)
+    None -> fail "invalid number '${fromChars text}'"
+
+-- ===================================================================
+-- Queries
+-- ===================================================================
+
+-- The value of a field of an object.
+field : String -> Json -> Option Json
+field k (JObject kvs) = lookup k kvs
+field _ _ = None
+
+-- An element of an array.
+index : Int -> Json -> Option Json
+index i (JArray xs) = nth i xs
+index _ _ = None
+
+-- Follow a path of object fields: at ["a", "b"] v
+at : List String -> Json -> Option Json
+at [] v = Some v
+at (k :: ks) v = field k v >>= at ks
+
+asString : Json -> Option String
+asString (JString s) = Some s
+asString _ = None
+
+asNumber : Json -> Option Float
+asNumber (JNumber n) = Some n
+asNumber _ = None
+
+-- A number without a fractional part.
+asInt : Json -> Option Int
+asInt (JNumber n)
+  | toFloat (truncate n) == n = Some (truncate n)
+asInt _ = None
+
+asBool : Json -> Option Bool
+asBool (JBool b) = Some b
+asBool _ = None
+
+asArray : Json -> Option (List Json)
+asArray (JArray xs) = Some xs
+asArray _ = None
+
+asObject : Json -> Option (List (String, Json))
+asObject (JObject kvs) = Some kvs
+asObject _ = None
+
+isNull : Json -> Bool
+isNull JNull = True
+isNull _ = False
+
+-- Field names of an object.
+keys : Json -> List String
+keys (JObject kvs) = mapList fst kvs
+keys _ = []
+
+-- Set (or add) a field of an object; other values are left unchanged.
+setField : String -> Json -> Json -> Json
+setField k v (JObject kvs) = match lookup k kvs with
+  Some _ -> JObject (mapList (\(k2, v2) -> match k2 == k with
+      True -> (k2, v)
+      False -> (k2, v2)) kvs)
+  None -> JObject (kvs ++ [(k, v)])
+setField _ _ other = other
+
+removeField : String -> Json -> Json
+removeField k (JObject kvs) = JObject (filter (\(k2, _) -> k2 != k) kvs)
+removeField _ other = other

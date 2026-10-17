@@ -1,0 +1,65 @@
+-- Unit tests for Std.Json.
+module JsonTests
+
+import Std.Json as Json
+import Std.Json (Json(..))
+
+parsed : String -> <Fail> Json
+parsed s = match Json.parse s with
+  Ok v -> v
+  Err e -> fail "parse error: ${e}"
+
+isErr : Result e a -> Bool
+isErr (Err _) = True
+isErr (Ok _) = False
+
+test "parse scalars" =
+  assertEq (parsed "null") JNull
+  assertEq (parsed " true ") (JBool True)
+  assertEq (parsed "-12.5e1") (JNumber -125.0)
+  assertEq (parsed "\"hi\"") (JString "hi")
+
+test "parse nested structures" =
+  let v = parsed "{\"a\": [1, {\"b\": null}], \"c\": {}, \"d\": []}"
+  assertEq v (JObject [("a", JArray [JNumber 1.0, JObject [("b", JNull)]]), ("c", JObject []), ("d", JArray [])])
+
+test "parse string escapes" =
+  assertEq (parsed "\"a\\nb\\t\\\"q\\\" \\/ \\\\\"") (JString "a\nb\t\"q\" / \\")
+  assertEq (parsed "\"\\u00e9\\u65e5\"") (JString "é日")
+  assertEq (parsed "\"\\ud83d\\ude00\"") (JString "😀")
+
+test "parse errors" =
+  assert (isErr (Json.parse "[1, 2,]")) "trailing comma"
+  assert (isErr (Json.parse "{\"a\" 1}")) "missing colon"
+  assert (isErr (Json.parse "\"open")) "unterminated string"
+  assert (isErr (Json.parse "1 2")) "trailing input"
+  assert (isErr (Json.parse "")) "empty input"
+  assert (isErr (Json.parse "nul")) "bad literal"
+
+test "render" =
+  let v = Json.object [("n", Json.int 3), ("x", JNumber 1.5), ("s", JString "q\"\n\u{1}"), ("l", Json.list JBool [True, False]), ("o", Json.optional Json.int None)]
+  assertEq (Json.render v) "{\"n\":3,\"x\":1.5,\"s\":\"q\\\"\\n\\u0001\",\"l\":[true,false],\"o\":null}"
+  assertEq "${v}" (Json.render v)
+
+test "render and parse round trip" =
+  let text = "{\"name\":\"Arkadia\",\"version\":0.1,\"tags\":[\"strict\",\"effects\"],\"big\":1e+20,\"neg\":-3}"
+  assertEq (Json.render (parsed text)) text
+
+test "pretty printing" =
+  let v = Json.object [("a", Json.array [Json.int 1, Json.int 2]), ("b", Json.object []), ("c", JNull)]
+  assertEq (Json.renderPretty 2 v) "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {},\n  \"c\": null\n}"
+
+test "queries" =
+  let v = parsed "{\"user\": {\"name\": \"ark\", \"age\": 3, \"tags\": [\"x\", \"y\"], \"admin\": false}}"
+  assertEq (Json.at ["user", "name"] v >>= Json.asString) (Some "ark")
+  assertEq (Json.at ["user", "age"] v >>= Json.asInt) (Some 3)
+  assertEq (Json.at ["user", "tags"] v >>= Json.index 1 >>= Json.asString) (Some "y")
+  assertEq (Json.at ["user", "admin"] v >>= Json.asBool) (Some False)
+  assertEq (Json.at ["user", "missing"] v) None
+  assertEq (Json.at ["user"] v |> map Json.keys) (Some ["name", "age", "tags", "admin"])
+
+test "editing objects" =
+  let v = Json.object [("a", Json.int 1)]
+  assertEq (Json.render (Json.setField "b" (JBool True) v)) "{\"a\":1,\"b\":true}"
+  assertEq (Json.render (Json.setField "a" JNull v)) "{\"a\":null}"
+  assertEq (Json.render (Json.removeField "a" v)) "{}"
