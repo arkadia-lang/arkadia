@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arkadia TODO</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; }
+  li { cursor: pointer; padding: .25rem 0; }
+  li.done { text-decoration: line-through; color: #888; }
+  button.del { margin-left: .5rem; }
+</style>
+</head>
+<body>
+<h1>TODO</h1>
+<form id="new"><input id="title" placeholder="Something to do" autofocus> <button>Add</button></form>
+<ul id="list"></ul>
+<script>
+const api = (method, path, body) =>
+  fetch("/api/todos" + path, { method, body: body && JSON.stringify(body) })
+    .then(r => r.status === 204 ? null : r.json());
+
+async function refresh() {
+  const todos = await api("GET", "");
+  const list = document.getElementById("list");
+  list.replaceChildren(...todos.map(t => {
+    const li = document.createElement("li");
+    li.textContent = t.title;
+    li.className = t.done ? "done" : "";
+    li.onclick = () => api("PATCH", "/" + t.id).then(refresh);
+    const del = document.createElement("button");
+    del.className = "del";
+    del.textContent = "×";
+    del.onclick = e => { e.stopPropagation(); api("DELETE", "/" + t.id).then(refresh); };
+    li.append(del);
+    return li;
+  }));
+}
+
+document.getElementById("new").onsubmit = async e => {
+  e.preventDefault();
+  const input = document.getElementById("title");
+  if (input.value.trim()) await api("POST", "", { title: input.value });
+  input.value = "";
+  refresh();
+};
+refresh();
+</script>
+</body>
+</html>

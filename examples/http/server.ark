@@ -1,0 +1,89 @@
+-- A small TODO web app: a JSON API and a static page.
+--
+--   cd examples/http && ark run server.ark
+--   curl localhost:8080/api/todos
+--   curl -X POST localhost:8080/api/todos -d '{"title": "write docs"}'
+--   curl -X PATCH localhost:8080/api/todos/1
+--   curl -X DELETE localhost:8080/api/todos/1
+--
+-- The TODO list lives in a State effect handled around the whole server:
+-- handlers run one at a time, so they can share it without locking.
+module Main
+
+import Std.Http
+import Std.Json as Json
+import Std.State as St
+
+type Todo = Todo Int String Bool
+
+-- next id and the todos, newest first
+alias Store = (Int, List Todo)
+
+-- A handler that uses the store.
+alias App e = Request -> <IO, Fail, Halt, St.State Store | e> Response
+
+toJson : Todo -> Json.Json
+toJson (Todo id title done) = Json.object
+  [ ("id", Json.int id)
+  , ("title", Json.JString title)
+  , ("done", Json.JBool done)
+  ]
+
+todoId : Todo -> Int
+todoId (Todo id _ _) = id
+
+-- The :id parameter, or 400.
+idParam : Request -> <Halt> Int
+idParam req = parseInt (param "id" req) |> orHalt (badRequest "id must be a number")
+
+listTodos : App e
+listTodos _ =
+  let (_, todos) = St.get ()
+  json (Json.list toJson (reverse todos))
+
+createTodo : App e
+createTodo req =
+  let body = jsonBody req |> orHaltWith (\e -> badRequest "invalid JSON: ${e}")
+  let title = Json.field "title" body >>= Json.asString |> orHalt (badRequest "missing \"title\"")
+  let (next, todos) = St.get ()
+  let todo = Todo next title False
+  St.put (next + 1, todo :: todos)
+  withStatus 201 (json (toJson todo))
+
+-- Apply f to the todo with the request's id; 404 if there is none.
+updateTodo : (Todo -> <> List Todo) -> Request -> <St.State Store, Halt> Todo
+updateTodo f req =
+  let id = idParam req
+  let (next, todos) = St.get ()
+  let todo = find (\t -> todoId t == id) todos |> orHalt notFound
+  St.put (next, concatMap (\t -> match todoId t == id with
+    True -> f t
+    False -> [t]) todos)
+  todo
+
+toggleTodo : App e
+toggleTodo req =
+  let Todo id title done = updateTodo (\(Todo i t d) -> [Todo i t (not d)]) req
+  json (toJson (Todo id title (not done)))
+
+deleteTodo : App e
+deleteTodo req =
+  let _ = updateTodo (\_ -> []) req
+  noContent
+
+hello : Handler e
+hello req = text "Hello, ${withDefault "world" (query "name" req)}!"
+
+app : App e
+app = logRequests (router (scope "/api"
+  [ get "/todos" listTodos
+  , post "/todos" createTodo
+  , patch "/todos/:id" toggleTodo
+  , delete "/todos/:id" deleteTodo
+  , get "/hello" hello
+  ] ++ [staticDir "/" "public"]))
+
+main () =
+  let port = withDefault "8080" (getEnv "PORT")
+  let _ = St.runState (1, []) (\_ -> serve ":${port}" app)
+  ()
