@@ -1,0 +1,10 @@
+abs n
+    | n < 0 = -n
+    | otherwise =
+        n
+f x = match x with
+    Some y | y > 0 ->
+        y
+    _ | x == None ->
+              0
+      | otherwise -> 1

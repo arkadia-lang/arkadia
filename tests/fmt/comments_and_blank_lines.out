@@ -1,0 +1,14 @@
+-- header
+module Main
+
+-- doc
+f x =   -- trailing
+  -- inside
+  x {- inline -} + 1
+-- before g
+g = """
+  raw   text   
+"""
+{- multi   
+     line -}
+h = 1

@@ -1,0 +1,10 @@
+module Main
+add : Int -> Int -> Int
+add a b = a + b
+pair = (1, 2)
+xs = [1, 2, 3]
+lam = \x -> x * 2
+rec = Point { x = 1, y = 2 }
+none = Empty {}
+upd p = { p | x = 3 }
+r = [1 .. 10]

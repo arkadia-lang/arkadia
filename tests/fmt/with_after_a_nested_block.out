@@ -1,0 +1,5 @@
+combine rs = match foldr (\r acc -> match r with
+    Ok a -> a :: acc
+    Err _ -> acc) [] rs with
+  [] -> None
+  as -> Some as

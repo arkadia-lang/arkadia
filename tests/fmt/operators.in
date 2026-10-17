@@ -1,0 +1,7 @@
+neg x = x-1
+g = f -1
+h = (+ 1)
+k = (x +)
+s = (-)
+fld p = p.x + (.y) p
+lt a b = a<b && b>a

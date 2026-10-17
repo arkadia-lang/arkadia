@@ -8,142 +8,29 @@ import (
 	"testing"
 )
 
+// TestFormat formats every tests/fmt/NAME.in and compares the result with
+// NAME.out (the self-hosted compiler is checked against the same files).
 func TestFormat(t *testing.T) {
-	tests := []struct{ name, in, want string }{
-		{"spaces", `module   Main
-add : Int->Int  ->Int
-add a b=a+b
-pair = ( 1,2 )
-xs = [ 1,2 ,3 ]
-lam = \x->x*2
-rec = Point {x=1, y=2}
-none = Empty { }
-upd p = {p|x=3}
-r = [1..10]
-`, `module Main
-add : Int -> Int -> Int
-add a b = a + b
-pair = (1, 2)
-xs = [1, 2, 3]
-lam = \x -> x * 2
-rec = Point { x = 1, y = 2 }
-none = Empty {}
-upd p = { p | x = 3 }
-r = [1 .. 10]
-`},
-		{"operators", `neg x = x-1
-g = f -1
-h = (+ 1)
-k = (x +)
-s = (-)
-fld p = p.x + (.y) p
-lt a b = a<b && b>a
-`, `neg x = x - 1
-g = f -1
-h = (+ 1)
-k = (x +)
-s = (-)
-fld p = p.x + (.y) p
-lt a b = a < b && b > a
-`},
-		{"effect rows", `run : (Unit -> <IO|e> Unit) -> <e> Unit
-f : Int -> <IO, State Int> Unit
-`, `run : (Unit -> <IO | e> Unit) -> <e> Unit
-f : Int -> <IO, State Int> Unit
-`},
-		{"indentation", `main () =
-    let ys = map (\x ->
-                x * 2) xs
-    match ys with
-          [] -> ()
-          _ -> ()
-`, `main () =
-  let ys = map (\x ->
-    x * 2) xs
-  match ys with
-    [] -> ()
-    _ -> ()
-`},
-		{"guards", `abs n
-    | n < 0 = -n
-    | otherwise =
-        n
-f x = match x with
-    Some y | y > 0 ->
-        y
-    _ | x == None ->
-              0
-      | otherwise -> 1
-`, `abs n
-  | n < 0 = -n
-  | otherwise =
-      n
-f x = match x with
-  Some y | y > 0 ->
-    y
-  _ | x == None ->
-        0
-    | otherwise -> 1
-`},
-		{"continuation lines", `type Shape
-    = Circle Float
-    | Rect Float Float
-    deriving (Show)
-sum = foo (bar 1)
-          (baz 2)
-xs =
-    [ 1
-    , 2
-    ]
-`, `type Shape
-  = Circle Float
-  | Rect Float Float
-  deriving (Show)
-sum = foo (bar 1)
-          (baz 2)
-xs =
-  [ 1
-  , 2
-  ]
-`},
-		{"with after a nested block", `combine rs = match foldr (\r acc -> match r with
-        Ok a -> a :: acc
-        Err _ -> acc) [] rs with
-    [] -> None
-    as -> Some as
-`, `combine rs = match foldr (\r acc -> match r with
-    Ok a -> a :: acc
-    Err _ -> acc) [] rs with
-  [] -> None
-  as -> Some as
-`},
-		// (written with explicit "\n" to keep the trailing spaces)
-		{"comments and blank lines",
-			"\n\n-- header\nmodule Main   \n\n\n-- doc\nf x =   -- trailing   \n    -- inside\n" +
-				"    x   {- inline -}   + 1\n-- before g\ng = \"\"\"\n  raw   text   \n\"\"\"   \n" +
-				"{- multi   \n     line -}\nh = 1",
-			"-- header\nmodule Main\n\n-- doc\nf x =   -- trailing\n  -- inside\n" +
-				"  x {- inline -} + 1\n-- before g\ng = \"\"\"\n  raw   text   \n\"\"\"\n" +
-				"{- multi   \n     line -}\nh = 1\n"},
-		{"where", `f x =
-    y + 1
-    where
-        y = x
-`, `f x =
-  y + 1
-  where
-    y = x
-`},
-		{"empty", "\n\n", ""},
+	ins, _ := filepath.Glob("../../tests/fmt/*.in")
+	if len(ins) == 0 {
+		t.Fatal("no test cases found")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := Format("test.ark", tt.in)
+	for _, in := range ins {
+		t.Run(strings.TrimSuffix(filepath.Base(in), ".in"), func(t *testing.T) {
+			src, err := os.ReadFile(in)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != tt.want {
-				t.Errorf("got\n%s\nwant\n%s", got, tt.want)
+			want, err := os.ReadFile(strings.TrimSuffix(in, ".in") + ".out")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := Format("test.ark", string(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != string(want) {
+				t.Errorf("got\n%s\nwant\n%s", got, want)
 			}
 			again, err := Format("test.ark", got)
 			if err != nil {

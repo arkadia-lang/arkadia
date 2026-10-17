@@ -1,0 +1,6 @@
+main () =
+  let ys = map (\x ->
+    x * 2) xs
+  match ys with
+    [] -> ()
+    _ -> ()
