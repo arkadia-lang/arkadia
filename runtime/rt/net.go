@@ -191,11 +191,11 @@ func stringList(xs []string) Value {
 // ---------------------------------------------------------------- HTTP server
 
 // The Go HTTP server accepts connections and reads requests on its own
-// goroutines and queues them; the Arkadia program takes them one at a time
-// with HttpNext and answers with HttpRespond, which hands the response back
-// to the connection's goroutine. Arkadia code therefore runs on a single
-// goroutine, as effect handlers require, while slow clients only occupy Go
-// goroutines.
+// goroutines and queues them; the Arkadia program takes them with HttpNext
+// and answers with HttpRespond, which hands the response back to the
+// connection's goroutine. Handlers thus run in the tasks of the program —
+// one at a time in a loop (serve), or each in a task of its own
+// (serveParallel) — while slow clients only occupy Go goroutines.
 
 // HttpServer is a running HTTP server.
 type HttpServer struct {
@@ -266,12 +266,21 @@ func (s *HttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func HttpNext(sv Value) Value {
 	s := sv.(*HttpServer)
 	Flush()
-	select {
-	case ex := <-s.queue:
-		r := ex.req
-		return Some(Tuple(ex, r.Method, r.URL.Path, r.URL.RawQuery, headerList(r.Header, r.Host), ex.body, r.RemoteAddr))
-	case <-s.closed:
-		return None
+	fb := peekFiber()
+	for {
+		if fb != nil {
+			fb.poll()
+		}
+		cancel, kick := fb.interrupts()
+		select {
+		case ex := <-s.queue:
+			r := ex.req
+			return Some(Tuple(ex, r.Method, r.URL.Path, r.URL.RawQuery, headerList(r.Header, r.Host), ex.body, r.RemoteAddr))
+		case <-s.closed:
+			return None
+		case <-cancel:
+		case <-kick:
+		}
 	}
 }
 

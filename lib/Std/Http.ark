@@ -17,10 +17,11 @@
 --     , staticDir "/assets" "public"
 --     ]))
 --
--- Requests are read concurrently, but handlers run one at a time, so they
--- may use any effect (State, Ref, ...) without locking. A handler that
--- fails (`fail`, a runtime error) answers 500; `halt` answers early with
--- any response.
+-- Requests are read concurrently. With `serve`, handlers run one at a time,
+-- so they may use any effect handled around the server (State, ...)
+-- without locking; with `serveParallel`, each request is handled in a task
+-- of its own, in parallel. A handler that fails (`fail`, a runtime error)
+-- answers 500; `halt` answers early with any response.
 module Std.Http
 
 import Std.String as S
@@ -29,6 +30,7 @@ import Std.Json as Json
 import Std.Path as Path
 import Std.IO as IO
 import Std.Time as Time
+import Std.Task as Task
 
 -- ===================================================================
 -- Requests
@@ -496,16 +498,37 @@ serveOn srv h = match accept srv with
     respond req (runHandler h req)
     serveOn srv h
 
+-- Answer each request in a task of its own (Std.Task), so that requests
+-- are handled in parallel, until the server is closed; then wait for the
+-- requests being handled. The handler uses no effect besides those of
+-- Handler: requests share state through Std.Stm, Std.Ref or Std.Channel.
+serveOnParallel : Server -> (Request -> <IO, Fail, Halt> Response) -> <IO> Unit
+serveOnParallel srv h = Task.scoped (\s ->
+  let loop () = match accept srv with
+    None -> ()
+    Some req ->
+      let _ = Task.fork s (\_ -> respond req (runHandler h req))
+      loop ()
+  loop ())
+
 -- Listen on an address and answer requests forever. Exits with status 1 if
 -- the address cannot be used.
 serve : String -> Handler e -> <IO | e> Unit
-serve addr h = match listen addr with
+serve addr h = serveWith addr (\srv -> serveOn srv h)
+
+-- Like serve, with each request handled in a task of its own (see
+-- serveOnParallel).
+serveParallel : String -> (Request -> <IO, Fail, Halt> Response) -> <IO> Unit
+serveParallel addr h = serveWith addr (\srv -> serveOnParallel srv h)
+
+private serveWith : String -> (Server -> <IO | e> Unit) -> <IO | e> Unit
+serveWith addr run = match listen addr with
   Err e ->
     eprintln "cannot listen on ${addr}: ${e}"
     exit 1
   Ok srv ->
     println "Listening on http://${displayAddress (serverAddress srv)}"
-    serveOn srv h
+    run srv
 
 private displayAddress : String -> String
 displayAddress addr = match S.lastIndexOf ":" addr with

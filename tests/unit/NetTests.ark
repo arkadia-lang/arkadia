@@ -8,6 +8,8 @@ import Std.Http (Handler, Response(..), get, post, delete, router, scope, text, 
 import Std.Json as Json
 import Std.State as St
 import Std.IO as IO
+import Std.Task as Task
+import Std.Stm
 
 ok : Result String a -> <Fail> a
 ok (Ok x) = x
@@ -158,6 +160,25 @@ test "http server over a socket" =
   Net.close conn
   Http.closeServer srv
   assertEq (Http.accept srv |> isNone) True
+
+test "http server answering requests in parallel" =
+  let srv = ok (Http.listen "127.0.0.1:0")
+  let addr = Http.serverAddress srv
+  -- every handler waits until all four requests have arrived, which only
+  -- happens if they are handled at the same time
+  let arrived = newTVarIO 0
+  let meet req =
+    atomically (\_ -> modifyTVar arrived (+ 1))
+    atomically (\_ -> check (readTVar arrived >= 4))
+    text "hello ${Http.path req}"
+  let bodies = Task.scoped (\s ->
+    let _ = Task.fork s (\_ -> Http.serveOnParallel srv meet)
+    let got = Task.timeout 10.0 (\_ -> Task.mapConcurrently (\i -> match Http.httpGet "http://${addr}/${i}" with
+      Ok (Response _ _ b) -> b
+      Err e -> e) [1 .. 4])
+    Http.closeServer srv
+    got)
+  assertEq bodies (Some ["hello /1", "hello /2", "hello /3", "hello /4"])
 
 test "http client errors" =
   let l = ok (Net.listen "127.0.0.1:0")
