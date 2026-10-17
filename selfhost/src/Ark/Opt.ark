@@ -23,7 +23,7 @@ optimize (Program funcs values dicts foreigns ops effects main tests failEff) =
     False -> None) funcs)
   let o = O aliases dictMap small (newRef 0)
   let round (fs, vs, ds) _ =
-    let fs2 = mapList (\(Func s ps b) -> Func s ps (optExpr o b)) fs
+    let fs2 = mapList (\(Func s ps b ts) -> Func s ps (optExpr o b) ts) fs
     let vs2 = mapList (\(Value s b) -> Value s (optExpr o b)) vs
     let ds2 = mapList (\(Dict s ps slots) ->
       let slots2 = optSlots o s ps [] slots
@@ -57,7 +57,7 @@ resolveN aliases s n = match n == 0 with
 -- Whether a function body is a tiny expression worth inlining (wrappers
 -- produced by dictionary passing).
 isSmall : Func -> Bool
-isSmall (Func s _ body) =
+isSmall (Func s _ body _) =
   let ok x = match x with
     CApp _ _ -> True
     CSelect _ _ -> True
@@ -81,7 +81,7 @@ optNode o e =
         False -> e
     CApp (CApp f inner) args -> optNode o (CApp f (inner ++ args))
     CApp (CGlobal g) args -> match Map.lookup g small with
-      Some (f@(Func _ ps _)) | length args >= length ps -> inline o f args
+      Some (f@(Func _ ps _ _)) | length args >= length ps -> inline o f args
       _ -> e
     CSelect _ _ -> match knownSlot o e with
       Some x -> x
@@ -95,7 +95,7 @@ optNode o e =
     _ -> e
 
 inline : O -> Func -> List CExpr -> <IO> CExpr
-inline o (Func _ ps body) args =
+inline o (Func _ ps body _) args =
   let O _ _ _ counter = o
   let bound = mapList (\(p, a) -> match isAtom a with
     True -> ((p, a), None)

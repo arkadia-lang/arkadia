@@ -93,20 +93,26 @@ func Exit(code Value) Value { panic(&ExitSignal{Code: int(code.(int64))}) }
 func IntAdd(a, b Value) Value { return a.(int64) + b.(int64) }
 func IntSub(a, b Value) Value { return a.(int64) - b.(int64) }
 func IntMul(a, b Value) Value { return a.(int64) * b.(int64) }
-func IntDiv(a, b Value) Value {
-	if b.(int64) == 0 {
+func IntDiv(a, b Value) Value { return IDiv(a.(int64), b.(int64)) }
+func IntRem(a, b Value) Value { return IRem(a.(int64), b.(int64)) }
+func IntMod(a, b Value) Value { return IMod(a.(int64), b.(int64)) }
+
+// IDiv, IRem and IMod are the unboxed forms used by generated code.
+func IDiv(x, y int64) int64 {
+	if y == 0 {
 		panic(&ArkError{Msg: "division by zero"})
 	}
-	return a.(int64) / b.(int64)
+	return x / y
 }
-func IntRem(a, b Value) Value {
-	if b.(int64) == 0 {
+
+func IRem(x, y int64) int64 {
+	if y == 0 {
 		panic(&ArkError{Msg: "division by zero"})
 	}
-	return a.(int64) % b.(int64)
+	return x % y
 }
-func IntMod(a, b Value) Value {
-	x, y := a.(int64), b.(int64)
+
+func IMod(x, y int64) int64 {
 	if y == 0 {
 		panic(&ArkError{Msg: "division by zero"})
 	}

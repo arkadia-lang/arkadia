@@ -10,13 +10,18 @@ import Ark.Ast
 type Val = VInt Int | VFloat Float | VString String | VChar Char | VBool Bool | VUnit
 
 -- A curried function of a fixed number of parameters.
-type Lam = Lam (List String) CExpr
+-- Its last field gives the unboxed Go type of each parameter ("" = any
+-- value), or is empty when none is known.
+type Lam = Lam (List String) CExpr (List String)
 
 lamParams : Lam -> List String
-lamParams (Lam ps _) = ps
+lamParams (Lam ps _ _) = ps
 
 lamBody : Lam -> CExpr
-lamBody (Lam _ b) = b
+lamBody (Lam _ b _) = b
+
+lamTypes : Lam -> List String
+lamTypes (Lam _ _ ts) = ts
 
 type CExpr
   = CVar String
@@ -55,10 +60,10 @@ type CPat
 -- ================================================================ program
 
 -- symbol, parameters (at least one), body
-type Func = Func String (List String) CExpr
+type Func = Func String (List String) CExpr (List String)
 
 funcSym : Func -> String
-funcSym (Func s _ _) = s
+funcSym (Func s _ _ _) = s
 
 -- A top-level constant evaluated at program start.
 type Value = Value String CExpr
@@ -108,7 +113,7 @@ mentions e name = match e with
   CMask _ b -> mentions b name
 
 lamMentions : Lam -> String -> Bool
-lamMentions (Lam _ b) name = mentions b name
+lamMentions (Lam _ b _) name = mentions b name
 
 private optLamMentions : Option Lam -> String -> Bool
 optLamMentions (Some l) name = lamMentions l name
@@ -128,7 +133,7 @@ collectNodes f e acc =
     Some x -> x :: acc
     None -> acc
   let sub x a = collectNodes f x a
-  let lam (Lam _ b) a = collectNodes f b a
+  let lam (Lam _ b _) a = collectNodes f b a
   match e with
     CApp fn args -> foldl (\a x -> sub x a) (sub fn acc1) args
     CLam l -> lam l acc1
@@ -175,7 +180,7 @@ mapExpr f e = match e with
     let fn2 = mapExpr f fn
     let args2 = mapList (mapExpr f) args
     f (CApp fn2 args2)
-  CLam (Lam ps b) -> f (CLam (Lam ps (mapExpr f b)))
+  CLam (Lam ps b ts) -> f (CLam (Lam ps (mapExpr f b) ts))
   CLet n v b ->
     let v2 = mapExpr f v
     let b2 = mapExpr f b
@@ -214,7 +219,7 @@ mapExpr f e = match e with
   _ -> f e
 
 private mapLam : (CExpr -> <IO> CExpr) -> Lam -> <IO> Lam
-mapLam f (Lam ps b) = Lam ps (mapExpr f b)
+mapLam f (Lam ps b ts) = Lam ps (mapExpr f b) ts
 
 private mapOptLam : (CExpr -> <IO> CExpr) -> Option Lam -> <IO> Option Lam
 mapOptLam f ol = match ol with

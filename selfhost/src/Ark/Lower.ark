@@ -59,7 +59,7 @@ lowerModule l m =
     DTest _ _ body idRef ->
       let id = readRef idRef
       let e = lowerExpr l body
-      addFunc l (Func id ["unit$"] e)
+      addFunc l (Func id ["unit$"] e [])
     _ -> ())
   forEach (reverse (readRef (gInstList g))) (\inst -> match instModule inst == moduleName m with
     True -> lowerInstance l inst
@@ -76,7 +76,33 @@ topBind l b =
   let (params, body) = bindBody l b
   match dps ++ params with
     [] -> addValue l (Value (readRef (bindId b)) body)
-    all -> addFunc l (Func (readRef (bindId b)) all body)
+    all -> addFunc l (Func (readRef (bindId b)) all body (paramTypes b (length dps) (length params)))
+
+-- The unboxed Go types of the parameters of a function binding whose type
+-- is known: Int, Float, Bool, String and Char values are kept unboxed.
+-- Empty when none of them is.
+paramTypes : Bind -> Int -> Int -> <IO> List String
+paramTypes b ndict n = match (readRef (bindInfo b), n > 0) with
+  (Some (BindInfo _ _ (Some (Scheme _ _ _ t))), True) ->
+    let walk ty k acc = match k == 0 with
+      True -> Some (reverse acc)
+      False -> match prune ty with
+        TFun a _ r -> walk r (k - 1) (goRepr a :: acc)
+        _ -> None
+    match walk t n [] with
+      Some reps | anyOf (\r -> r != "") reps -> replicate ndict "" ++ reps
+      _ -> []
+  _ -> []
+
+private goRepr : Type -> <IO> String
+goRepr t = match prune t with
+  TCon n _
+    | n == tIntName -> "int64"
+    | n == tFloatName -> "float64"
+    | n == tBoolName -> "bool"
+    | n == tStringName -> "string"
+    | n == tCharName -> "rune"
+  _ -> ""
 
 patVarId : Pattern -> <IO> Option String
 patVarId p = match p with
@@ -140,7 +166,7 @@ clauseRows l scruts rows wh acc = match rows with
       let wild = Row (mapList (\_ -> CPWild) scruts) (Some fallback) []
       let m = CMatch scruts (reverse acc ++ [row, wild]) wh
       let u = fresh l "u"
-      CLet rest (CLam (Lam [u] restBody)) m
+      CLet rest (CLam (Lam [u] restBody [])) m
     _ -> clauseRows l scruts more wh (lowerRow l pats rh :: acc)
 
 -- A plain right-hand side and its where bindings.
@@ -221,7 +247,7 @@ ctorValue l ci = match ctorArity ci with
   0 -> CCon ci []
   n ->
     let params = mapList (\_ -> fresh l "c") (range 0 n)
-    CLam (Lam params (CCon ci (mapList CVar params)))
+    CLam (Lam params (CCon ci (mapList CVar params)) [])
 
 apply : CExpr -> List CExpr -> CExpr
 apply f args = match args with
@@ -417,10 +443,10 @@ lambda l params body wh =
           (name, lowerPat l p, False)) params
   let names = mapList (\(n, _, _) -> n) parts
   match allOf (\(_, _, s) -> s) parts with
-    True -> Lam names (lowerExpr l body)
+    True -> Lam names (lowerExpr l body) []
     False ->
       let pats = mapList (\(_, p, _) -> p) parts
-      Lam names (CMatch (mapList CVar names) [Row pats (Some (lowerExpr l body)) []] wh)
+      Lam names (CMatch (mapList CVar names) [Row pats (Some (lowerExpr l body)) []] wh) []
 
 lowerStmts : L -> List Stmt -> <IO> CExpr
 lowerStmts l ss = match ss with
@@ -450,7 +476,8 @@ localGroup : L -> List Bind -> CExpr -> <IO> CExpr
 localGroup l bs body =
   let parts = mapList (\b ->
     let (params, v) = bindBody l b
-    (readRef (bindId b), Lam (dictParamsOf b ++ params) v)) bs
+    let ts = paramTypes b (length (dictParamsOf b)) (length params)
+    (readRef (bindId b), Lam (dictParamsOf b ++ params) v ts)) bs
   CLetRec (map fst parts) (map snd parts) body
 
 localBind : L -> Bind -> CExpr -> <IO> CExpr
@@ -468,7 +495,7 @@ localBind l b body = match bindPat b with
     match dps ++ params with
       [] -> CLet id v body
       all ->
-        let lam = Lam all v
+        let lam = Lam all v (paramTypes b (length dps) (length params))
         match mentions v id with
           True -> CLetRec [id] [lam] body
           False -> CLet id (CLam lam) body
@@ -495,7 +522,7 @@ lowerHandle l e = match e with
       None -> error "missing handler clause"
       Some (HandlerClause cp _ ps cb _) ->
         let lam = lambda l ps cb (posString cp)
-        let Lam lps lb = lam
+        let Lam lps lb _ = lam
         let (k, usesK) = match lastOf ps with
           PVar _ _ idRef ->
             let kid = readRef idRef
@@ -510,9 +537,9 @@ lowerHandle l e = match e with
     let direct = allOf (\(_, _, u, ok) -> ok || not u) lowered
     match direct with
       True ->
-        let lams = mapList (\(Lam ps lb, k, _, ok) -> match ok with
-          True -> Lam ps (withDefault lb (tailResume lb k))
-          False -> Lam ps lb) lowered
+        let lams = mapList (\(Lam ps lb ts, k, _, ok) -> match ok with
+          True -> Lam ps (withDefault lb (tailResume lb k)) ts
+          False -> Lam ps lb ts) lowered
         CHandle (Handle en body2 ret2 lams usesKs tail (not tail) None [])
       False ->
         let lams = mapList (\(lam, _, _, _) -> lam) lowered
@@ -525,15 +552,15 @@ lowerHandle l e = match e with
 -- position with `k v s`.
 statePattern : L -> Option Lam -> List Lam -> <IO> (Option Lam, List Lam)
 statePattern l ret ops = match ret with
-  Some (Lam [x] (CLam (Lam [s] rbody))) ->
+  Some (Lam [x] (CLam (Lam [s] rbody _)) _) ->
     let pair = tupleCtor l 2
-    let sops = mapList (\(Lam ps b) -> match b with
-      CLam (Lam [st] inner) -> match tailResume2 inner (lastOf ps) pair with
-        Some nb -> Some (Lam (initList ps ++ [st]) nb)
+    let sops = mapList (\(Lam ps b _) -> match b with
+      CLam (Lam [st] inner _) -> match tailResume2 inner (lastOf ps) pair with
+        Some nb -> Some (Lam (initList ps ++ [st]) nb [])
         None -> None
       _ -> None) ops
     match allOf isSome sops with
-      True -> (Some (Lam [x, s] rbody), filterMap id sops)
+      True -> (Some (Lam [x, s] rbody []), filterMap id sops)
       False -> (None, [])
   _ -> (None, [])
 

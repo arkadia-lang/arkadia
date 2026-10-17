@@ -37,6 +37,42 @@ type selfInfo struct {
 	local  string // or name of the local function
 	arity  int
 	used   bool
+	types  []string // unboxed parameter types (kept in p0, p1, ...)
+}
+
+// paramType is the unboxed type of parameter i ("" when it is boxed).
+func paramType(types []string, i int) string {
+	if i < len(types) {
+		return types[i]
+	}
+	return ""
+}
+
+// bindParams binds the parameters of a function to locals. Unboxed
+// parameters are converted once, into p0, p1, ..., before the body (and
+// its loop, for self tail calls); it returns those conversions.
+func (c *ctx) bindParams(params, types []string) []string {
+	var pro []string
+	for i, p := range params {
+		if t := paramType(types, i); t != "" {
+			pro = append(pro, fmt.Sprintf("p%d := a%d.(%s)", i, i, t))
+			c.line("%s := p%d", local(p), i)
+			c.vars[p] = t
+		} else {
+			c.line("%s := a%d", local(p), i)
+			c.vars[p] = ""
+		}
+		c.line("_ = %s", local(p))
+	}
+	return pro
+}
+
+func prologue(pro []string, indent int) string {
+	var sb strings.Builder
+	for _, l := range pro {
+		sb.WriteString(strings.Repeat("\t", indent) + l + "\n")
+	}
+	return sb.String()
 }
 
 type ctx struct {
@@ -225,24 +261,20 @@ func (c *ctx) lambdaBody(lam *core.Lam, selfName string) string {
 	s := c.sub()
 	s.indent = c.indent + 1
 	if selfName != "" {
-		s.self = &selfInfo{local: selfName, arity: len(lam.Params)}
+		s.self = &selfInfo{local: selfName, arity: len(lam.Params), types: lam.ParamTypes}
 		s.indent++
 	}
-	for i, p := range lam.Params {
-		s.line("%s := a%d", local(p), i)
-		s.line("_ = %s", local(p))
-		s.vars[p] = ""
-	}
+	pro := prologue(s.bindParams(lam.Params, lam.ParamTypes), c.indent+1)
 	s.stmt(lam.Body, dest{kind: dRet})
 	body := s.body.String()
 	if s.self != nil {
 		ind := strings.Repeat("\t", c.indent+1)
 		if s.self.used {
-			return ind + "for {\n" + body + ind + "}\n"
+			return pro + ind + "for {\n" + body + ind + "}\n"
 		}
-		return dedent(body)
+		return pro + dedent(body)
 	}
-	return body
+	return pro + body
 }
 
 func (c *ctx) lambda(lam *core.Lam) val {
@@ -284,7 +316,11 @@ func (c *ctx) tailCall(e *core.App) bool {
 		args = append(args, c.atom(c.expr(a)))
 	}
 	for i, a := range args {
-		c.line("a%d = %s", i, a.code)
+		if t := paramType(c.self.types, i); t != "" {
+			c.line("p%d = %s", i, as(a, t))
+		} else {
+			c.line("a%d = %s", i, a.code)
+		}
 	}
 	c.line("continue")
 	c.self.used = true
@@ -516,6 +552,9 @@ var prims = map[string]prim{
 	"rt.IntSub":       {"int64", "int64", "(%s - %s)"},
 	"rt.IntMul":       {"int64", "int64", "(%s * %s)"},
 	"rt.IntNeg":       {"int64", "int64", "(-%s)"},
+	"rt.IntDiv":       {"int64", "int64", "rt.IDiv(%s, %s)"},
+	"rt.IntRem":       {"int64", "int64", "rt.IRem(%s, %s)"},
+	"rt.IntMod":       {"int64", "int64", "rt.IMod(%s, %s)"},
 	"rt.IntEq":        {"int64", "bool", "(%s == %s)"},
 	"rt.IntLt":        {"int64", "bool", "(%s < %s)"},
 	"rt.IntLe":        {"int64", "bool", "(%s <= %s)"},
@@ -535,6 +574,7 @@ var prims = map[string]prim{
 	"rt.StringEq":     {"string", "bool", "(%s == %s)"},
 	"rt.StringConcat": {"string", "string", "(%s + %s)"},
 	"rt.CharEq":       {"rune", "bool", "(%s == %s)"},
+	"rt.CharCode":     {"rune", "int64", "int64(%s)"},
 }
 
 func (c *ctx) con(e *core.Con) val {

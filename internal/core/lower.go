@@ -81,7 +81,55 @@ func (l *lowerer) topBind(b *syntax.Bind) {
 		l.prog.Values = append(l.prog.Values, &Value{Sym: b.ID, Body: body})
 		return
 	}
-	l.prog.Funcs = append(l.prog.Funcs, &Func{Sym: b.ID, Params: all, Body: body})
+	l.prog.Funcs = append(l.prog.Funcs, &Func{Sym: b.ID, Params: all, Body: body, ParamTypes: paramTypes(b, len(dictParams), len(params))})
+}
+
+// paramTypes gives the unboxed Go types of the parameters of a function
+// binding whose type is known: Int, Float, Bool, String and Char values
+// are kept unboxed. It returns nil when none of them is.
+func paramTypes(b *syntax.Bind, ndict, n int) []string {
+	if b.Info == nil || n == 0 {
+		return nil
+	}
+	sc, ok := b.Info.Scheme.(*types.Scheme)
+	if !ok || sc == nil {
+		return nil
+	}
+	out := make([]string, ndict, ndict+n)
+	any := false
+	t := sc.Type
+	for i := 0; i < n; i++ {
+		f, ok := types.Prune(t).(*types.TFun)
+		if !ok {
+			return nil
+		}
+		r := goRepr(f.Arg)
+		any = any || r != ""
+		out = append(out, r)
+		t = f.Res
+	}
+	if !any {
+		return nil
+	}
+	return out
+}
+
+func goRepr(t types.Type) string {
+	if c, ok := types.Prune(t).(*types.TCon); ok {
+		switch c.Name {
+		case types.TInt:
+			return "int64"
+		case types.TFloat:
+			return "float64"
+		case types.TBool:
+			return "bool"
+		case types.TString:
+			return "string"
+		case types.TChar:
+			return "rune"
+		}
+	}
+	return ""
 }
 
 // bindBody lowers the equations of a binding to parameters and a body.
@@ -631,7 +679,7 @@ func (l *lowerer) localGroup(bs []*syntax.Bind, body Expr) Expr {
 	for _, b := range bs {
 		params, val := l.bindBody(b)
 		rec.Names = append(rec.Names, b.ID)
-		rec.Lams = append(rec.Lams, &Lam{Params: append(append([]string{}, b.Info.DictParams...), params...), Body: val})
+		rec.Lams = append(rec.Lams, &Lam{Params: append(append([]string{}, b.Info.DictParams...), params...), Body: val, ParamTypes: paramTypes(b, len(b.Info.DictParams), len(params))})
 	}
 	return rec
 }
@@ -649,7 +697,7 @@ func (l *lowerer) localBind(b *syntax.Bind, body Expr) Expr {
 	if len(all) == 0 {
 		return &Let{Name: b.ID, Val: val, Body: body}
 	}
-	lam := &Lam{Params: all, Body: val}
+	lam := &Lam{Params: all, Body: val, ParamTypes: paramTypes(b, len(dictParams), len(params))}
 	if Mentions(val, b.ID) {
 		return &LetRec{Names: []string{b.ID}, Lams: []*Lam{lam}, Body: body}
 	}
@@ -1005,13 +1053,13 @@ func Map(e Expr, f func(Expr) Expr) Expr {
 		}
 		return f(n)
 	case *Lam:
-		return f(&Lam{Params: x.Params, Body: Map(x.Body, f)})
+		return f(&Lam{Params: x.Params, Body: Map(x.Body, f), ParamTypes: x.ParamTypes})
 	case *Let:
 		return f(&Let{Name: x.Name, Val: Map(x.Val, f), Body: Map(x.Body, f)})
 	case *LetRec:
 		n := &LetRec{Names: x.Names, Body: Map(x.Body, f)}
 		for _, lam := range x.Lams {
-			n.Lams = append(n.Lams, &Lam{Params: lam.Params, Body: Map(lam.Body, f)})
+			n.Lams = append(n.Lams, &Lam{Params: lam.Params, Body: Map(lam.Body, f), ParamTypes: lam.ParamTypes})
 		}
 		return f(n)
 	case *Con:

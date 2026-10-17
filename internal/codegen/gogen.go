@@ -378,17 +378,14 @@ func (g *gen) initOrder() []any {
 func (g *gen) function(f *core.Func) {
 	info := g.globals[f.Sym]
 	c := g.newCtx()
-	c.self = &selfInfo{global: f.Sym, arity: len(f.Params)}
+	c.self = &selfInfo{global: f.Sym, arity: len(f.Params), types: f.ParamTypes}
 	c.indent = 2
-	for i, p := range f.Params {
-		c.line("%s := a%d", local(p), i)
-		c.line("_ = %s", local(p))
-	}
+	pro := prologue(c.bindParams(f.Params, f.ParamTypes), 1)
 	c.stmt(f.Body, dest{kind: dRet})
 	if c.self.used {
-		g.printf("func %s(%s) rt.Value {\n\tfor {\n%s\t}\n}\n\n", info.name, params(len(f.Params), "a"), c.body.String())
+		g.printf("func %s(%s) rt.Value {\n%s\tfor {\n%s\t}\n}\n\n", info.name, params(len(f.Params), "a"), pro, c.body.String())
 	} else {
-		g.printf("func %s(%s) rt.Value {\n%s}\n\n", info.name, params(len(f.Params), "a"), dedent(c.body.String()))
+		g.printf("func %s(%s) rt.Value {\n%s%s}\n\n", info.name, params(len(f.Params), "a"), pro, dedent(c.body.String()))
 	}
 }
 

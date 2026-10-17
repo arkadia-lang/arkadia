@@ -25,10 +25,12 @@ type App struct {
 	Args []Expr
 }
 
-// Lam is a curried function of len(Params) arguments.
+// Lam is a curried function of len(Params) arguments. ParamTypes, when
+// set, gives the unboxed Go type of each parameter ("" = any value).
 type Lam struct {
-	Params []string
-	Body   Expr
+	Params     []string
+	Body       Expr
+	ParamTypes []string
 }
 
 type Let struct {
@@ -142,11 +144,13 @@ func (*PCon) isPat()  {}
 
 // ---------------------------------------------------------------- program
 
-// Func is a top-level function of fixed arity (> 0).
+// Func is a top-level function of fixed arity (> 0). ParamTypes is as
+// for Lam.
 type Func struct {
-	Sym    string
-	Params []string
-	Body   Expr
+	Sym        string
+	Params     []string
+	Body       Expr
+	ParamTypes []string
 }
 
 // Value is a top-level constant evaluated at program start.

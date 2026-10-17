@@ -41,8 +41,34 @@ valAtomic (GVal _ _ a) = a
 type Dest = DRet | DAssign String | DDiscard
 
 -- the current function for self tail calls: global symbol, local name,
--- arity, whether a self tail call was emitted
-type SelfInfo = SelfInfo String String Int (Ref Bool)
+-- arity, whether a self tail call was emitted, unboxed parameter types
+-- (kept in p0, p1, ...)
+type SelfInfo = SelfInfo String String Int (Ref Bool) (List String)
+
+-- The unboxed type of parameter i ("" when it is boxed).
+paramType : List String -> Int -> String
+paramType ts i = withDefault "" (nth i ts)
+
+-- Bind the parameters of a function to locals. Unboxed parameters are
+-- converted once, into p0, p1, ..., before the body (and its loop, for
+-- self tail calls); returns those conversions.
+bindParams : Ctx -> List String -> List String -> <IO> List String
+bindParams c ps ts = filterMap id (mapList (\(i, p) ->
+  let t = paramType ts i
+  let conv = match t with
+    "" ->
+      line c "${local p} := a${i}"
+      setVar c p ""
+      None
+    _ ->
+      line c "${local p} := p${i}"
+      setVar c p t
+      Some "p${i} := a${i}.(${t})"
+  line c "_ = ${local p}"
+  conv) (indexed ps))
+
+prologue : List String -> Int -> String
+prologue pro ind = concatStrings (mapList (\l -> tabs ind ++ l ++ "\n") pro)
 
 -- generator, body (reversed chunks), indentation, current function,
 -- unboxed types of locals, local functions with a direct Go func (arity)
@@ -54,7 +80,7 @@ generate prog0 tests =
   let prog = optimize prog0
   let Program funcs values dicts foreigns ops effects _ _ _ = prog
   let effIDs = Map.fromList (mapList (\(i, Effect n _) -> (n, i)) (indexed effects))
-  let g1 = foldl (\m (Func s ps _) -> Map.insert s (GInfo GFunc (length ps) ("f_" ++ mangle s) "") m) Map.empty funcs
+  let g1 = foldl (\m (Func s ps _ _) -> Map.insert s (GInfo GFunc (length ps) ("f_" ++ mangle s) "") m) Map.empty funcs
   let g2 = foldl (\m (Value s _) -> Map.insert s (GInfo GValue 0 ("v_" ++ mangle s) "") m) g1 values
   let g3 = foldl (\m (Dict s ps _) -> match ps with
     [] -> Map.insert s (GInfo GDict 0 ("d_" ++ mangle s) "") m
@@ -218,7 +244,7 @@ type Either a b = Left a | Right b
 -- values and dictionaries it (transitively) uses.
 initOrder : Program -> <IO> List (Either Dict Value)
 initOrder (Program funcs values dicts _ _ _ _ _ _) =
-  let funcRefs = Map.fromList (mapList (\(Func s _ b) -> (s, refsOf [b])) funcs)
+  let funcRefs = Map.fromList (mapList (\(Func s _ b _) -> (s, refsOf [b])) funcs)
   let plainDicts = filter (\(Dict _ ps _) -> isEmpty ps) dicts
   let items = Map.fromList (mapList (\d -> (dictSym d, Left d)) plainDicts ++ mapList (\(v@(Value s _)) -> (s, Right v)) values)
   let order = mapList dictSym plainDicts ++ mapList (\(Value s _) -> s) values
@@ -270,21 +296,19 @@ refsOf es = reverse (foldl (\acc e -> collectNodes (\x -> match x with
 -- ================================================================ functions
 
 genFunction : Gen -> Ref (List String) -> Func -> <IO> Unit
-genFunction g out (Func s ps body) =
+genFunction g out (Func s ps body ts) =
   let name = match gInfo g s with
     Some (GInfo _ _ n _) -> n
     None -> "f_" ++ mangle s
   let used = newRef False
   let c0 = newCtx g
-  let c = withSelf c0 (Some (SelfInfo s "" (length ps) used))
+  let c = withSelf c0 (Some (SelfInfo s "" (length ps) used ts))
   writeRef (ctxIndent c) 2
-  forEach (indexed ps) (\(i, p) ->
-    line c "${local p} := a${i}"
-    line c "_ = ${local p}")
+  let pro = prologue (bindParams c ps ts) 1
   genStmt c body DRet
   match readRef used with
-    True -> emitOut out "func ${name}(${params (length ps) "a"}) rt.Value {\n\tfor {\n${ctxBody c}\t}\n}\n\n"
-    False -> emitOut out "func ${name}(${params (length ps) "a"}) rt.Value {\n${dedent (ctxBody c)}}\n\n"
+    True -> emitOut out "func ${name}(${params (length ps) "a"}) rt.Value {\n${pro}\tfor {\n${ctxBody c}\t}\n}\n\n"
+    False -> emitOut out "func ${name}(${params (length ps) "a"}) rt.Value {\n${pro}${dedent (ctxBody c)}}\n\n"
 
 dedent : String -> String
 dedent s = joinWith "\n" (mapList (\l -> match startsWith "\t" l with
@@ -408,7 +432,7 @@ genStmt c e d = match e with
 genLet : Ctx -> String -> CExpr -> <IO> Unit
 genLet c name v = match (name, v) with
   ("_", _) -> genStmt c v DDiscard
-  (_, CLam (lam@(Lam ps _))) | length ps <= 4 -> localFunc c name lam
+  (_, CLam (lam@(Lam ps _ _))) | length ps <= 4 -> localFunc c name lam
   _ ->
     let x = genExpr c v
     match valTyp x with
@@ -436,7 +460,7 @@ localFunc c name lam =
 genLetRec : Ctx -> List String -> List Lam -> <IO> Unit
 genLetRec c names lams =
   -- declare everything first so that bodies can refer to each other
-  forEach (zip names lams) (\(name, Lam ps _) ->
+  forEach (zip names lams) (\(name, Lam ps _ _) ->
     let n = length ps
     match n <= 4 with
       True ->
@@ -445,7 +469,7 @@ genLetRec c names lams =
       False -> ()
     line c "var ${local name} rt.Value"
     setVar c name "")
-  forEach (zip names lams) (\(name, lam@(Lam ps _)) ->
+  forEach (zip names lams) (\(name, lam@(Lam ps _ _)) ->
     let n = length ps
     match n <= 4 with
       True ->
@@ -462,32 +486,29 @@ genLetRec c names lams =
 
 -- The body of a function literal with parameters a0...
 lambdaBody : Ctx -> Lam -> String -> <IO> String
-lambdaBody c (Lam ps body) selfName =
+lambdaBody c (Lam ps body ts) selfName =
   let s0 = sub c
   let ind = indentOf c
   let selfInfo = match selfName with
     "" -> None
-    _ -> Some (SelfInfo "" selfName (length ps) (newRef False))
+    _ -> Some (SelfInfo "" selfName (length ps) (newRef False) ts)
   let s = withSelf s0 selfInfo
   writeRef (ctxIndent s) (match selfInfo with
     Some _ -> ind + 2
     None -> ind + 1)
-  forEach (indexed ps) (\(i, p) ->
-    line s "${local p} := a${i}"
-    line s "_ = ${local p}"
-    setVar s p "")
+  let pro = prologue (bindParams s ps ts) (ind + 1)
   genStmt s body DRet
   let text = ctxBody s
   match selfInfo with
-    None -> text
-    Some (SelfInfo _ _ _ used) -> match readRef used with
+    None -> pro ++ text
+    Some (SelfInfo _ _ _ used _) -> match readRef used with
       True ->
         let tind = tabs (ind + 1)
-        tind ++ "for {\n" ++ text ++ tind ++ "}\n"
-      False -> dedent text
+        pro ++ tind ++ "for {\n" ++ text ++ tind ++ "}\n"
+      False -> pro ++ dedent text
 
 genLambda : Ctx -> Lam -> <IO> GVal
-genLambda c (lam@(Lam ps body)) =
+genLambda c (lam@(Lam ps body _)) =
   let n = length ps
   match n <= 4 with
     True ->
@@ -506,7 +527,7 @@ genLambda c (lam@(Lam ps body)) =
 -- Turn a saturated self call in tail position into a loop jump.
 tailCall : Ctx -> CExpr -> <IO> Bool
 tailCall c e = match (ctxSelf c, e) with
-  (Some (SelfInfo global localName arity used), CApp f args) | length args == arity ->
+  (Some (SelfInfo global localName arity used ts), CApp f args) | length args == arity ->
     let isSelf = match f with
       CGlobal s -> s == global && global != ""
       CVar v -> v == localName && localName != ""
@@ -515,7 +536,9 @@ tailCall c e = match (ctxSelf c, e) with
       False -> False
       True ->
         let vals = mapList (\a -> atom c (genExpr c a)) args
-        forEach (indexed vals) (\(i, v) -> line c "a${i} = ${valCode v}")
+        forEach (indexed vals) (\(i, v) -> match paramType ts i with
+          "" -> line c "a${i} = ${valCode v}"
+          t -> line c "p${i} = ${as v t}")
         line c "continue"
         writeRef used True
         True
@@ -690,6 +713,9 @@ un op xs = match xs with
   [a] -> "(${op}${a})"
   _ -> error "primitive arity"
 
+private call : String -> List String -> String
+call f xs = "${f}(${joinWith ", " xs})"
+
 private conv : String -> List String -> String
 conv t xs = match xs with
   [a] -> "${t}(${a})"
@@ -703,6 +729,9 @@ primOf target = match target with
   "rt.IntSub" -> Some ("int64", "int64", bin "-")
   "rt.IntMul" -> Some ("int64", "int64", bin "*")
   "rt.IntNeg" -> Some ("int64", "int64", un "-")
+  "rt.IntDiv" -> Some ("int64", "int64", call "rt.IDiv")
+  "rt.IntRem" -> Some ("int64", "int64", call "rt.IRem")
+  "rt.IntMod" -> Some ("int64", "int64", call "rt.IMod")
   "rt.IntEq" -> Some ("int64", "bool", bin "==")
   "rt.IntLt" -> Some ("int64", "bool", bin "<")
   "rt.IntLe" -> Some ("int64", "bool", bin "<=")
@@ -722,6 +751,7 @@ primOf target = match target with
   "rt.StringEq" -> Some ("string", "bool", bin "==")
   "rt.StringConcat" -> Some ("string", "string", bin "+")
   "rt.CharEq" -> Some ("rune", "bool", bin "==")
+  "rt.CharCode" -> Some ("rune", "int64", conv "int64")
   _ -> None
 
 genCon : Ctx -> CtorInfo -> List CExpr -> <IO> GVal
@@ -749,7 +779,7 @@ handleState c (Handle eff body _ _ _ _ _ sret sops) init =
   let retS = match sret with
     Some l -> fnBody c l "a"
     None -> ""
-  let opsText = concatStrings (mapList (\(Lam ps ob) ->
+  let opsText = concatStrings (mapList (\(Lam ps ob _) ->
     let s = sub c
     writeRef (ctxIndent s) (indentOf c + 2)
     let n = length ps
@@ -770,7 +800,7 @@ handleState c (Handle eff body _ _ _ _ _ sret sops) init =
 
 -- The body of a lambda whose parameters are named prefix0, prefix1, ...
 fnBody : Ctx -> Lam -> String -> <IO> String
-fnBody c (Lam ps body) prefix =
+fnBody c (Lam ps body _) prefix =
   let s = sub c
   writeRef (ctxIndent s) (indentOf c + 1)
   forEach (indexed ps) (\(i, p) ->
@@ -786,7 +816,7 @@ genHandle c (Handle eff body ret ops usesK tail direct _ _) =
   let retText = match ret with
     Some l -> "Ret: rt.Fn1(func(a0 rt.Value) rt.Value {\n${lambdaBody c l ""}${ind}}), "
     None -> ""
-  let opsText = concatStrings (mapList (\(Lam ps ob) ->
+  let opsText = concatStrings (mapList (\(Lam ps ob _) ->
     let s = sub c
     writeRef (ctxIndent s) (indentOf c + 2)
     let n = length ps
