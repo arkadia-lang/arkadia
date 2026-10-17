@@ -203,8 +203,38 @@ bin/arkc run examples/lisp.ark
 | `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
 | `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照 |
 | `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻と計測、可変参照 |
+| `Std.Http` | HTTP サーバ（ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie）と HTTP クライアント |
+| `Std.Net` / `Std.Url` | TCP ソケット・名前解決、URL のパース・パーセントエンコード・クエリ文字列 |
 
 モジュールの公開インターフェースは `ark doc Std.Map` のように表示できます。
+
+### HTTP サーバ
+
+```haskell
+import Std.Http
+import Std.Json as Json
+
+hello : Handler e
+hello req = text "Hello, ${withDefault "world" (query "name" req)}!"
+
+user : Handler e
+user req =
+  let id = parseInt (param "id" req) |> orHalt (badRequest "id must be a number")
+  json (Json.object [("id", Json.int id)])
+
+main () = serve ":8080" (logRequests (router
+  [ get "/" hello
+  , get "/users/:id" user
+  , staticDir "/assets" "public"
+  ]))
+```
+
+- ハンドラ `Handler e` は `Request -> <IO, Fail, Halt | e> Response`。`halt resp`（`orHalt` / `orHaltWith`）で任意のレスポンスを返して早期終了でき、`fail` や実行時エラーは 500 になります（サーバは止まりません）。
+- ルートのパターンは固定文字列・`:name`（1 セグメント）・末尾の `*name`（残り全部）。`scope "/api" [...]` でまとめて前置でき、パスは合うがメソッドが違う場合は 405 を返します。
+- リクエストの受信は Go のゴルーチンで並行に行い、ハンドラは一度に一つずつ実行します。そのため `State` などのエフェクトをサーバ全体の周りで処理して、ハンドラ間でロックなしに共有できます（[`examples/http/server.ark`](examples/http/server.ark)）。
+- `request "GET" "/users/1" ""` でリクエストを作り `runHandler` に渡せば、サーバを立てずにハンドラやルータをテストできます。
+- クライアントは `httpGet` / `httpPost` / `postJson` / `getJson` / `fetch`。
+- `Std.State` の `get` / `put` と名前が重なるので、両方使うときは片方を `import Std.State as St` のように修飾付きで import してください。
 
 ## サンプル
 
@@ -212,6 +242,7 @@ bin/arkc run examples/lisp.ark
 - [`examples/json.ark`](examples/json.ark) — State と Fail エフェクトによる JSON パーサ
 - [`examples/calculator.ark`](examples/calculator.ark) — モナディックなパーサコンビネータ（高カインド）
 - [`examples/lisp.ark`](examples/lisp.ark) — クロージャ付きの小さな Lisp インタプリタ
+- [`examples/http/server.ark`](examples/http/server.ark) — JSON API と静的ページの TODO アプリ（`cd examples/http && ark run server.ark`）
 
 ## 実装の構成
 
