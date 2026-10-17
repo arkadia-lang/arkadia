@@ -1,0 +1,8 @@
+philosopher 1 ate 200 meals
+philosopher 2 ate 200 meals
+philosopher 3 ate 200 meals
+philosopher 4 ate 200 meals
+philosopher 5 ate 200 meals
+meals eaten: 1000
+at most two eating at once: True
+all forks back on the table: True

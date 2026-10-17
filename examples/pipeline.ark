@@ -1,0 +1,58 @@
+-- A pipeline of tasks connected by channels (Std.Channel): a producer, a
+-- pool of workers and a collector, fan-out and fan-in.
+module Main
+
+import Std.Channel as Chan
+import Std.Task as Task
+
+-- The work: the length of the Collatz sequence starting at n.
+collatz : Int -> Int
+collatz n =
+  let go m steps
+    | m == 1 = steps
+    | m % 2 == 0 = go (m / 2) (steps + 1)
+    | otherwise = go (3 * m + 1) (steps + 1)
+  go n 0
+
+-- Send 1..n, then close the channel.
+produce : Int -> Chan.Channel Int -> <IO> Unit
+produce n jobs =
+  Chan.sendAll jobs [1 .. n]
+  Chan.close jobs
+
+-- Take jobs until the channel is closed and send their results.
+work : Chan.Channel Int -> Chan.Channel (Int, Int) -> Unit -> <IO> Unit
+work jobs results () = Chan.forEach jobs (\n -> Chan.send results (n, collatz n))
+
+-- The number with the longest sequence (the smallest one on ties).
+longest : List (Int, Int) -> (Int, Int)
+longest rs = foldl (\(bn, bs) (n, s) -> match s > bs || s == bs && n < bn with
+  True -> (n, s)
+  False -> (bn, bs)) (0, 0) rs
+
+main () =
+  let jobs = Chan.new 64
+  let results = Chan.new 64
+  let rs = Task.scoped (\s ->
+    let _ = Task.fork s (\_ -> produce 100000 jobs)
+    let workers = mapList (\_ -> Task.fork s (work jobs results)) [1 .. 8]
+    -- close the results once every worker is done
+    let _ = Task.fork s (\_ ->
+      forEach workers Task.await
+      Chan.close results)
+    Chan.toList results)
+  println "results: ${length rs}"
+  let (n, steps) = longest rs
+  println "longest Collatz sequence below 100000: ${n} (${steps} steps)"
+  -- select: wait for the first of several channels, or for a time limit
+  let fast = Chan.new 1
+  let slow = Chan.new 1
+  Task.scoped (\s ->
+    let sleeper = Task.fork s (\_ ->
+      Task.sleep 10.0
+      Chan.send slow "slow")
+    let _ = Task.fork s (\_ -> Chan.send fast "fast")
+    println "first: ${Chan.select [Chan.onReceive fast id, Chan.onReceive slow id]}"
+    println "then, within 50ms: ${Chan.select [Chan.onReceive slow id, Chan.after 0.05 None]}"
+    -- the slow sender is not needed any more
+    Task.cancel sleeper)

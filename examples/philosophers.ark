@@ -1,0 +1,70 @@
+-- The dining philosophers with software transactional memory (Std.Stm).
+--
+-- Five philosophers sit around a table with a fork between each pair of
+-- neighbours; a philosopher needs both forks to eat. Taking the two forks
+-- is one transaction that waits (retry) until both are free, so a
+-- philosopher never holds one fork while waiting for the other, and the
+-- classic deadlock cannot happen.
+module Main
+
+import Std.Stm
+import Std.Task as Task
+import Std.Array as Arr
+
+meals : Int
+meals = 200
+
+-- Take both forks, waiting until they are both on the table.
+takeForks : TVar Bool -> TVar Bool -> <STM> Unit
+takeForks left right =
+  check (readTVar left && readTVar right)
+  writeTVar left False
+  writeTVar right False
+
+putForks : TVar Bool -> TVar Bool -> <STM> Unit
+putForks left right =
+  writeTVar left True
+  writeTVar right True
+
+-- A philosopher eats `meals` times and counts the meals of everyone in
+-- `eaten`; `eating` is the number of philosophers eating right now.
+philosopher : TVar Bool -> TVar Bool -> TVar Int -> TVar Int -> Unit -> <IO> Int
+philosopher left right eating eaten () =
+  let dine n = match n == meals with
+    True -> n
+    False ->
+      atomically (\_ ->
+        takeForks left right
+        modifyTVar eating (+ 1))
+      Task.yield ()
+      atomically (\_ ->
+        putForks left right
+        modifyTVar eating (\e -> e - 1)
+        modifyTVar eaten (+ 1))
+      dine (n + 1)
+  dine 0
+
+-- Watch the table until everybody has finished: neighbours never eat at
+-- the same time, so at most two of the five philosophers eat at once.
+watch : TVar Int -> TVar Int -> Int -> <IO> Int
+watch eating eaten most =
+  let (now, total) = atomically (\_ -> (readTVar eating, readTVar eaten))
+  match total == 5 * meals with
+    True -> max most now
+    False ->
+      Task.yield ()
+      watch eating eaten (max most now)
+
+main () =
+  let forks = Arr.fromList (mapList (\_ -> newTVarIO True) [1 .. 5])
+  let fork i = Arr.at (i % 5) forks
+  let eating = newTVarIO 0
+  let eaten = newTVarIO 0
+  let (counts, most) = Task.scoped (\s ->
+    let ps = mapList (\i -> Task.fork s (philosopher (fork i) (fork (i + 1)) eating eaten)) [0 .. 4]
+    let most = watch eating eaten 0
+    (mapList Task.await ps, most))
+  forEach (zip [1 .. 5] counts) (\(i, n) -> println "philosopher ${i} ate ${n} meals")
+  println "meals eaten: ${readTVarIO eaten}"
+  println "at most two eating at once: ${most <= 2}"
+  println "all forks back on the table: ${all id (mapList readTVarIO (Arr.toList forks))}"

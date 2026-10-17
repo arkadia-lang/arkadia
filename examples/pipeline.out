@@ -1,0 +1,4 @@
+results: 100000
+longest Collatz sequence below 100000: 77031 (350 steps)
+first: Some "fast"
+then, within 50ms: None

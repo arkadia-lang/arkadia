@@ -1,0 +1,71 @@
+-- Parallelism: pure functions on all processors with Std.Par, and tasks
+-- with Std.Task.
+--
+-- Std.Par only accepts pure functions (`<>`), so running them in parallel
+-- cannot race and always gives the same result as running them in order:
+-- the output of this program does not depend on the number of processors.
+module Main
+
+import Std.Par as Par
+import Std.Task as Task
+
+-- ===================================================================
+-- A Mandelbrot set, one row per element of Par.map
+-- ===================================================================
+
+escape : Float -> Float -> Int
+escape cr ci =
+  let go x y i
+    | i >= 60 || x * x + y * y > 4.0 = i
+    | otherwise = go (x * x - y * y + cr) (2.0 * x * y + ci) (i + 1)
+  go 0.0 0.0 0
+
+shade : Int -> Char
+shade i
+  | i >= 60 = '#'
+  | i >= 20 = '%'
+  | i >= 10 = '+'
+  | i >= 6 = '-'
+  | i >= 4 = '.'
+  | otherwise = ' '
+
+row : Int -> String
+row y = fromChars (map (\x -> shade (escape (toFloat x / 32.0 - 2.15) (toFloat y / 12.0 - 1.2))) [0 .. 99])
+
+-- ===================================================================
+-- Map-reduce: counting primes in parallel
+-- ===================================================================
+
+isPrime : Int -> Bool
+isPrime n
+  | n < 2 = False
+  | otherwise =
+      let go d
+        | d * d > n = True
+        | n % d == 0 = False
+        | otherwise = go (d + 1)
+      go 2
+
+countPrimes : (Int, Int) -> Int
+countPrimes (lo, hi) = length (filter isPrime [lo .. hi])
+
+-- ===================================================================
+-- Tasks: a busy task is preempted and can be cancelled
+-- ===================================================================
+
+-- A loop that never ends.
+spin : Int -> Int
+spin n = spin (n + 1)
+
+main () =
+  forEach (Par.map row [0 .. 28]) println
+  let chunks = map (\i -> (i * 10000 + 1, (i + 1) * 10000)) [0 .. 19]
+  println "primes below 200000: ${Par.mapReduce countPrimes (+) 0 chunks}"
+  -- the spinning task keeps a processor busy, but the other one still runs
+  -- and wins the race; the loser is cancelled
+  let winner = Task.race [\_ -> show (spin 0), \_ ->
+    Task.sleep 0.01
+    "the sleeper"]
+  println "race won by ${winner}"
+  -- a pure computation stopped by a time limit
+  println "spin with a time limit: ${Task.timeout 0.01 (\_ -> spin 0)}"
