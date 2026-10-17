@@ -1,0 +1,136 @@
+-- Tasks: computations that run in parallel on all processors. Tasks are
+-- preempted by the runtime, so a task that computes for a long time never
+-- starves the others.
+--
+--   import Std.Task as Task
+--
+--   main () =
+--     let (a, b) = Task.both (\_ -> fib 30) (\_ -> fib 31)
+--     println "${a} ${b}"
+--
+-- Tasks are forked in a scope (structured concurrency): `scoped` returns
+-- only when its body and every task forked in it have finished. When a
+-- task fails, the other tasks and the body are cancelled and `scoped`
+-- raises the error.
+--
+--   Task.scoped (\s ->
+--     let a = Task.fork s (\_ -> download "a")
+--     let b = Task.fork s (\_ -> download "b")
+--     Task.await a ++ Task.await b)
+--
+-- A task runs a computation of type `Unit -> <IO> a`: it shares no
+-- handler with the code that forked it, so tasks never share effect
+-- state. They share data through Std.Channel, Std.Stm and Std.Ref.
+--
+-- Cancellation is cooperative: a cancelled task stops at its next
+-- cancellation point — an iteration of a loop, an effect operation, or a
+-- blocking operation (await, sleep, waiting on a channel or in retry). It
+-- cannot be caught, so it always unwinds the whole task.
+module Std.Task
+
+import Std.Ref
+import Std.Array as Arr
+import Std.MArray as MArr
+
+type Task a
+type Scope
+
+-- ===================================================================
+-- Scopes and tasks
+-- ===================================================================
+
+-- Run a body that forks tasks in a scope; returns when the body and all
+-- its tasks have finished. The first error of a task cancels the rest and
+-- is raised here.
+foreign scoped : (Scope -> <IO | e> a) -> <IO | e> a = "rt.TaskScope"
+
+-- Start a task in a scope. A scope may be passed to its tasks, which may
+-- fork more tasks in it while it is open.
+foreign fork : Scope -> (Unit -> <IO> a) -> <IO> Task a = "rt.TaskFork"
+
+-- Start a task that belongs to no scope. Nothing waits for it: it runs
+-- until it finishes or the program ends, and its error is only seen by
+-- `await`.
+foreign spawn : (Unit -> <IO> a) -> <IO> Task a = "rt.TaskSpawn"
+
+-- Wait for a task and return its result, or raise its error.
+foreign await : Task a -> <IO> a = "rt.TaskAwait"
+
+-- Wait for a task: Ok result, or Err with the message of its error.
+foreign awaitResult : Task a -> <IO> Result String a = "rt.TaskAwaitResult"
+
+-- Cancel a task (and the tasks of the scopes it runs) and wait until it
+-- has stopped. Awaiting a cancelled task raises an error.
+foreign cancel : Task a -> <IO> Unit = "rt.TaskCancel"
+
+foreign isDone : Task a -> <IO> Bool = "rt.TaskIsDone"
+
+-- ===================================================================
+-- Running computations in parallel
+-- ===================================================================
+
+-- Run two computations in parallel and return both results.
+both : (Unit -> <IO> a) -> (Unit -> <IO> b) -> <IO> (a, b)
+both f g = scoped (\s ->
+  let t = fork s g
+  let x = f ()
+  (x, await t))
+
+-- Run the computations in parallel and return their results in order.
+concurrently : List (Unit -> <IO> a) -> <IO> List a
+concurrently fs = scoped (\s -> mapList await (mapList (fork s) fs))
+
+-- Apply a function to every element in parallel, one task per element.
+mapConcurrently : (a -> <IO> b) -> List a -> <IO> List b
+mapConcurrently f xs = concurrently (map (\x -> \_ -> f x) xs)
+
+-- Run an action for every element in parallel, one task per element.
+forEachConcurrently : List a -> (a -> <IO> Unit) -> <IO> Unit
+forEachConcurrently xs f =
+  let _ = mapConcurrently f xs
+  ()
+
+-- Apply a function to every element with at most n tasks at a time (a
+-- pool of n workers taking the elements in order).
+mapPooled : Int -> (a -> <IO> b) -> List a -> <IO> List b
+mapPooled n f xs =
+  let input = Arr.fromList xs
+  let total = Arr.length input
+  let results = MArr.make total None
+  let next = newRef 0
+  let worker () =
+    let i = atomicUpdateRef next (\i -> (i + 1, i))
+    match i < total with
+      True ->
+        MArr.set i (Some (f (Arr.at i input))) results
+        worker ()
+      False -> ()
+  scoped (\s -> forEach (range 0 (max 1 (min n total))) (\_ ->
+    let _ = fork s worker
+    ()))
+  filterMap id (MArr.toList results)
+
+-- Run the computations in parallel and return the result of the first
+-- one to finish (or raise its error); the others are cancelled.
+foreign race : List (Unit -> <IO> a) -> <IO> a = "rt.TaskRace"
+
+-- Run a computation with a time limit in seconds: Some result, or None if
+-- the time ran out first, in which case the computation is cancelled.
+foreign timeout : Float -> (Unit -> <IO | e> a) -> <IO | e> Option a = "rt.TaskTimeout"
+
+-- ===================================================================
+-- The current task
+-- ===================================================================
+
+-- Pause for a number of seconds (a cancellation point, like Std.Time.sleep).
+foreign sleep : Float -> <IO> Unit = "rt.Sleep"
+
+-- Let other tasks run.
+foreign yield : Unit -> <IO> Unit = "rt.TaskYield"
+
+-- A cancellation point: stop here if the current task has been cancelled.
+foreign checkCancelled : Unit -> <IO> Unit = "rt.TaskCheckCancelled"
+
+-- The number of tasks that run at the same time (GOMAXPROCS, by default
+-- the number of processors).
+foreign processors : Unit -> <IO> Int = "rt.TaskProcessors"

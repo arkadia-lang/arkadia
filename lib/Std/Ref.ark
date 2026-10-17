@@ -5,6 +5,11 @@
 --   let r = newRef 0
 --   forEach [1 .. 10] (\i -> modifyRef r (+ i))
 --   readRef r   -- 55
+--
+-- Tasks (Std.Task) may share references: every read, write and swap is
+-- atomic. modifyRef and updateRef read and then write, so another task may
+-- write in between; atomicModifyRef and atomicUpdateRef do not lose such
+-- writes.
 module Std.Ref
 
 type Ref a
@@ -13,15 +18,11 @@ foreign newRef : a -> <IO> Ref a = "rt.RefNew"
 foreign readRef : Ref a -> <IO> a = "rt.RefGet"
 foreign writeRef : Ref a -> a -> <IO> Unit = "rt.RefSet"
 
+-- Replace the value and return the old one.
+foreign swapRef : Ref a -> a -> <IO> a = "rt.RefSwap"
+
 modifyRef : Ref a -> (a -> <IO | e> a) -> <IO | e> Unit
 modifyRef r f = writeRef r (f (readRef r))
-
--- Replace the value and return the old one.
-swapRef : Ref a -> a -> <IO> a
-swapRef r v =
-  let old = readRef r
-  writeRef r v
-  old
 
 -- Update the value and return a result computed from the old value.
 updateRef : Ref a -> (a -> <IO | e> (a, b)) -> <IO | e> b
@@ -29,3 +30,12 @@ updateRef r f =
   let (v, result) = f (readRef r)
   writeRef r v
   result
+
+-- Update the value atomically and return a result computed from the old
+-- value. If another task writes the reference meanwhile, f is applied
+-- again to the new value, which is why it must be pure.
+foreign atomicUpdateRef : Ref a -> (a -> <> (a, b)) -> <IO> b = "rt.RefAtomicUpdate"
+
+-- Apply a pure function to the value atomically.
+atomicModifyRef : Ref a -> (a -> <> a) -> <IO> Unit
+atomicModifyRef r f = atomicUpdateRef r (\v -> (f v, ()))

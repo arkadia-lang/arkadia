@@ -539,6 +539,8 @@ tailCall c e = match (ctxSelf c, e) with
         forEach (indexed vals) (\(i, v) -> match paramType ts i with
           "" -> line c "a${i} = ${valCode v}"
           t -> line c "p${i} = ${as v t}")
+        -- every iteration is a cancellation point (Std.Task)
+        line c "rt.Poll()"
         line c "continue"
         writeRef used True
         True
