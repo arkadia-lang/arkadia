@@ -1,0 +1,865 @@
+-- Type inference for expressions, patterns and bindings: Hindley–Milner
+-- with type classes (dictionary passing) and effect rows.
+module Ark.Infer
+
+import Ark.Util
+import Ark.Ast
+import Ark.Types
+import Std.Exn
+import Std.Map as Map
+
+-- ================================================================ errors
+
+unifyAt : Checker -> Pos -> Type -> Type -> String -> <IO> Unit
+unifyAt c p expected actual what = match try (\_ -> unify c expected actual) with
+  Ok _ -> ()
+  Err msg -> reportMismatch c p expected actual what msg
+
+reportMismatch : Checker -> Pos -> Type -> Type -> String -> String -> <IO> Unit
+reportMismatch c p expected actual what msg =
+  let ze = zonk expected
+  let za = zonk actual
+  let names = typesString [ze, za]
+  let notes = match msg with
+    "" -> []
+    m -> [m]
+  addError c (Diag p "type mismatch: expected ${at 0 names}, but ${what} has type ${at 1 names}" notes)
+
+-- Check that the effects performed (perf) are allowed by the context.
+-- Returns the effects that must be masked.
+unifyEff : Checker -> Pos -> Type -> Type -> <IO> List String
+unifyEff c p perf ctx =
+  let operf = openRow c perf
+  match try (\_ -> subRow c operf ctx) with
+    Ok extra -> mapList labelName extra
+    Err msg ->
+      let pr = newPrinter ()
+      pcount pr (zonk perf)
+      pcount pr (zonk ctx)
+      let rp = prow pr (zonk perf)
+      let rc = prow pr (zonk ctx)
+      let notes1 = match msg with
+        "" -> []
+        m -> [m]
+      let (_, ptail) = flattenRow (zonk perf)
+      let (_, ctail) = flattenRow (zonk ctx)
+      let notes2 = match isClosedRow ctail with
+        False -> notes1
+        True -> match ptail with
+          TSkol _ _ _ _ -> snoc notes1 "a function parameter with an unannotated arrow may perform any effect of the caller; if it is called inside a pure function (e.g. one stored in a data structure), require it to be pure with `<>`, as in `(a -> <> b)`, or add a row variable to the enclosing type"
+          _ -> snoc notes1 "the context's effect row is closed; add a row variable to allow more effects, e.g. `<State s | e>`"
+      addError c (Diag p "unhandled effect: this performs ${rp}, but the surrounding context only allows ${rc}" notes2)
+      []
+
+-- ================================================================ constraints
+
+addWanted : Checker -> ClassInfo -> Type -> Pos -> <IO> DictRef
+addWanted c cls t p =
+  let ref = DictRef (className cls) (newRef None)
+  modifyRef (cWanted c) (\stack -> match stack with
+    cur :: rest -> (Wanted cls t ref p :: cur) :: rest
+    [] -> [[Wanted cls t ref p]])
+  ref
+
+pushWanted : Checker -> <IO> Unit
+pushWanted c = modifyRef (cWanted c) (\stack -> [] :: stack)
+
+popWanted : Checker -> <IO> List Wanted
+popWanted c = match readRef (cWanted c) with
+  cur :: rest ->
+    writeRef (cWanted c) rest
+    reverse cur
+  [] -> []
+
+floatWanted : Checker -> List Wanted -> <IO> Unit
+floatWanted c ws = modifyRef (cWanted c) (\stack -> match stack with
+  cur :: rest -> foldl (\acc w -> w :: acc) cur ws :: rest
+  [] -> [reverse ws])
+
+wantedSolved : Wanted -> <IO> Bool
+wantedSolved (Wanted _ _ (DictRef _ sol) _) = isSome (readRef sol)
+
+setSol : Wanted -> DictExpr -> <IO> Unit
+setSol (Wanted _ _ (DictRef _ sol) _) d = writeRef sol (Some d)
+
+errDict : DictExpr
+errDict = DictParam "$error"
+
+noInstance : Checker -> Wanted -> <IO> Unit
+noInstance c w =
+  let Wanted cls ty _ p = w
+  let pr = newPrinter ()
+  errorf c p "no instance for ${shortName (className cls)} ${ptyp pr (zonk ty) 2}"
+  setSol w errDict
+
+lookupInstance : Checker -> String -> String -> <IO> Option InstInfo
+lookupInstance c cls tycon = match Map.lookup cls (readRef (gInstances (cG c))) with
+  Some byTy -> Map.lookup tycon byTy
+  None -> None
+
+-- Discharge constraints using instances and givens. Constraints on
+-- unresolved type variables are returned.
+solve : Checker -> List Wanted -> <IO> List Wanted
+solve c ws = solveQueue c ws []
+
+private solveQueue : Checker -> List Wanted -> List Wanted -> <IO> List Wanted
+solveQueue c queue residual = match queue with
+  [] -> reverse residual
+  w :: rest -> match wantedSolved w with
+    True -> solveQueue c rest residual
+    False ->
+      let Wanted cls ty _ p = w
+      let t = prune ty
+      let (h, args) = headOf t
+      match h with
+        TCon hn _ ->
+          match lookupInstance c (className cls) hn with
+            Some inst | length args == instNVars inst ->
+              let subs = mapList (\(Pred pc pt) -> Wanted pc (substGen pt args) (DictRef (className pc) (newRef None)) p) (instContext inst)
+              setSol w (DictInst (instSym inst) (mapList (\(Wanted _ _ r _) -> DictHole r) subs))
+              solveQueue c (rest ++ subs) residual
+            _ ->
+              match entail c cls t with
+                Some d -> setSol w d
+                None -> noInstance c w
+              solveQueue c rest residual
+        TSkol _ _ _ _ ->
+          match entail c cls t with
+            Some d -> setSol w d
+            None ->
+              let ts = typeString (zonk t)
+              let cn = shortName (className cls)
+              errorf c p "no instance for ${cn} ${ts}; add the constraint `${cn} ${ts}` to the type signature"
+              setSol w errDict
+          solveQueue c rest residual
+        TMeta _ -> solveQueue c rest (w :: residual)
+        _ ->
+          noInstance c w
+          solveQueue c rest residual
+
+superPath : ClassInfo -> ClassInfo -> <IO> Option (List Int)
+superPath from to = superPathAcc (indexed (classSupers from)) to
+
+private superPathAcc : List (Int, ClassInfo) -> ClassInfo -> <IO> Option (List Int)
+superPathAcc ss to = match ss with
+  [] -> None
+  (i, s) :: rest
+    | s == to -> Some [i]
+    | otherwise -> match superPath s to with
+        Some path -> Some (i :: path)
+        None -> superPathAcc rest to
+
+entail : Checker -> ClassInfo -> Type -> <IO> Option DictExpr
+entail c cls t = entailAcc (readRef (cGivens c)) cls t
+
+private entailAcc : List Given -> ClassInfo -> Type -> <IO> Option DictExpr
+entailAcc gs cls t = match gs with
+  [] -> None
+  Given gcls gty d :: rest -> match typesEqual gty t with
+    False -> entailAcc rest cls t
+    True
+      | gcls == cls -> Some d
+      | otherwise -> match superPath gcls cls with
+          Some path -> Some (foldl (\acc idx -> DictSuper acc idx) d path)
+          None -> entailAcc rest cls t
+
+-- Resolve a constraint on type variables that do not appear in any type by
+-- defaulting them to Unit.
+defaultAmbiguous : Checker -> Wanted -> <IO> Unit
+defaultAmbiguous c w =
+  let Wanted cls ty _ p = w
+  forEach (metasOf ty) (\m -> match isStarKind (metaKind m) with
+    True -> writeRef (metaRef m) (Some (tUnit c))
+    False -> ())
+  match solve c [w] with
+    [] -> ()
+    _ ->
+      errorf c p "ambiguous type: cannot determine the type for constraint ${shortName (className cls)} ${typeString (zonk ty)}"
+      setSol w errDict
+
+flushRoot : Checker -> <IO> Unit
+flushRoot c =
+  let stack = readRef (cWanted c)
+  let root = match reverse stack with
+    r :: _ -> reverse r
+    [] -> []
+  writeRef (cWanted c) [[]]
+  forEach (solve c root) (defaultAmbiguous c)
+
+-- ================================================================ generalization
+
+lowerLevels : Type -> Int -> <IO> Unit
+lowerLevels t lvl = forEach (metasOf t) (\m -> match readRef (metaLevelRef m) > lvl with
+  True -> writeRef (metaLevelRef m) lvl
+  False -> ())
+
+genType : Type -> List (Int, Int) -> <IO> Type
+genType t0 idx = match prune t0 with
+  t@(TMeta m) -> match lookup (metaId m) idx with
+    Some i -> TGen i
+    None -> t
+  TApp f a ->
+    let f2 = genType f idx
+    TApp f2 (genType a idx)
+  TFun a e r ->
+    let a2 = genType a idx
+    let e2 = genType e idx
+    TFun a2 e2 (genType r idx)
+  TRowExt l r ->
+    let l2 = genType l idx
+    TRowExt l2 (genType r idx)
+  t -> t
+
+freshDictName : Checker -> ClassInfo -> <IO> String
+freshDictName c cls =
+  let n = nextId (cNextLoc c)
+  "dict_" ++ sanitize (shortName (className cls)) ++ "_" ++ show n
+
+-- Close the inferred types of a binding group. Must be called after
+-- leaving the group's level and popping its wanted scope.
+generalize : Checker -> List Type -> List Wanted -> Bool -> <IO> (List Scheme, List String)
+generalize c monos ws canGen = match canGen with
+  False ->
+    let lvl = level c
+    forEach monos (\t -> lowerLevels t lvl)
+    forEach ws (\(Wanted _ ty _ _) -> lowerLevels ty lvl)
+    floatWanted c ws
+    (mapList mono monos, [])
+  True ->
+    let residual = solve c ws
+    let monoMetas = metasOfMany monos
+    let lvl = level c
+    let params = filterMap (\w ->
+      let Wanted _ ty _ _ = w
+      let ms = metasOf ty
+      let outer = anyOf (\m -> readRef (metaLevelRef m) <= lvl) ms
+      let inType = allOf (hasMeta monoMetas) ms
+      match outer with
+        True ->
+          lowerLevels ty lvl
+          floatWanted c [w]
+          None
+        False -> match inType with
+          False ->
+            defaultAmbiguous c w
+            None
+          True -> Some w) residual
+    let (idx, kinds) = foldl (\(ix, ks) m -> match isSome (readRef (metaRef m)) with
+      True -> (ix, ks)
+      False -> match readRef (metaLevelRef m) > lvl with
+        True -> (snoc ix (metaId m, length ks), snoc ks (metaKind m))
+        False -> (ix, ks)) ([], []) monoMetas
+    -- (class, type, name) of the dictionary parameters so far
+    let step (seen, preds) w =
+      let Wanted cls ty _ _ = w
+      match find (\(pc, pt, _) -> pc == cls && typesEqual pt ty) seen with
+        Some (_, _, name) ->
+          setSol w (DictParam name)
+          (seen, preds)
+        None ->
+          let name = freshDictName c cls
+          setSol w (DictParam name)
+          let gt = genType ty idx
+          (snoc seen (cls, ty, name), snoc preds (Pred cls gt))
+    let (seen, preds) = foldl step ([], []) params
+    let names = mapList (\(_, _, n) -> n) seen
+    let scs = mapList (\t -> Scheme kinds [] preds (genType t idx)) monos
+    (scs, names)
+
+-- ================================================================ instantiation
+
+instantiate : Checker -> Scheme -> Pos -> <IO> (Type, List DictRef)
+instantiate c (Scheme kinds _ preds t) p = match kinds with
+  [] -> (t, [])
+  _ ->
+    let sub = mapList (newMeta c) kinds
+    let refs = mapList (\(Pred cls pt) -> addWanted c cls (substGen pt sub) p) preds
+    (substGen t sub, refs)
+
+-- ================================================================ expressions
+
+checkExpr : Checker -> Expr -> Type -> Type -> String -> <IO> Unit
+checkExpr c e t eff what =
+  let done = match e with
+    ELam _ params body -> checkLam c params body t
+    _ -> False
+  match done with
+    True -> ()
+    False ->
+      let actual = inferExpr c e eff
+      unifyAt c (exprPos e) t actual what
+
+inferExpr : Checker -> Expr -> Type -> <IO> Type
+inferExpr c e eff = match e with
+  ELit _ l -> litType c l
+  EVar _ _ _ _ _ -> inferVar c e
+  ECon p q n con -> match lookupCtor c p q n with
+    None -> freshType c
+    Some ci ->
+      writeRef con (Some ci)
+      let (t, _) = instantiate c (ctorScheme ci) p
+      t
+  EApp _ f args masks ->
+    let ft = inferExpr c f eff
+    applyArgs c (Some masks) f ft args eff
+  ELam _ params body -> inferLam c params body
+  ELet _ binds body ->
+    let saved = readRef (cLocals c)
+    forEach binds (\b -> inferLocalBind c b eff)
+    let t = inferExpr c body eff
+    writeRef (cLocals c) saved
+    t
+  EBlock _ stmts -> inferBlock c stmts eff
+  EMatch p scrut arms ->
+    let ts = inferExpr c scrut eff
+    let r = freshType c
+    let rows = mapList (\(Arm _ pat rh) ->
+      let saved = readRef (cLocals c)
+      checkPat c pat ts (newRef [])
+      checkRhs c rh r eff
+      writeRef (cLocals c) saved
+      ([pat], rhsGuarded rh)) arms
+    modifyRef (cMatches c) (\ms -> MatchSite p "match" (map fst rows) (map snd rows) :: ms)
+    r
+  EHandle _ _ _ _ _ -> inferHandle c e eff
+  ETuple p elems ->
+    match length elems > 12 with
+      True -> errorf c p "tuples may have at most 12 elements"
+      False -> ()
+    let ts = mapList (\x -> inferExpr c x eff) elems
+    match length ts > 12 with
+      True -> freshType c
+      False -> tTuple c ts
+  EList _ elems ->
+    let a = freshType c
+    forEach elems (\x -> checkExpr c x a eff "this list element")
+    tList c a
+  EUnit _ -> tUnit c
+  EBinOp _ _ _ _ -> inferBinOp c e eff
+  EInterp _ parts ->
+    forEach parts (\x -> checkExpr c x (tString c) eff "this interpolated part")
+    tString c
+  EAnnot p x (SchemeE preds te) ->
+    let env = newTvEnv False arrowFresh
+    match preds with
+      [] -> ()
+      _ -> errorf c p "constraints are not allowed in expression annotations"
+    let t = convStar c te env
+    checkExpr c x t eff "this expression"
+    t
+  _ -> error "inferExpr: unexpected expression after desugaring"
+
+litType : Checker -> Lit -> <IO> Type
+litType c l = match l with
+  LInt _ -> tInt c
+  LFloat _ -> tFloat c
+  LString _ -> tString c
+  LChar _ -> tChar c
+
+inferVar : Checker -> Expr -> <IO> Type
+inferVar c e = match e with
+  EVar p qual name ref dicts ->
+    let local = match qual with
+      "" -> lookupLocal c name
+      _ -> None
+    match local with
+      Some (LocalVar _ id sc mono grp) ->
+        writeRef ref (Some (VarRef True id grp None None None))
+        match sc with
+          None -> openFun c mono
+          Some s ->
+            let (t, refs) = instantiate c s p
+            writeRef dicts refs
+            openFun c t
+      None -> match lookupValue c p qual name with
+        None -> freshType c
+        Some v ->
+          let grp = readRef (valueGroup v)
+          let grpInfo = match grp with
+            Some (g, _) -> Some g
+            None -> None
+          writeRef ref (Some (VarRef False (valueSym v) grpInfo (valueMethod v) (valueOp v) None))
+          match grp with
+            Some (_, m) -> openFun c m
+            None -> match readRef (valueSchemeRef v) with
+              None ->
+                errorf c p "internal error: '${name}' used before its type is known"
+                freshType c
+              Some s ->
+                let (t, refs) = instantiate c s p
+                writeRef dicts refs
+                openFun c t
+  _ -> error "inferVar: not a variable"
+
+-- Check the arguments of an application. masks is None for operators.
+applyArgs : Checker -> Option (Ref (Map.Map Int (List String))) -> Expr -> Type -> List Expr -> Type -> <IO> Type
+applyArgs c masks fun ft0 args eff = applyLoop c masks fun ft0 (indexed args) eff False
+
+private applyLoop : Checker -> Option (Ref (Map.Map Int (List String))) -> Expr -> Type -> List (Int, Expr) -> Type -> Bool -> <IO> Type
+applyLoop c masks fun ft0 args eff effFailed = match args with
+  [] -> ft0
+  (i, a) :: rest -> match prune ft0 with
+    TFun farg feff fres ->
+      -- check the argument before the call's effect: arguments are
+      -- evaluated first and may determine the callee's effect row
+      checkExpr c a farg eff "this argument"
+      match effFailed with
+        True ->
+          -- report an effect error once per application
+          let operf = openRow c feff
+          let _ = try (\_ -> subRow c operf eff)
+          applyLoop c masks fun fres rest eff True
+        False ->
+          let nerr = errorCount c
+          let ms = unifyEff c (exprPos a) feff eff
+          let failed = errorCount c > nerr
+          match ms with
+            [] -> ()
+            _ -> match masks with
+              None -> errorf c (exprPos a) "internal limitation: effect masking is not supported for operators; use a function application"
+              Some r -> modifyRef r (Map.insert i ms)
+          applyLoop c masks fun fres rest eff failed
+    TMeta _ ->
+      let at2 = inferExpr c a eff
+      let r = freshType c
+      unifyAt c (exprPos fun) ft0 (TFun at2 eff r) "the function"
+      applyLoop c masks fun r rest eff effFailed
+    ft ->
+      match i == 0 with
+        True -> errorf c (exprPos fun) "this is not a function; it has type ${typeString (zonk ft)}"
+        False -> errorf c (exprPos a) "too many arguments: the function result has type ${typeString (zonk ft)}"
+      forEach args (\(_, x) ->
+        let _ = inferExpr c x eff
+        ())
+      freshType c
+
+inferBinOp : Checker -> Expr -> Type -> <IO> Type
+inferBinOp c e eff = match e with
+  EBinOp p op left right ->
+    let name = varName op
+    match varQual op == "" && (name == "&&" || name == "||") with
+      True ->
+        checkExpr c left (tBool c) eff "the left operand"
+        checkExpr c right (tBool c) eff "the right operand"
+        tBool c
+      False ->
+        let ftOpt = match startsWith ":" name with
+          True -> match op with
+            EVar opp q n ref _ -> match lookupCtor c opp q n with
+              None -> None
+              Some ci ->
+                writeRef ref (Some (VarRef False "" None None None (Some ci)))
+                let (t, _) = instantiate c (ctorScheme ci) p
+                Some t
+            _ -> None
+          False -> Some (inferVar c op)
+        match ftOpt with
+          None -> freshType c
+          Some ft -> applyArgs c None op ft [left, right] eff
+  _ -> error "inferBinOp"
+
+inferLam : Checker -> List Pattern -> Expr -> <IO> Type
+inferLam c params body =
+  let saved = readRef (cLocals c)
+  let seen = newRef []
+  let pts = mapList (\pat ->
+    let t = freshType c
+    checkPat c pat t seen
+    t) params
+  let bodyEff = freshRow c
+  let r = inferExpr c body bodyEff
+  writeRef (cLocals c) saved
+  recordParamMatch c params
+  funType c pts bodyEff r
+
+-- Check a lambda against a known function type, propagating parameter
+-- types and the body's effect context inwards. Returns False when the
+-- expected type is not (yet) a function type of enough arity.
+checkLam : Checker -> List Pattern -> Expr -> Type -> <IO> Bool
+checkLam c params body t =
+  let collect ps cur acc = match ps with
+    [] -> Some (reverse acc)
+    _ :: more -> match prune cur with
+      TFun a e r -> collect more r ((a, e, r) :: acc)
+      _ -> None
+  match collect params t [] with
+    None -> False
+    Some arrows ->
+      let saved = readRef (cLocals c)
+      let seen = newRef []
+      forEach (zip params arrows) (\(pat, (a, _, _)) -> checkPat c pat a seen)
+      let (_, le, lr) = lastOf arrows
+      checkExpr c body lr le "the body of this function"
+      writeRef (cLocals c) saved
+      recordParamMatch c params
+      True
+
+-- A curried function type; only the last arrow carries the body's effect.
+funType : Checker -> List Type -> Type -> Type -> <IO> Type
+funType c params bodyEff res = funTypeAcc c (reverse params) bodyEff res True
+
+private funTypeAcc : Checker -> List Type -> Type -> Type -> Bool -> <IO> Type
+funTypeAcc c ps bodyEff t isLast = match ps with
+  [] -> t
+  p :: rest ->
+    let eff = match isLast with
+      True -> bodyEff
+      False -> freshRow c
+    funTypeAcc c rest bodyEff (TFun p eff t) False
+
+recordParamMatch : Checker -> List Pattern -> <IO> Unit
+recordParamMatch c params = match anyOf (\p -> not (irrefutable p)) params with
+  True -> match params with
+    first :: _ -> modifyRef (cMatches c) (\ms -> MatchSite (patPos first) "lambda" [params] [False] :: ms)
+    [] -> ()
+  False -> ()
+
+irrefutable : Pattern -> Bool
+irrefutable p = match p with
+  PVar _ _ _ -> True
+  PWild _ -> True
+  PUnit _ -> True
+  PTuple _ es -> allOf irrefutable es
+  PAs _ _ _ q -> irrefutable q
+  PAnnot _ q _ -> irrefutable q
+  _ -> False
+
+inferBlock : Checker -> List Stmt -> Type -> <IO> Type
+inferBlock c stmts eff =
+  let saved = readRef (cLocals c)
+  let n = length stmts
+  let loop i ss result = match ss with
+    [] -> result
+    s :: rest ->
+      let isLast = i == n - 1
+      match s with
+        SLet b
+          | isLast ->
+              errorf c (bindPos b) "a block must end with an expression, not a let binding"
+              freshType c
+          | otherwise ->
+              inferLocalBind c b eff
+              loop (i + 1) rest result
+        SExpr x ->
+          let t = inferExpr c x eff
+          match isLast with
+            True -> loop (i + 1) rest t
+            False ->
+              match try (\_ -> unify c (tUnit c) t) with
+                Ok _ -> ()
+                Err _ -> errorf c (exprPos x) "the result of this statement (of type ${typeString (zonk t)}) is discarded; use `let _ = ...` to ignore it explicitly"
+              loop (i + 1) rest result
+  let r = loop 0 stmts (tUnit c)
+  writeRef (cLocals c) saved
+  r
+
+rhsGuarded : Rhs -> Bool
+rhsGuarded r = match r with
+  RBody _ -> False
+  RGuards [] -> False
+  RGuards gs ->
+    let Guard _ cond _ = lastOf gs
+    not (isTrivialGuard cond)
+
+isTrivialGuard : Expr -> Bool
+isTrivialGuard e = match e with
+  EVar _ _ n _ _ -> n == "otherwise"
+  ECon _ _ n _ -> n == "True"
+  _ -> False
+
+checkRhs : Checker -> Rhs -> Type -> Type -> <IO> Unit
+checkRhs c r t eff = match r with
+  RBody b -> checkExpr c b t eff "this expression"
+  RGuards gs -> forEach gs (\(Guard _ cond b) ->
+    checkExpr c cond (tBool c) eff "this guard"
+    checkExpr c b t eff "this expression")
+
+-- ================================================================ handlers
+
+lookupEffect : Checker -> String -> <IO> EffectInfo
+lookupEffect c name = match Map.lookup name (readRef (gEffects (cG c))) with
+  Some ei -> ei
+  None -> error ("unknown effect " ++ name)
+
+inferHandle : Checker -> Expr -> Type -> <IO> Type
+inferHandle c e eff = match e with
+  EHandle p body ret ops effRef ->
+    -- (effect, handled operation names)
+    let state = newRef (None, [])
+    forEach ops (\(HandlerClause cp name _ _ opRef) -> match lookupValue c cp "" name with
+      None -> ()
+      Some v -> match valueOp v with
+        None -> errorf c cp "'${name}' is not an effect operation"
+        Some op ->
+          let (cur, handled) = readRef state
+          match cur with
+            Some en | en != opEffect op ->
+              errorf c cp "a handler can only handle operations of one effect ('${name}' belongs to ${shortName (opEffect op)}, not ${shortName en})"
+            _ ->
+              match elem name handled with
+                True -> errorf c cp "operation '${name}' is handled twice"
+                False -> ()
+              writeRef state (Some (opEffect op), snoc handled name)
+              writeRef opRef (Some op))
+    match readRef state with
+      (None, _) ->
+        match ops with
+          [] -> errorf c p "a handler must handle at least one operation"
+          _ -> ()
+        let _ = inferExpr c body eff
+        freshType c
+      (Some en, handled) ->
+        let ei = lookupEffect c en
+        writeRef effRef en
+        forEach (effectOps ei) (\op -> match elem (opName op) handled with
+          True -> ()
+          False -> errorf c p "handler for ${shortName en} does not handle operation '${opName op}'")
+        -- instantiate effect parameters
+        let ek = effectKind ei
+        let args = mapList (newMeta c) (paramKinds ek (effectNParams ei))
+        let label = mkAppT (TCon en ek) args
+        let bodyT = inferExpr c body (TRowExt label eff)
+        let res = freshType c
+        match ret with
+          Some (HandlerClause _ _ rps rbody _) ->
+            let saved = readRef (cLocals c)
+            checkPat c (at 0 rps) bodyT (newRef [])
+            checkExpr c rbody res eff "the return clause"
+            writeRef (cLocals c) saved
+          None -> unifyAt c p res bodyT "the handled expression"
+        forEach ops (\(HandlerClause cp _ params cbody opRef) -> match readRef opRef with
+          None -> ()
+          Some op
+            | length params != opArity op + 1 ->
+                errorf c cp "operation '${opName op}' takes ${opArity op} argument(s) plus the continuation, but the clause has ${length params} pattern(s)"
+            | otherwise ->
+                incLevel c
+                let Scheme okinds onames _ _ = opScheme op
+                let np = effectNParams ei
+                let sub = mapList (\(i, k) -> match i < np with
+                  True -> at i args
+                  False
+                    | i == opAmbient op -> eff
+                    | otherwise ->
+                        let name = match i < length onames with
+                          True -> at i onames
+                          False -> ""
+                        newSkolem c name k) (indexed okinds)
+                let saved = readRef (cLocals c)
+                let seen = newRef []
+                forEach (zip params (opParams op)) (\(pat, pt) -> checkPat c pat (substGen pt sub) seen)
+                let k = TFun (substGen (opRes op) sub) eff res
+                checkPat c (at (opArity op) params) k seen
+                checkExpr c cbody res eff "this handler clause"
+                writeRef (cLocals c) saved
+                decLevel c
+                recordParamMatch c params)
+        res
+  _ -> error "inferHandle"
+
+-- ================================================================ patterns
+
+bindPatVar : Checker -> Pos -> String -> Type -> Ref (List String) -> <IO> String
+bindPatVar c p name t seen =
+  match elem name (readRef seen) with
+    True -> errorf c p "variable '${name}' is bound more than once in this pattern"
+    False -> ()
+  modifyRef seen (\s -> name :: s)
+  let id = freshLocalID c name
+  pushLocal c name (LocalVar p id None t None)
+  id
+
+checkPat : Checker -> Pattern -> Type -> Ref (List String) -> <IO> Unit
+checkPat c pat t seen = match pat with
+  PVar p name idRef -> writeRef idRef (bindPatVar c p name t seen)
+  PWild _ -> ()
+  PUnit p -> unifyAt c p t (tUnit c) "this pattern"
+  PLit p l -> unifyAt c p t (litType c l) "this pattern"
+  PAs p name idRef inner ->
+    writeRef idRef (bindPatVar c p name t seen)
+    checkPat c inner t seen
+  PAnnot p inner te ->
+    let env = newTvEnv False arrowFresh
+    let at2 = convStar c te env
+    unifyAt c p at2 t "this pattern"
+    checkPat c inner t seen
+  PTuple p elems ->
+    let ts = mapList (\_ -> freshType c) elems
+    match length ts > 12 with
+      True -> errorf c p "tuples may have at most 12 elements"
+      False ->
+        unifyAt c p t (tTuple c ts) "this pattern"
+        forEach (zip elems ts) (\(x, xt) -> checkPat c x xt seen)
+  PList p elems ->
+    let a = freshType c
+    unifyAt c p t (tList c a) "this pattern"
+    forEach elems (\x -> checkPat c x a seen)
+  PCon p q name args conRef -> match lookupCtor c p q name with
+    None -> forEach args (\x -> checkPat c x (freshType c) seen)
+    Some ci
+      | length args != ctorArity ci ->
+          writeRef conRef (Some ci)
+          errorf c p "constructor '${name}' expects ${ctorArity ci} argument(s), but the pattern has ${length args}"
+      | otherwise ->
+          writeRef conRef (Some ci)
+          let (ct, _) = instantiate c (ctorScheme ci) p
+          let fieldsOf n ty acc = match n == 0 with
+            True -> (reverse acc, ty)
+            False -> match prune ty with
+              TFun a _ r -> fieldsOf (n - 1) r (a :: acc)
+              _ -> error "checkPat: constructor type"
+          let (fields, res) = fieldsOf (ctorArity ci) ct []
+          unifyAt c p t res "this pattern"
+          forEach (zip args fields) (\(x, ft) -> checkPat c x ft seen)
+
+-- ================================================================ bindings
+
+bindArity : Bind -> Int
+bindArity b = match bindClauses b with
+  cl :: _ -> length (clauseParams cl)
+  [] -> 0
+
+isSyntacticValue : Bind -> Bool
+isSyntacticValue b = match bindArity b > 0 with
+  True -> True
+  False -> match bindClauses b with
+    Clause _ _ (RBody body) :: _ -> match body with
+      ELam _ _ _ -> True
+      EVar _ _ _ _ _ -> True
+      ECon _ _ _ _ -> True
+      ELit _ _ -> True
+      EUnit _ -> True
+      _ -> False
+    _ -> False
+
+-- Check the equations of a binding against type t.
+checkClauses : Checker -> Bind -> Type -> Type -> <IO> Unit
+checkClauses c b t eff =
+  let n = bindArity b
+  match n == 0 with
+    True -> checkRhs c (clauseRhs (at 0 (bindClauses b))) t eff
+    False ->
+      let pts = mapList (\_ -> freshType c) (range 0 n)
+      let bodyEff = freshRow c
+      let r = freshType c
+      let ft = funType c pts bodyEff r
+      let what = "'${bindName b}'"
+      match try (\_ -> unify c t ft) with
+        Ok _ -> ()
+        Err msg -> reportMismatch c (bindPos b) t ft what msg
+      let clauses = bindClauses b
+      let rows = mapList (\(Clause _ params rh) ->
+        let saved = readRef (cLocals c)
+        let seen = newRef []
+        forEach (zip params pts) (\(pat, pt) -> checkPat c pat pt seen)
+        checkRhs c rh r bodyEff
+        writeRef (cLocals c) saved
+        (params, rhsGuarded rh)) clauses
+      let trivial = length clauses == 1 && allOf (\(ps, g) -> allOf irrefutable ps && not g) rows
+      match trivial with
+        True -> ()
+        False -> modifyRef (cMatches c) (\ms -> MatchSite (bindPos b) ("function " ++ what) (map fst rows) (map snd rows) :: ms)
+
+-- Report effects performed while evaluating a top-level value.
+checkPure : Checker -> Bind -> Type -> <IO> Unit
+checkPure c b eff = match bindArity b > 0 with
+  True -> ()
+  False ->
+    let (labels, _) = flattenRow eff
+    match labels with
+      [] -> ()
+      _ -> errorf c (bindPos b) "top-level value '${bindName b}' cannot perform effects (it performs ${joinNames (mapList typeString labels)}); make it a function taking ()"
+
+-- Check a binding against a declared scheme. The first quantified
+-- variables are instantiated with fixed; the rest become rigid. None for
+-- eff means a pure top-level context. Predicates (except the first when
+-- skipFirst) become givens; their dictionary parameter names are returned.
+checkAgainst : Checker -> Bind -> Scheme -> List Type -> Bool -> Option Type -> <IO> List String
+checkAgainst c b (Scheme kinds snames preds st) fixed skipFirst eff =
+  incLevel c
+  let nfixed = length fixed
+  let sub = mapList (\(i, k) -> match i < nfixed with
+    True -> at i fixed
+    False ->
+      let name = match i < length snames with
+        True -> at i snames
+        False -> ""
+      newSkolem c name k) (indexed kinds)
+  let t = substGen st sub
+  let savedGivens = readRef (cGivens c)
+  let names = filterMap id (mapList (\(i, Pred cls pt) -> match i == 0 && skipFirst with
+    True -> None
+    False ->
+      let name = freshDictName c cls
+      let gt = substGen pt sub
+      modifyRef (cGivens c) (\gs -> Given cls gt (DictParam name) :: gs)
+      Some name) (indexed preds))
+  pushWanted c
+  match eff with
+    None ->
+      let pure = freshRow c
+      checkClauses c b t pure
+      checkPure c b pure
+    Some e -> checkClauses c b t e
+  let ws = popWanted c
+  let lvl = level c
+  forEach (solve c ws) (\w ->
+    let Wanted _ ty _ _ = w
+    let local = allOf (\m -> readRef (metaLevelRef m) >= lvl) (metasOf ty)
+    match local with
+      True -> defaultAmbiguous c w
+      False -> floatWanted c [w])
+  writeRef (cGivens c) savedGivens
+  decLevel c
+  names
+
+inferLocalBind : Checker -> Bind -> Type -> <IO> Unit
+inferLocalBind c b eff = match bindPat b with
+  Some pat ->
+    let body = match bindClauses b with
+      Clause _ _ (RBody x) :: _ -> x
+      _ -> error "pattern binding without a body"
+    let t = inferExpr c body eff
+    checkPat c pat t (newRef [])
+    match irrefutable pat with
+      True -> ()
+      False -> modifyRef (cMatches c) (\ms -> MatchSite (bindPos b) "let pattern" [[pat]] [False] :: ms)
+  None ->
+    let id = freshLocalID c (bindName b)
+    writeRef (bindId b) id
+    -- value bindings are not recursive: in `let x = x + 1` the right-hand
+    -- side refers to the outer x
+    let recursive = bindArity b > 0
+    match bindSig b with
+      Some se ->
+        let sc = convScheme c se (newTvEnv True arrowAmbient)
+        let lv = LocalVar (bindPos b) id (Some sc) TRowEmpty None
+        match recursive with
+          True -> pushLocal c (bindName b) lv
+          False -> ()
+        let names = checkAgainst c b sc [] False (Some eff)
+        match recursive with
+          True -> ()
+          False -> pushLocal c (bindName b) lv
+        writeRef (bindInfo b) (Some (BindInfo names None (Some sc)))
+      None ->
+        let gs = newRef []
+        let saved = readRef (cLocals c)
+        incLevel c
+        let m = freshType c
+        match recursive with
+          True -> pushLocal c (bindName b) (LocalVar (bindPos b) id None m (Some gs))
+          False -> ()
+        pushWanted c
+        checkClauses c b m eff
+        let ws = popWanted c
+        decLevel c
+        writeRef (cLocals c) saved
+        let (scs, names) = generalize c [m] ws (isSyntacticValue b)
+        writeRef gs names
+        let sc = at 0 scs
+        writeRef (bindInfo b) (Some (BindInfo names (Some gs) (Some sc)))
+        let Scheme skinds _ _ st = sc
+        match isEmpty skinds && isEmpty names with
+          True -> pushLocal c (bindName b) (LocalVar (bindPos b) id None st None)
+          False -> pushLocal c (bindName b) (LocalVar (bindPos b) id (Some sc) TRowEmpty None)

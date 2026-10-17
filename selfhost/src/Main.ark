@@ -5,6 +5,12 @@ import Ark.Ast
 import Ark.Lexer
 import Ark.Parser
 import Ark.Debug
+import Ark.Fixity
+import Ark.Types
+import Ark.Check
+import Ark.Loader
+import Ark.Render
+import Std.Map as Map
 
 dumpTok : String -> Token -> String
 dumpTok ind t =
@@ -32,4 +38,42 @@ main () = match args () with
       Ok m -> print (dumpModule m)
       Err errs -> println ("ERR " ++ joinWith "\n" (mapList diagString errs))
     Err e -> println e
+  ["fixity", file] ->
+    let pm = parseOrDie "<std>/Prelude.ark" (orDie (readFile "../lib/Prelude.ark"))
+    let m = parseOrDie file (orDie (readFile file))
+    let fx = newRef defaultFixities
+    let e1 = collectFixities fx pm
+    let e2 = collectFixities fx m
+    match e1 ++ e2 with
+      [] -> ()
+      es -> println ("ERR " ++ joinWith "\n" (mapList diagString es))
+    let (m2, es) = resolveFixity m (readRef fx)
+    match es with
+      [] -> ()
+      _ -> println ("ERR " ++ joinWith "\n" (mapList diagString es))
+    print (dumpModule m2)
+  ["types", file] ->
+    let l = newLoader [pathDir file] "../lib"
+    match loadFile l file with
+      Err errs -> print (renderDiags (loaderSources l) errs False)
+      Ok (Program mods g main) ->
+        forEach mods (\m ->
+          println ("module " ++ moduleName m)
+          match Map.lookup (moduleName m) (readRef (gModules g)) with
+            Some ex -> forEach (Map.toList (readRef (exportsValues ex))) (\(n, v) -> match readRef (valueSchemeRef v) with
+              Some sc -> println ("  " ++ n ++ " : " ++ schemeString sc)
+              None -> ())
+            None -> ())
+        match checkMain g main with
+          [] -> ()
+          errs -> print (renderDiags (loaderSources l) errs False)
   _ -> println "usage"
+
+orDie : Result String a -> <IO> a
+orDie (Ok x) = x
+orDie (Err e) = error e
+
+parseOrDie : String -> String -> <IO> Module
+parseOrDie file src = match parseModule file src with
+  Ok m -> m
+  Err es -> error (joinWith "\n" (mapList diagString es))

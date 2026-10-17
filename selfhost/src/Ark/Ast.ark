@@ -790,8 +790,8 @@ sigPos (Sig p _ _ _) = p
 sigName : Sig -> String
 sigName (Sig _ n _ _) = n
 
-sigScheme : Sig -> SchemeE
-sigScheme (Sig _ _ s _) = s
+sigSchemeE : Sig -> SchemeE
+sigSchemeE (Sig _ _ s _) = s
 
 type CtorDecl = CtorDecl Pos String (List TypeExpr)
 

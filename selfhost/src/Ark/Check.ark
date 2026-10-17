@@ -1,0 +1,713 @@
+-- Checking a module: declarations (types, effects, classes, instances,
+-- deriving), top-level bindings and tests.
+module Ark.Check
+
+import Ark.Util
+import Ark.Ast
+import Ark.Types
+import Ark.Infer
+import Ark.Exhaust
+import Std.Exn
+import Std.Map as Map
+
+-- Type check a parsed module and register its exports.
+checkModule : Global -> Module -> <IO> List Diag
+checkModule g m =
+  let c = newChecker g (moduleName m)
+  runChecker c m
+  match readRef (cErrs c) with
+    [] ->
+      modifyRef (gModules g) (Map.insert (moduleName m) (cExports c))
+      []
+    errs -> reverse errs
+
+private hasErrors : Checker -> <IO> Bool
+hasErrors c = not (isEmpty (readRef (cErrs c)))
+
+private runChecker : Checker -> Module -> <IO> Unit
+runChecker c m =
+  match cMod c == preludeMod with
+    True -> installBuiltins c
+    False -> ()
+  processImports c (moduleImports m)
+  match hasErrors c with
+    True -> ()
+    False ->
+      let decls = moduleDecls m
+      let classes = collectTypeNames c decls
+      inferDataKinds c decls
+      processEffects c decls
+      processClasses c decls classes
+      match hasErrors c with
+        True -> ()
+        False ->
+          let all = decls ++ deriveInstances c decls
+          let insts = processInstanceHeads c all
+          processForeigns c decls
+          let (funs, tests) = collectValues c decls
+          match hasErrors c with
+            True -> ()
+            False ->
+              checkTopBindings c funs
+              checkInstanceBodies c insts
+              checkClassDefaults c decls classes
+              checkTests c tests
+              match hasErrors c with
+                True -> ()
+                False -> checkMatches c
+
+-- ================================================================ builtins
+
+installBuiltins : Checker -> <IO> Unit
+installBuiltins c =
+  let g = cG c
+  let prim name params k =
+    let ti = TypeInfo (sym c name) (newRef k) params (newRef []) True preludeMod noPos
+    modifyRef (gTypes g) (Map.insert (sym c name) ti)
+    defineType c name (TEType ti) noPos
+    ti
+  forEach ["Int", "Float", "String", "Char"] (\n ->
+    let _ = prim n [] KStar
+    ())
+  let bool = prim "Bool" [] KStar
+  addCtors c bool ["False", "True"] [[], []]
+  let unit = prim "Unit" [] KStar
+  addCtors c unit ["()"] [[]]
+  let list = prim "List" ["a"] (KArrow KStar KStar)
+  let listA = TApp (TCon (typeInfoName list) (typeInfoKind list)) (TGen 0)
+  addCtors c list ["Nil", "Cons"] [[], [TGen 0, listA]]
+  -- `::` is an alias for Cons
+  let cons = at 1 (typeInfoCtors list)
+  modifyRef (scopeCtors (cScope c)) (Map.insert "::" (CEctor cons))
+  modifyRef (exportsCtors (cExports c)) (Map.insert "::" cons)
+  forEach (range 2 13) (\n ->
+    let k = foldl (\acc _ -> KArrow KStar acc) KStar (range 0 n)
+    let name = "Tuple" ++ show n
+    let params = mapList (\i -> charToString (fromCharCode (97 + i))) (range 0 n)
+    let ti = prim name params k
+    addCtors c ti [name] [mapList TGen (range 0 n)])
+  -- IO is the builtin, unhandleable effect of the outside world
+  let io = EffectInfo (sym c "IO") (newRef KEffect) 0 (newRef []) preludeMod noPos
+  modifyRef (gEffects g) (Map.insert (effectName io) io)
+  defineType c "IO" (TEEffect io) noPos
+
+addCtors : Checker -> TypeInfo -> List String -> List (List Type) -> <IO> Unit
+addCtors c ti names fields =
+  let n = length (typeInfoParams ti)
+  let k = typeInfoKind ti
+  let res = mkAppT (TCon (typeInfoName ti) k) (mapList TGen (range 0 n))
+  let total = length names
+  forEach (indexed (zip names fields)) (\(i, (name, fs)) ->
+    let ci = CtorInfo (sym c name) name (typeInfoName ti) (typeInfoModule ti) total i (length fs) (ctorSchemeOf (replicate n KStar) fs res) fs (typeInfoPos ti)
+    let TypeInfo _ _ _ ctors _ _ _ = ti
+    modifyRef ctors (\cs -> snoc cs ci)
+    modifyRef (scopeCtors (cScope c)) (Map.insert name (CEctor ci))
+    match name != "()" && not (startsWith "Tuple" name) with
+      True -> modifyRef (exportsCtors (cExports c)) (Map.insert name ci)
+      False -> ())
+
+-- The type of a constructor function. Every arrow gets its own effect
+-- variable: applying a constructor has no effect.
+ctorSchemeOf : List Kind -> List Type -> Type -> Scheme
+ctorSchemeOf paramKinds fields res =
+  let np = length paramKinds
+  let t = foldr (\(i, f) acc -> TFun f (TGen (np + i)) acc) res (indexed fields)
+  Scheme (paramKinds ++ replicate (length fields) KRow) [] [] t
+
+-- ================================================================ type-level names
+
+-- Returns the classes declared in this module (by class name).
+collectTypeNames : Checker -> List Decl -> <IO> Map.Map String ClassInfo
+collectTypeNames c decls =
+  let g = cG c
+  foldl (\classes d -> match d with
+    DType p name params _ _ _ ->
+      let kinds = mapList (\_ -> newKVar g) params
+      let k = foldr (\pk acc -> KArrow pk acc) KStar kinds
+      let ti = TypeInfo (sym c name) (newRef k) params (newRef []) False (cMod c) p
+      modifyRef (gTypes g) (Map.insert (sym c name) ti)
+      defineType c name (TEType ti) p
+      classes
+    DAlias p name params body ->
+      defineType c name (TEAlias (AliasInfo (sym c name) params body (cMod c) (cScope c) (newRef False))) p
+      classes
+    DEffect p name params _ ->
+      let k = foldl (\acc _ -> KArrow (newKVar g) acc) KEffect params
+      let ei = EffectInfo (sym c name) (newRef k) (length params) (newRef []) (cMod c) p
+      modifyRef (gEffects g) (Map.insert (sym c name) ei)
+      defineType c name (TEEffect ei) p
+      classes
+    DClass p name _ _ _ _ ->
+      let ci = ClassInfo (sym c name) (newRef (newKVar g)) (newRef []) (newRef []) (newRef Map.empty) (cMod c) p
+      modifyRef (gClasses g) (Map.insert (sym c name) ci)
+      defineType c name (TEClass ci) p
+      Map.insert name ci classes
+    _ -> classes) Map.empty decls
+
+-- The data type of this module declared under a name.
+private ownType : Checker -> String -> <IO> Option TypeInfo
+ownType c name = match Map.lookup name (readRef (scopeTypes (cScope c))) with
+  Some (TEType ti) | typeInfoModule ti == cMod c -> Some ti
+  _ -> None
+
+inferDataKinds : Checker -> List Decl -> <IO> Unit
+inferDataKinds c decls =
+  let pending = filterMap id (mapList (\d -> match d with
+    DType p name params ctors _ priv -> match ownType c name with
+      None -> None
+      Some ti ->
+        let env = newTvEnv True arrowPure
+        forEach (zip params (paramKinds (typeInfoKind ti) (length params))) (\(pn, k) ->
+          match Map.member pn (readRef (envVars env)) with
+            True -> errorf c p "duplicate type parameter '${pn}'"
+            False -> ()
+          let _ = addGen env pn k
+          ())
+        writeRef (envFixed env) True
+        let fields = mapList (\(CtorDecl _ _ fs) -> mapList (\f -> convStar c f env) fs) ctors
+        Some (ti, params, ctors, fields, priv)
+    _ -> None) decls)
+  forEach pending (\(ti, params, ctors, fields, priv) ->
+    let TypeInfo tname kref _ ctorsRef _ _ tpos = ti
+    let k = defaultKind (readRef kref)
+    writeRef kref k
+    let n = length params
+    let res = mkAppT (TCon tname k) (mapList TGen (range 0 n))
+    let pks = paramKinds k n
+    let total = length ctors
+    forEach (indexed (zip ctors fields)) (\(i, (CtorDecl cp cname _, fs)) ->
+      let ci = CtorInfo (sym c cname) cname tname (cMod c) total i (length fs) (ctorSchemeOf pks fs res) fs tpos
+      modifyRef ctorsRef (\cs -> snoc cs ci)
+      defineCtor c cname ci cp priv))
+
+-- ================================================================ effects
+
+processEffects : Checker -> List Decl -> <IO> Unit
+processEffects c decls = forEach decls (\d -> match d with
+  DEffect _ name params ops -> match Map.lookup name (readRef (scopeTypes (cScope c))) with
+    Some (TEEffect ei) -> processEffect c ei params ops
+    _ -> ()
+  _ -> ())
+
+private processEffect : Checker -> EffectInfo -> List String -> List Sig -> <IO> Unit
+processEffect c ei params ops =
+  let EffectInfo en kref np opsRef _ _ = ei
+  let ek = readRef kref
+  let pks = paramKinds ek (length params)
+  let label = mkAppT (TCon en ek) (mapList TGen (range 0 (length params)))
+  forEach (indexed ops) (\(i, Sig op_p op_name (SchemeE preds te) _) ->
+    let env = newTvEnv True arrowAmbient
+    forEach (zip params pks) (\(pn, pk) ->
+      let _ = addGen env pn pk
+      ())
+    match preds with
+      [] -> ()
+      _ -> errorf c op_p "effect operations cannot have class constraints"
+    match convSpine c te env with
+      TFun a e r ->
+        -- walk the spine and add the effect label to the last arrow
+        let build arg eff res = match res with
+          TFun a2 e2 r2 ->
+            let (inner, ps, last) = build a2 e2 r2
+            (TFun arg eff inner, arg :: ps, last)
+          _ -> (TFun arg (TRowExt label eff) res, [arg], res)
+        let (full, ps, resT) = build a e r
+        let ambient = match readRef (envAmbient env) with
+          Some (TGen gi) -> gi
+          _ -> -1
+        let names = envNames env
+        let sc = Scheme (mapList (envKindOf env) names) names [] full
+        let oi = OpInfo en op_name i (length ps) (sym c op_name) sc ps resT ambient
+        modifyRef opsRef (\os -> snoc os oi)
+        defineValue c op_name (ValueInfo op_name (sym c op_name) (newRef (Some sc)) None (Some oi) "" (length ps) op_p None (newRef None)) False
+      _ -> errorf c op_p "operation '${op_name}' must have a function type (use `Unit -> T` for operations without arguments)")
+  writeRef kref (defaultKind ek)
+  forEach (readRef opsRef) (\oi -> forEach (schemeKinds (opScheme oi)) (\k ->
+    let _ = defaultKind k
+    ()))
+
+-- ================================================================ classes
+
+processClasses : Checker -> List Decl -> Map.Map String ClassInfo -> <IO> Unit
+processClasses c decls classes =
+  let cdecls = filterMap (\d -> match d with
+    DClass p name param supers sigs defs -> Some (name, param, supers, sigs, defs)
+    _ -> None) decls
+  forEach cdecls (\(name, param, supers, _, _) -> match Map.lookup name classes with
+    None -> ()
+    Some ci -> forEach supers (\(PredE sp sq scls sty) -> match lookupClass c sp sq scls with
+      None -> ()
+      Some sc -> match sty with
+        TVarE _ v | v == param ->
+          match unifyKind (classParamKind sc) (classParamKind ci) with
+            True -> ()
+            False -> errorf c sp "kind mismatch between class ${name} and superclass ${scls}"
+          let ClassInfo _ _ supRef _ _ _ _ = ci
+          modifyRef supRef (\ss -> snoc ss sc)
+        _ -> errorf c sp "superclass constraint must be on the class parameter '${param}'"))
+  forEach cdecls (\(name, param, _, sigs, defs) -> match Map.lookup name classes with
+    None -> ()
+    Some ci ->
+      let ClassInfo cn pkRef supRef methRef defRef _ _ = ci
+      forEach (indexed sigs) (\(i, Sig sp sname se _) ->
+        let env = newTvEnv True arrowAmbient
+        let _ = addGen env param (readRef pkRef)
+        let Scheme ks ns ps st = convScheme c se env
+        match mentionsGen0 st with
+          True -> ()
+          False -> errorf c sp "the type of method '${sname}' must mention the class parameter '${param}'"
+        let sc = Scheme ks ns (Pred ci (TGen 0) :: ps) st
+        let mi = MethodInfo cn sname (length (readRef supRef) + i) sc
+        modifyRef methRef (\ms -> snoc ms mi)
+        defineValue c sname (ValueInfo sname (sym c sname) (newRef (Some sc)) (Some mi) None "" 0 sp None (newRef None)) False)
+      writeRef pkRef (defaultKind (readRef pkRef))
+      forEach defs (\b -> match findMethod ci (bindName b) with
+        None -> errorf c (bindPos b) "'${bindName b}' is not a method of class ${name}"
+        Some _ -> modifyRef defRef (Map.insert (bindName b) (sym c (name ++ "$dflt$" ++ sanitize (bindName b))))))
+
+private mentionsGen0 : Type -> Bool
+mentionsGen0 t = match t with
+  TGen 0 -> True
+  TApp f a -> mentionsGen0 f || mentionsGen0 a
+  TFun a e r -> mentionsGen0 a || mentionsGen0 e || mentionsGen0 r
+  TRowExt l r -> mentionsGen0 l || mentionsGen0 r
+  _ -> False
+
+-- ================================================================ deriving
+
+private pv : String -> <IO> Expr
+pv name = mkVar noPos "#Prelude" name
+
+private ev : Pos -> String -> <IO> Expr
+ev p name = mkVar p "" name
+
+private appE : Expr -> List Expr -> <IO> Expr
+appE f args = mkApp (exprPos f) f args
+
+deriveInstances : Checker -> List Decl -> <IO> List Decl
+deriveInstances c decls = concat (mapList (\d -> match d with
+  DType p name params ctors deriv _ | not (isEmpty deriv) -> match ownType c name with
+    None -> []
+    Some ti ->
+      let pks = paramKinds (typeInfoKind ti) (length params)
+      filterMap (\cls ->
+        let ctx = filterMap id (mapList (\(pn, k) -> match isStarKind k with
+          True -> Some (PredE p "#Prelude" cls (TVarE p pn))
+          False -> None) (zip params pks))
+        let head = match params with
+          [] -> TConE p "" name
+          _ -> TAppE p (TConE p "" name) (mapList (TVarE p) params)
+        let bind = match cls with
+          "Eq" -> Some (deriveEq p ctors)
+          "Ord" -> Some (deriveOrd p ctors)
+          "Show" -> Some (deriveShow p ctors)
+          _ ->
+            errorf c p "cannot derive class '${cls}' (only Eq, Ord and Show can be derived)"
+            None
+        match bind with
+          Some b -> Some (DInstance p ctx "#Prelude" cls head [b] True)
+          None -> None) deriv
+  _ -> []) decls)
+
+private ctorPat : Pos -> CtorDecl -> String -> <IO> (Pattern, List Expr)
+ctorPat p (CtorDecl _ name fields) prefix =
+  let names = mapList (\i -> prefix ++ show i) (range 0 (length fields))
+  let pat = mkPCon p "" name (mapList (mkPVar p) names)
+  (pat, mapList (ev p) names)
+
+private simpleBind : Pos -> String -> List String -> Expr -> <IO> Bind
+simpleBind p name params body = mkBind p name None [Clause p (mapList (mkPVar p) params) (RBody body)] None
+
+private pairScrut : Pos -> <IO> Expr
+pairScrut p = ETuple p [ev p "x$", ev p "y$"]
+
+private deriveEq : Pos -> List CtorDecl -> <IO> Bind
+deriveEq p ctors =
+  let arm cd =
+    let (pa, va) = ctorPat p cd "a$"
+    let (pb, vb) = ctorPat p cd "b$"
+    let eqs = mapList (\(x, y) -> EBinOp p (mkVar p "#Prelude" "==") x y) (zip va vb)
+    let body = match reverse eqs with
+      [] -> mkCon p "#Prelude" "True"
+      last :: rest -> foldl (\acc eq -> EBinOp p (ev p "&&") eq acc) last rest
+    Arm p (PTuple p [pa, pb]) (RBody body)
+  let arms = mapList arm ctors
+  let arms2 = match length ctors > 1 with
+    True -> snoc arms (Arm p (PWild p) (RBody (mkCon p "#Prelude" "False")))
+    False -> arms
+  simpleBind p "==" ["x$", "y$"] (EMatch p (pairScrut p) arms2)
+
+private deriveOrd : Pos -> List CtorDecl -> <IO> Bind
+deriveOrd p ctors =
+  let arm cd =
+    let (pa, va) = ctorPat p cd "a$"
+    let (pb, vb) = ctorPat p cd "b$"
+    let cmps = mapList (\(x, y) -> appE (pv "compare") [x, y]) (zip va vb)
+    Arm p (PTuple p [pa, pb]) (RBody (appE (pv "lexicoOrder") [EList p cmps]))
+  let arms = mapList arm ctors
+  match ctors with
+    [_] -> simpleBind p "compare" ["x$", "y$"] (EMatch p (pairScrut p) arms)
+    _ ->
+      let idxArms = mapList (\(i, CtorDecl _ name fields) ->
+        Arm p (mkPCon p "" name (mapList (\_ -> PWild p) fields)) (RBody (ELit p (LInt i)))) (indexed ctors)
+      let idx = EMatch p (ev p "v$") idxArms
+      let fallback = Arm p (PWild p) (RBody (appE (pv "compare") [appE (ev p "idx$") [ev p "x$"], appE (ev p "idx$") [ev p "y$"]]))
+      let m = EMatch p (pairScrut p) (snoc arms fallback)
+      let body = EBlock p [SLet (simpleBind p "idx$" ["v$"] idx), SExpr m]
+      simpleBind p "compare" ["x$", "y$"] body
+
+private deriveShow : Pos -> List CtorDecl -> <IO> Bind
+deriveShow p ctors =
+  let arm (cd@(CtorDecl _ name _)) =
+    let (pa, va) = ctorPat p cd "a$"
+    let shown = mapList (\v -> appE (pv "showArg") [appE (pv "show") [v]]) va
+    Arm p pa (RBody (appE (pv "showCon") [ELit p (LString name), EList p shown]))
+  simpleBind p "show" ["x$"] (EMatch p (ev p "x$") (mapList arm ctors))
+
+-- ================================================================ instances
+
+-- Returns the instances of this module with their declarations.
+processInstanceHeads : Checker -> List Decl -> <IO> List (InstInfo, List Bind)
+processInstanceHeads c decls = filterMap id (mapList (\d -> match d with
+  DInstance p ctx q cls headE binds _ -> match lookupClass c p q cls with
+    None -> None
+    Some cl -> instanceHead c d p ctx cl headE binds
+  _ -> None) decls)
+
+private instanceHead : Checker -> Decl -> Pos -> List PredE -> ClassInfo -> TypeExpr -> List Bind -> <IO> Option (InstInfo, List Bind)
+instanceHead c d p ctx cl headE binds =
+  let env = newTvEnv True arrowAmbient
+  let (head, k) = convType c headE env
+  let ck = classParamKind cl
+  match unifyKind k ck with
+    False ->
+      errorf c (typePos headE) "kind mismatch: class ${className cl} expects a type of kind ${kindString ck}, but this has kind ${kindString k}"
+      None
+    True ->
+      let (h, args) = headOf head
+      let distinct = allOf (\(i, a) -> match a with
+        TGen gi -> not (anyOf (\(j, b) -> j < i && tgenIs b gi) (indexed args))
+        _ -> False) (indexed args)
+      match (h, distinct && length args == length (envNames env)) with
+        (TCon tc _, True) ->
+          writeRef (envFixed env) True
+          let names = envNames env
+          let kinds = mapList (\n -> defaultKind (envKindOf env n)) names
+          let context = filterMap id (mapList (\(PredE pp pq pcls pty) -> match lookupClass c pp pq pcls with
+            None -> None
+            Some pc -> match pty with
+              TVarE _ v -> Some (Pred pc (tyVar c pp env v (classParamKind pc)))
+              _ ->
+                errorf c pp "instance constraints must be on type variables"
+                None) ctx)
+          let isym = sym c ("$inst$" ++ sanitize (shortName (className cl)) ++ "$" ++ sanitize (shortName tc))
+          let info = InstInfo cl tc (length names) kinds head context isym (newRef Map.empty) (newRef []) (newRef []) (cMod c) p d
+          let g = cG c
+          let byTy = Map.findWithDefault Map.empty (className cl) (readRef (gInstances g))
+          match Map.lookup tc byTy with
+            Some old ->
+              errorf c p "duplicate instance ${shortName (className cl)} ${shortName tc} (previous instance at ${posString (instPos old)})"
+              None
+            None ->
+              modifyRef (gInstances g) (Map.insert (className cl) (Map.insert tc info byTy))
+              modifyRef (gInstList g) (\l -> info :: l)
+              Some (info, binds)
+        _ ->
+          errorf c (typePos headE) "instance head must be a type constructor applied to distinct type variables"
+          None
+
+private tgenIs : Type -> Int -> Bool
+tgenIs t i = match t with
+  TGen j -> i == j
+  _ -> False
+
+-- ================================================================ foreign & values
+
+processForeigns : Checker -> List Decl -> <IO> Unit
+processForeigns c decls = forEach decls (\d -> match d with
+  DForeign p name se target ->
+    let sc = sigScheme c se
+    defineValue c name (ValueInfo name (sym c name) (newRef (Some sc)) None None target (arity (schemeType sc)) p None (newRef None)) False
+  _ -> ())
+
+-- Returns the function bindings (binding, private) and the tests.
+collectValues : Checker -> List Decl -> <IO> (List Bind, List Decl)
+collectValues c decls =
+  forEach decls (\d -> match d with
+    DSig (s@(Sig p name _ _)) ->
+      match Map.member name (readRef (cSigs c)) with
+        True -> errorf c p "duplicate type signature for '${name}'"
+        False -> ()
+      modifyRef (cSigs c) (Map.insert name s)
+    _ -> ())
+  let tests = filter (\d -> match d with
+    DTest _ _ _ _ -> True
+    _ -> False) decls
+  let defined = newRef []
+  let funs = filterMap id (mapList (\d -> match d with
+    DFun _ b priv
+      | elem (bindName b) (readRef defined) ->
+          errorf c (bindPos b) "'${bindName b}' is defined more than once (equations of a function must be adjacent)"
+          None
+      | otherwise ->
+          let name = bindName b
+          modifyRef defined (\ds -> name :: ds)
+          let clauses = bindClauses b
+          let n = length (clauseParams (at 0 clauses))
+          forEach (drop 1 clauses) (\(Clause cp ps _) -> match length ps != n with
+            True -> errorf c cp "equations for '${name}' have different numbers of arguments"
+            False -> ())
+          match n == 0 && length clauses > 1 with
+            True ->
+              let Clause cp _ _ = at 1 clauses
+              errorf c cp "'${name}' is defined more than once"
+            False -> ()
+          writeRef (bindId b) (sym c name)
+          writeRef (bindInfo b) (Some (BindInfo [] None None))
+          let (sc, private2) = match Map.lookup name (readRef (cSigs c)) with
+            Some (Sig _ _ se spriv) -> (Some (sigScheme c se), priv || spriv)
+            None -> (None, priv)
+          let vi = ValueInfo name (sym c name) (newRef sc) None None "" n (bindPos b) (Some b) (newRef None)
+          defineValue c name vi private2
+          Some b
+    _ -> None) decls)
+  forEach (Map.toList (readRef (cSigs c))) (\(name, Sig p _ _ _) -> match elem name (readRef defined) with
+    True -> ()
+    False -> errorf c p "type signature for '${name}' lacks a definition")
+  (funs, tests)
+
+-- ================================================================ top-level bindings
+
+-- Names referenced (unqualified) by an expression.
+collectRefs : Expr -> List String -> List String
+collectRefs e acc = match e with
+  EVar _ "" n _ _ -> n :: acc
+  EApp _ f args _ -> foldl (\a x -> collectRefs x a) (collectRefs f acc) args
+  ELam _ _ b -> collectRefs b acc
+  ELet _ bs b -> collectRefs b (foldl (\a x -> bindRefsAcc x a) acc bs)
+  EBlock _ stmts -> foldl (\a s -> match s with
+    SExpr x -> collectRefs x a
+    SLet b -> bindRefsAcc b a) acc stmts
+  EMatch _ s arms -> foldl (\a (Arm _ _ r) -> rhsRefs r a) (collectRefs s acc) arms
+  EHandle _ b ret ops _ ->
+    let a1 = collectRefs b acc
+    let a2 = match ret with
+      Some hc -> collectRefs (hcBody hc) a1
+      None -> a1
+    foldl (\a hc -> collectRefs (hcBody hc) a) a2 ops
+  ETuple _ es -> foldl (\a x -> collectRefs x a) acc es
+  EList _ es -> foldl (\a x -> collectRefs x a) acc es
+  EBinOp _ op l r -> collectRefs r (collectRefs l (varName op :: acc))
+  EInterp _ ps -> foldl (\a x -> collectRefs x a) acc ps
+  EAnnot _ x _ -> collectRefs x acc
+  _ -> acc
+
+private rhsRefs : Rhs -> List String -> List String
+rhsRefs r acc = match r with
+  RBody b -> collectRefs b acc
+  RGuards gs -> foldl (\a (Guard _ cnd b) -> collectRefs b (collectRefs cnd a)) acc gs
+
+private bindRefsAcc : Bind -> List String -> List String
+bindRefsAcc b acc = foldl (\a cl -> rhsRefs (clauseRhs cl) a) acc (bindClauses b)
+
+-- Strongly connected components in dependency order (Tarjan).
+sccs : List String -> Map.Map String (List String) -> <IO> List (List String)
+sccs nodes edges =
+  let index = newRef Map.empty
+  let low = newRef Map.empty
+  let onStack = newRef Map.empty
+  let stack = newRef []
+  let out = newRef []
+  let counter = newRef 0
+  let getI m k = Map.findWithDefault 0 k (readRef m)
+  let visit v =
+    let i = readRef counter
+    modifyRef index (Map.insert v i)
+    modifyRef low (Map.insert v i)
+    writeRef counter (i + 1)
+    modifyRef stack (\s -> v :: s)
+    modifyRef onStack (Map.insert v True)
+    forEach (Map.findWithDefault [] v edges) (\w -> match Map.member w (readRef index) with
+      False ->
+        visit w
+        match getI low w < getI low v with
+          True -> modifyRef low (Map.insert v (getI low w))
+          False -> ()
+      True -> match Map.findWithDefault False w (readRef onStack) && getI index w < getI low v with
+        True -> modifyRef low (Map.insert v (getI index w))
+        False -> ())
+    match getI low v == getI index v with
+      True ->
+        let pop comp = match readRef stack with
+          w :: rest ->
+            writeRef stack rest
+            modifyRef onStack (Map.insert w False)
+            match w == v with
+              True -> reverse (w :: comp)
+              False -> pop (w :: comp)
+          [] -> reverse comp
+        let comp = pop []
+        modifyRef out (\o -> comp :: o)
+      False -> ()
+  forEach nodes (\n -> match Map.member n (readRef index) with
+    True -> ()
+    False -> visit n)
+  reverse (readRef out)
+
+private lookupOwnValue : Checker -> String -> <IO> ValueInfo
+lookupOwnValue c name = match Map.lookup name (readRef (scopeValues (cScope c))) with
+  Some (VEValue v) -> v
+  _ -> error ("internal error: missing value " ++ name)
+
+checkTopBindings : Checker -> List Bind -> <IO> Unit
+checkTopBindings c funs =
+  let byName = Map.fromList (mapList (\b -> (bindName b, b)) funs)
+  let unsig = filterMap (\b -> match readRef (valueSchemeRef (lookupOwnValue c (bindName b))) with
+    None -> Some (bindName b)
+    Some _ -> None) funs
+  let edges = Map.fromList (mapList (\n ->
+    let refs = collectRefsOfBind (Map.findWithDefault (at 0 funs) n byName)
+    (n, sortStrings (nub (filter (\r -> elem r unsig) refs)))) unsig)
+  forEach (sccs unsig edges) (\comp -> inferTopGroup c comp byName)
+  forEach funs (\b -> match elem (bindName b) unsig with
+    True -> ()
+    False ->
+      let vi = lookupOwnValue c (bindName b)
+      match readRef (valueSchemeRef vi) with
+        Some sc ->
+          let names = checkAgainst c b sc [] False None
+          writeRef (bindInfo b) (Some (BindInfo names None (Some sc)))
+        None -> ())
+  flushRoot c
+
+private collectRefsOfBind : Bind -> List String
+collectRefsOfBind b = bindRefsAcc b []
+
+inferTopGroup : Checker -> List String -> Map.Map String Bind -> <IO> Unit
+inferTopGroup c names byName =
+  let gs = newRef []
+  incLevel c
+  let members = mapList (\n ->
+    let vi = lookupOwnValue c n
+    let m = freshType c
+    writeRef (valueGroup vi) (Some (gs, m))
+    let b = match Map.lookup n byName with
+      Some x -> x
+      None -> error "missing binding"
+    (vi, m, b)) names
+  pushWanted c
+  forEach members (\(_, m, b) ->
+    let eff = freshRow c
+    checkClauses c b m eff
+    checkPure c b eff)
+  let ws = popWanted c
+  decLevel c
+  let (scs, dictNames) = generalize c (mapList (\(_, m, _) -> m) members) ws True
+  writeRef gs dictNames
+  forEach (zip members scs) (\((vi, _, b), sc) ->
+    writeRef (valueGroup vi) None
+    writeRef (valueSchemeRef vi) (Some sc)
+    writeRef (bindInfo b) (Some (BindInfo dictNames (Some gs) (Some sc))))
+
+checkInstanceBodies : Checker -> List (InstInfo, List Bind) -> <IO> Unit
+checkInstanceBodies c insts = forEach insts (checkInstanceBody c)
+
+private checkInstanceBody : Checker -> (InstInfo, List Bind) -> <IO> Unit
+checkInstanceBody c (info, binds) =
+  let cl = instClass info
+  incLevel c
+  let sub = mapList (\(i, k) -> newSkolem c (charToString (fromCharCode (97 + i))) k) (indexed (instKinds info))
+  let head = substGen (instHead info) sub
+  let savedGivens = readRef (cGivens c)
+  let ctxParams = mapList (\(i, Pred pc pt) ->
+    let name = "ictx" ++ show i
+    let gt = substGen pt sub
+    modifyRef (cGivens c) (\gs -> Given pc gt (DictParam name) :: gs)
+    name) (indexed (instContext info))
+  writeRef (instCtxParams info) ctxParams
+  let supers = mapList (\s ->
+    pushWanted c
+    let ref = addWanted c s head (instPos info)
+    let ws = popWanted c
+    match solve c ws with
+      [] -> ()
+      _ -> errorf c (instPos info) "missing superclass instance ${shortName (className s)} for this instance"
+    DictHole ref) (classSupers cl)
+  writeRef (instSuperDicts info) supers
+  forEach binds (\b -> match findMethod cl (bindName b) with
+    None -> errorf c (bindPos b) "'${bindName b}' is not a method of class ${shortName (className cl)}"
+    Some mi -> match Map.member (bindName b) (readRef (instMethods info)) with
+      True -> errorf c (bindPos b) "method '${bindName b}' is defined twice"
+      False ->
+        let id = instSym info ++ "$" ++ sanitize (bindName b)
+        writeRef (bindId b) id
+        let names = checkAgainst c b (methodScheme mi) [head] True None
+        writeRef (bindInfo b) (Some (BindInfo (ctxParams ++ names) None None))
+        modifyRef (instMethods info) (Map.insert (bindName b) id))
+  let defaults = classDefaults cl
+  forEach (classMethods cl) (\m -> match Map.member (methodName m) (readRef (instMethods info)) || Map.member (methodName m) defaults with
+    True -> ()
+    False -> errorf c (instPos info) "instance ${shortName (className cl)} ${shortName (instTyCon info)} is missing method '${methodName m}'")
+  writeRef (cGivens c) savedGivens
+  decLevel c
+
+checkClassDefaults : Checker -> List Decl -> Map.Map String ClassInfo -> <IO> Unit
+checkClassDefaults c decls classes = forEach decls (\d -> match d with
+  DClass _ name _ _ _ defs -> match Map.lookup name classes with
+    None -> ()
+    Some ci -> forEach defs (\b -> match findMethod ci (bindName b) with
+      None -> ()
+      Some mi ->
+        writeRef (bindId b) (Map.findWithDefault "" (bindName b) (classDefaults ci))
+        let names = checkAgainst c b (methodScheme mi) [] False None
+        writeRef (bindInfo b) (Some (BindInfo names None None)))
+  _ -> ())
+
+checkTests : Checker -> List Decl -> <IO> Unit
+checkTests c tests = match tests with
+  [] -> ()
+  _ ->
+    let g = cG c
+    let effs = readRef (gEffects g)
+    let row1 = match Map.lookup tIOName effs with
+      Some io -> TRowExt (TCon (effectName io) (effectKind io)) TRowEmpty
+      None -> TRowEmpty
+    let row = match Map.lookup (preludeMod ++ ".Fail") effs with
+      Some fail -> TRowExt (TCon (effectName fail) (effectKind fail)) row1
+      None -> row1
+    forEach (indexed tests) (\(i, d) -> match d with
+      DTest _ name body idRef ->
+        let id = sym c ("$test" ++ show i)
+        writeRef idRef id
+        incLevel c
+        pushWanted c
+        checkExpr c body (tUnit c) row "this test"
+        let ws = popWanted c
+        decLevel c
+        forEach (solve c ws) (defaultAmbiguous c)
+        modifyRef (gTests g) (\ts -> TestInfo name id (cMod c) :: ts)
+      _ -> ())
+    flushRoot c
+
+-- Verify that `main` exists with type Unit -> <IO> Unit.
+checkMain : Global -> String -> <IO> List Diag
+checkMain g mod = match Map.lookup mod (readRef (gModules g)) with
+  None -> [diagAt noPos "unknown module ${mod}"]
+  Some ex -> match Map.lookup "main" (readRef (exportsValues ex)) with
+    Some v | isSome (valueBind v) ->
+      let c = newChecker g ""
+      let sc = withDefault (mono TRowEmpty) (readRef (valueSchemeRef v))
+      let (t, _) = instantiate c sc (valuePos v)
+      let io = lookupEffect c tIOName
+      let unitT = TCon tUnitName KStar
+      let want = TFun unitT (TRowExt (TCon (effectName io) (effectKind io)) TRowEmpty) unitT
+      match schemePreds sc with
+        _ :: _ -> [diagAt (valuePos v) "`main` must not have class constraints"]
+        [] -> match try (\_ -> unify c want t) with
+          Ok _ -> []
+          Err msg ->
+            let notes = match msg with
+              "" -> []
+              m -> [m]
+            [Diag (valuePos v) "`main` must have type Unit -> <IO> Unit, but it has type ${schemeString sc}" notes]
+    _ -> [diagAt noPos "module ${mod} does not define `main`"]

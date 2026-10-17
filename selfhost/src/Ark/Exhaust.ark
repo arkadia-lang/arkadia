@@ -1,0 +1,150 @@
+-- Exhaustiveness checking of pattern matches.
+module Ark.Exhaust
+
+import Ark.Util
+import Ark.Ast
+import Ark.Types
+import Std.Map as Map
+
+-- A constructor for the analysis: name, short name, arity, type name.
+type SCon = SCon String String Int String
+
+sconName : SCon -> String
+sconName (SCon n _ _ _) = n
+
+sconArity : SCon -> Int
+sconArity (SCon _ _ a _) = a
+
+-- A simplified pattern: wildcard, constructor or literal.
+type SPat = SWild | SCtor SCon (List SPat) | SLit String
+
+fromCtor : CtorInfo -> SCon
+fromCtor ci = SCon (ctorName ci) (ctorShort ci) (ctorArity ci) (ctorTypeName ci)
+
+tupleSCon : Int -> SCon
+tupleSCon n = SCon ("tuple" ++ show n) "" n ("tuple" ++ show n)
+
+-- All constructors of the type of a constructor.
+siblings : Global -> SCon -> <IO> List SCon
+siblings g (con@(SCon _ _ _ tn)) = match startsWith "tuple" tn with
+  True -> [con]
+  False -> match Map.lookup tn (readRef (gTypes g)) with
+    Some ti -> mapList fromCtor (typeInfoCtors ti)
+    None -> [con]
+
+simplify : Global -> Pattern -> <IO> SPat
+simplify g p = match p with
+  PVar _ _ _ -> SWild
+  PWild _ -> SWild
+  PAs _ _ _ q -> simplify g q
+  PAnnot _ q _ -> simplify g q
+  PUnit _ -> SWild
+  PLit _ l -> SLit (litKey l)
+  PCon _ _ _ args conRef -> match readRef conRef with
+    None -> SWild
+    Some ci -> SCtor (fromCtor ci) (mapList (simplify g) args)
+  PTuple _ elems -> SCtor (tupleSCon (length elems)) (mapList (simplify g) elems)
+  PList _ elems ->
+    let cons = fromCtor (builtinCtor g tListName 1)
+    let nil = fromCtor (builtinCtor g tListName 0)
+    foldr (\x acc -> SCtor cons [simplify g x, acc]) (SCtor nil []) elems
+
+litKey : Lit -> String
+litKey l = match l with
+  LInt n -> "i" ++ show n
+  LFloat f -> "f" ++ formatFloat f
+  LString s -> "s" ++ s
+  LChar ch -> "c" ++ charToString ch
+
+checkMatches : Checker -> <IO> Unit
+checkMatches c = forEach (reverse (readRef (cMatches c))) (checkSite c)
+
+private checkSite : Checker -> MatchSite -> <IO> Unit
+checkSite c (MatchSite p what rows guarded) =
+  let g = cG c
+  let kept = filterMap id (mapList (\(r, gd) -> match gd with
+    True -> None
+    False -> Some (mapList (simplify g) r)) (zip rows guarded))
+  let n = match rows with
+    r :: _ -> length r
+    [] -> 0
+  match missing g kept n with
+    None -> ()
+    Some w ->
+      let parts = mapList (\x -> showSPat x (n > 1)) w
+      errorf c p "non-exhaustive patterns in ${what}: the case `${joinWith " " parts}` is not handled"
+
+showSPat : SPat -> Bool -> String
+showSPat p atom = match p with
+  SWild -> "_"
+  SLit _ -> "<literal>"
+  SCtor (SCon _ short _ tn) args
+    | startsWith "tuple" tn -> "(" ++ joinWith ", " (mapList (\a -> showSPat a False) args) ++ ")"
+    | tn == tListName -> match args with
+        [h, t] ->
+          let s = showSPat h True ++ " :: " ++ showSPat t False
+          match atom with
+            True -> "(" ++ s ++ ")"
+            False -> s
+        _ -> "[]"
+    | otherwise -> match args with
+        [] -> short
+        _ ->
+          let s = joinWith " " (short :: mapList (\a -> showSPat a True) args)
+          match atom with
+            True -> "(" ++ s ++ ")"
+            False -> s
+
+wilds : Int -> List SPat
+wilds n = replicate n SWild
+
+-- Keep rows matching constructor con, expanding its arguments.
+specialize : List (List SPat) -> SCon -> List (List SPat)
+specialize rows con = filterMap (\r -> match r with
+  SWild :: rest -> Some (wilds (sconArity con) ++ rest)
+  SCtor c args :: rest | sconName c == sconName con -> Some (args ++ rest)
+  _ -> None) rows
+
+defaultRows : List (List SPat) -> List (List SPat)
+defaultRows rows = filterMap (\r -> match r with
+  SWild :: rest -> Some rest
+  _ -> None) rows
+
+-- A pattern vector not covered by rows, if any.
+missing : Global -> List (List SPat) -> Int -> <IO> Option (List SPat)
+missing g rows n = match n == 0 with
+  True -> match rows with
+    [] -> Some []
+    _ -> None
+  False ->
+    -- the type of the column (from the last constructor seen), the
+    -- constructors seen and whether a literal occurs
+    let addSeen s con = match elem (sconName con) s with
+      True -> s
+      False -> snoc s (sconName con)
+    let (ti, seen, hasLit) = foldl (\(t, s, l) r -> match r with
+      SCtor con _ :: _ -> (Some con, addSeen s con, l)
+      SLit _ :: _ -> (t, s, True)
+      _ -> (t, s, l)) (None, [], False) rows
+    match ti with
+      Some con0 ->
+        let all = siblings g con0
+        match length seen == length all with
+          True -> firstMissing g rows n all
+          False -> match missing g (defaultRows rows) (n - 1) with
+            None -> None
+            Some w -> match find (\con -> not (elem (sconName con) seen)) all with
+              Some con -> Some (SCtor con (wilds (sconArity con)) :: w)
+              None -> Some (SWild :: w)
+      None -> match missing g (defaultRows rows) (n - 1) with
+        None -> None
+        Some w -> Some (SWild :: w)
+
+private firstMissing : Global -> List (List SPat) -> Int -> List SCon -> <IO> Option (List SPat)
+firstMissing g rows n cons = match cons with
+  [] -> None
+  con :: rest ->
+    let a = sconArity con
+    match missing g (specialize rows con) (a + n - 1) with
+      Some w -> Some (SCtor con (take a w) :: drop a w)
+      None -> firstMissing g rows n rest

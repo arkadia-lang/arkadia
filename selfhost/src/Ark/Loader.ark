@@ -1,0 +1,152 @@
+-- Finding, parsing and checking the modules of a program.
+module Ark.Loader
+
+import Ark.Util
+import Ark.Ast
+import Ark.Parser
+import Ark.Fixity
+import Ark.Types
+import Ark.Check
+import Std.Map as Map
+
+-- search paths, standard library directory, parsed modules, modules in
+-- dependency order (reversed), modules being visited, sources by file
+type Loader = Loader (List String) String (Ref (Map.Map String Module)) (Ref (List Module)) (Ref (Map.Map String Bool)) (Ref (Map.Map String String))
+
+-- A loaded and checked program: modules in dependency order (Prelude
+-- first), global information, entry module name.
+type Program = Program (List Module) Global String
+
+newLoader : List String -> String -> <IO> Loader
+newLoader paths libDir = Loader paths libDir (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty)
+
+loaderSources : Loader -> <IO> Map.Map String String
+loaderSources (Loader _ _ _ _ _ srcs) = readRef srcs
+
+modulePath : String -> String
+modulePath name = joinWith "/" (split "." name) ++ ".ark"
+
+private readFirst : List String -> String -> <IO> Option (String, String)
+readFirst dirs rel = match dirs with
+  [] -> None
+  d :: rest ->
+    let p = pathJoin d rel
+    match readFile p with
+      Ok src -> Some (p, src)
+      Err _ -> readFirst rest rel
+
+readModule : Loader -> String -> <IO> Result String (String, String)
+readModule (Loader paths libDir _ _ _ _) name =
+  let rel = modulePath name
+  match readFirst paths rel with
+    Some r -> Ok r
+    None -> match readFile (pathJoin libDir rel) with
+      Ok src -> Ok ("<std>/" ++ rel, src)
+      Err _ -> Err "module ${name} not found (looked for ${rel})"
+
+parseFile : Loader -> String -> String -> String -> <IO> Result (List Diag) Module
+parseFile (Loader _ _ _ _ _ srcs) file src expectName =
+  modifyRef srcs (Map.insert file src)
+  match parseModule file src with
+    Err errs -> Err errs
+    Ok (Module name f imports decls) ->
+      let name2 = match name with
+        "" -> expectName
+        _ -> name
+      match expectName != "" && name2 != expectName with
+        True -> Err [diagAt (Pos file 1 1) "module is declared as ${name2} but was imported as ${expectName}"]
+        False -> Ok (Module name2 f imports decls)
+
+-- Parse a module's imports (recursively) and record it.
+load : Loader -> Module -> <IO> Result (List Diag) Unit
+load l m =
+  let Loader _ _ mods order visiting _ = l
+  let name = moduleName m
+  match Map.findWithDefault False name (readRef visiting) with
+    True -> Err [diagAt (Pos (moduleFile m) 1 1) "import cycle involving module ${name}"]
+    False ->
+      modifyRef visiting (Map.insert name True)
+      modifyRef mods (Map.insert name m)
+      let deps = match name == preludeMod with
+        True -> mapList importPath (moduleImports m)
+        False -> preludeMod :: mapList importPath (moduleImports m)
+      match loadDeps l m deps with
+        Err e -> Err e
+        Ok _ ->
+          modifyRef visiting (Map.insert name False)
+          modifyRef order (\o -> m :: o)
+          Ok ()
+
+private loadDeps : Loader -> Module -> List String -> <IO> Result (List Diag) Unit
+loadDeps l m deps =
+  let Loader _ _ mods _ visiting _ = l
+  match deps with
+    [] -> Ok ()
+    d :: rest -> match Map.member d (readRef mods) with
+      True -> match Map.findWithDefault False d (readRef visiting) with
+        True -> Err [diagAt (Pos (moduleFile m) 1 1) "import cycle between ${moduleName m} and ${d}"]
+        False -> loadDeps l m rest
+      False -> match readModule l d with
+        Err msg ->
+          let pos = foldl (\p (Import ip path _ _ _) -> match path == d with
+            True -> ip
+            False -> p) (Pos (moduleFile m) 1 1) (moduleImports m)
+          Err [diagAt pos msg]
+        Ok (file, src) -> match parseFile l file src d with
+          Err e -> Err e
+          Ok dm -> match load l dm with
+            Err e -> Err e
+            Ok _ -> loadDeps l m rest
+
+-- Load an entry module from a file plus everything it imports.
+loadFile : Loader -> String -> <IO> Result (List Diag) Program
+loadFile l path = match readFile path with
+  Err e -> Err [diagAt noPos e]
+  Ok src -> match parseFile l path src "" with
+    Err e -> Err e
+    Ok (Module name f imports decls) ->
+      let m = Module (match name with
+        "" -> "Main"
+        _ -> name) f imports decls
+      match load l m with
+        Err e -> Err e
+        Ok _ -> checkProgram l (moduleName m)
+
+-- Load the named modules (and their imports) without an entry module.
+loadModules : Loader -> List String -> <IO> Result (List Diag) Program
+loadModules l names = match names with
+  [] -> checkProgram l ""
+  n :: rest ->
+    let Loader _ _ mods _ _ _ = l
+    match Map.member n (readRef mods) with
+      True -> loadModules l rest
+      False -> match readModule l n with
+        Err msg -> Err [diagAt noPos msg]
+        Ok (file, src) -> match parseFile l file src n with
+          Err e -> Err e
+          Ok m -> match load l m with
+            Err e -> Err e
+            Ok _ -> loadModules l rest
+
+checkProgram : Loader -> String -> <IO> Result (List Diag) Program
+checkProgram (Loader _ _ _ orderRef _ _) main =
+  let order = reverse (readRef orderRef)
+  let fx = newRef defaultFixities
+  let errs1 = concat (mapList (collectFixities fx) order)
+  let resolved = mapList (\m -> resolveFixity m (readRef fx)) order
+  let errs = errs1 ++ concat (map snd resolved)
+  match errs with
+    _ :: _ -> Err errs
+    [] ->
+      let mods = map fst resolved
+      let g = newGlobal ()
+      match checkAll g mods with
+        [] -> Ok (Program mods g main)
+        errs -> Err errs
+
+private checkAll : Global -> List Module -> <IO> List Diag
+checkAll g mods = match mods with
+  [] -> []
+  m :: rest -> match checkModule g m with
+    [] -> checkAll g rest
+    errs -> errs

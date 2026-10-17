@@ -1,0 +1,200 @@
+-- Operator fixity: collecting declarations and resolving operator chains
+-- into binary applications (plus desugaring of negation, sections and
+-- string interpolation).
+module Ark.Fixity
+
+import Ark.Util
+import Ark.Ast
+import Std.Map as Map
+
+-- associativity (0 none, 1 left, 2 right) and precedence
+type Fixity = Fixity Int Int
+
+instance Eq Fixity where
+  Fixity a p == Fixity b q = a == b && p == q
+
+defaultFixities : Map.Map String Fixity
+defaultFixities = Map.fromList [("::", Fixity 2 5), ("&&", Fixity 2 3), ("||", Fixity 2 2)]
+
+-- Add the fixity declarations of a module, reporting conflicts.
+collectFixities : Ref (Map.Map String Fixity) -> Module -> <IO> List Diag
+collectFixities fx m = concat (mapList (collectDecl fx) (moduleDecls m))
+
+private collectDecl : Ref (Map.Map String Fixity) -> Decl -> <IO> List Diag
+collectDecl fx d = match d with
+  DFixity p assoc prec ops ->
+    let one op =
+      let new = Fixity assoc prec
+      let errs = match Map.lookup op (readRef fx) with
+        Some old | old != new -> [diagAt p "conflicting fixity declaration for ${op}"]
+        _ -> []
+      modifyRef fx (Map.insert op new)
+      errs
+    concat (mapList one ops)
+  _ -> []
+
+fixityOf : Map.Map String Fixity -> String -> Fixity
+fixityOf fx op = withDefault (Fixity 1 9) (Map.lookup op fx)
+
+-- fixities, errors (reversed), section counter
+type R = R (Map.Map String Fixity) (Ref (List Diag)) (Ref Int)
+
+-- Rewrite every operator chain of the module into binary operator
+-- applications according to the fixity table.
+resolveFixity : Module -> Map.Map String Fixity -> <IO> (Module, List Diag)
+resolveFixity (Module name file imports decls) fx =
+  let r = R fx (newRef []) (newRef 0)
+  let decls2 = mapList (rDecl r) decls
+  let R _ errs _ = r
+  (Module name file imports decls2, reverse (readRef errs))
+
+rDecl : R -> Decl -> <IO> Decl
+rDecl r d = match d with
+  DFun p b priv -> DFun p (rBind r b) priv
+  DClass p n param supers sigs defs -> DClass p n param supers sigs (mapList (rBind r) defs)
+  DInstance p ctx q c h bs derived -> DInstance p ctx q c h (mapList (rBind r) bs) derived
+  DTest p n b id -> DTest p n (rExpr r b) id
+  _ -> d
+
+rBind : R -> Bind -> <IO> Bind
+rBind r (Bind p name pat clauses sig id info) =
+  Bind p name pat (mapList (\(Clause cp ps rh) -> Clause cp ps (rRhs r rh)) clauses) sig id info
+
+rRhs : R -> Rhs -> <IO> Rhs
+rRhs r rh = match rh with
+  RBody e -> RBody (rExpr r e)
+  RGuards gs -> RGuards (mapList (\(Guard p c b) ->
+    let c2 = rExpr r c
+    Guard p c2 (rExpr r b)) gs)
+
+rExprs : R -> List Expr -> <IO> List Expr
+rExprs r es = mapList (rExpr r) es
+
+rExpr : R -> Expr -> <IO> Expr
+rExpr r e = match e with
+  EApp p f args masks ->
+    let f2 = rExpr r f
+    EApp p f2 (rExprs r args) masks
+  ELam p ps b -> ELam p ps (rExpr r b)
+  ELet p bs b ->
+    let bs2 = mapList (rBind r) bs
+    ELet p bs2 (rExpr r b)
+  EBlock p stmts -> EBlock p (mapList (\s -> match s with
+    SExpr x -> SExpr (rExpr r x)
+    SLet b -> SLet (rBind r b)) stmts)
+  EMatch p s arms ->
+    let s2 = rExpr r s
+    EMatch p s2 (mapList (\(Arm ap pat rh) -> Arm ap pat (rRhs r rh)) arms)
+  EHandle p b ret ops eff ->
+    let b2 = rExpr r b
+    let ret2 = match ret with
+      Some (HandlerClause hp n ps hb op) -> Some (HandlerClause hp n ps (rExpr r hb) op)
+      None -> None
+    EHandle p b2 ret2 (mapList (\(HandlerClause hp n ps hb op) -> HandlerClause hp n ps (rExpr r hb) op) ops) eff
+  ETuple p es -> ETuple p (rExprs r es)
+  EList p es -> EList p (rExprs r es)
+  ENeg p x -> desugarNeg p (rExpr r x)
+  ESection p op left right ->
+    let l2 = match left with
+      Some x -> Some (rExpr r x)
+      None -> None
+    let r2 = match right with
+      Some x -> Some (rExpr r x)
+      None -> None
+    desugarSection r p op l2 r2
+  EInterp p parts ->
+    let wrap x = match x with
+      ELit _ (LString _) -> x
+      _ ->
+        let disp = mkVar (exprPos x) "#Prelude" "display"
+        mkApp (exprPos x) disp [x]
+    EInterp p (mapList wrap (rExprs r parts))
+  EAnnot p x s -> EAnnot p (rExpr r x) s
+  EBinOp p op left right ->
+    let l2 = rExpr r left
+    EBinOp p op l2 (rExpr r right)
+  EOpChain p operands ops -> chain r (rExprs r operands) ops
+  _ -> e
+
+-- Resolve an operator chain with a shunting-yard algorithm.
+chain : R -> List Expr -> List Expr -> <IO> Expr
+chain r operands ops = match operands with
+  first :: rest -> shunt r rest ops [] [first]
+  [] -> error "chain: no operands"
+
+-- remaining operands and operators, operator stack, output stack
+private shunt : R -> List Expr -> List Expr -> List Expr -> List Expr -> <IO> Expr
+shunt r operands ops stack out = match (ops, operands) with
+  (op :: ops2, x :: operands2) ->
+    let R fx _ _ = r
+    let fo = fixityOf fx (varName op)
+    let (stack2, out2) = reduceWhile r fo op stack out
+    shunt r operands2 ops2 (op :: stack2) (x :: out2)
+  _ -> reduceAll stack out
+
+private reduceWhile : R -> Fixity -> Expr -> List Expr -> List Expr -> <IO> (List Expr, List Expr)
+reduceWhile r fo op stack out = match stack with
+  top :: rest ->
+    let R fx errs _ = r
+    let Fixity ao po = fo
+    let Fixity at pt = fixityOf fx (varName top)
+    match pt > po || pt == po && ao == 1 && at == 1 with
+      True -> reduceWhile r fo op rest (reduce top out)
+      False ->
+        match pt == po && (ao != at || ao == 0) with
+          True -> modifyRef errs (\es -> diagAt (exprPos op) "cannot mix operators '${varName top}' and '${varName op}' without parentheses" :: es)
+          False -> ()
+        (stack, out)
+  [] -> (stack, out)
+
+private reduce : Expr -> List Expr -> List Expr
+reduce op out = match out with
+  rhs :: lhs :: rest -> EBinOp (exprPos op) op lhs rhs :: rest
+  _ -> error "reduce: stack underflow"
+
+private reduceAll : List Expr -> List Expr -> Expr
+reduceAll stack out = match stack with
+  op :: rest -> reduceAll rest (reduce op out)
+  [] -> match out with
+    [e] -> e
+    _ -> error "reduceAll: malformed chain"
+
+desugarNeg : Pos -> Expr -> <IO> Expr
+desugarNeg p x = match x with
+  ELit _ (LInt n) -> ELit p (LInt (negate n))
+  ELit _ (LFloat f) -> ELit p (LFloat (negate f))
+  _ ->
+    let neg = mkVar p "#Prelude" "negate"
+    mkApp p neg [x]
+
+isSimple : Expr -> Bool
+isSimple e = match e with
+  EVar _ _ _ _ _ -> True
+  ECon _ _ _ _ -> True
+  ELit _ _ -> True
+  EUnit _ -> True
+  _ -> False
+
+-- (op e) becomes \x -> x op e and (e op) becomes \x -> e op x, evaluating
+-- e once.
+desugarSection : R -> Pos -> Expr -> Option Expr -> Option Expr -> <IO> Expr
+desugarSection (R _ _ counter) p op left right =
+  let n = nextId counter
+  let x = "sec$" ++ show n
+  let operand0 = match right with
+    Some o -> o
+    None -> withDefault (EUnit p) left
+  let (binds, operand) = match isSimple operand0 with
+    True -> ([], operand0)
+    False ->
+      let t = "secv$" ++ show n
+      let b = mkBind p t None [Clause p [] (RBody operand0)] None
+      ([b], mkVar p "" t)
+  let xv = mkVar p "" x
+  let body = match right with
+    Some _ -> EBinOp p op xv operand
+    None -> EBinOp p op operand xv
+  let lam = ELam p [mkPVar p x] body
+  match binds with
+    [] -> lam
+    _ -> ELet p binds lam

@@ -1,0 +1,1335 @@
+-- Types and kinds: pruning, printing and unification (with effect rows),
+-- plus the state of the type checker, name resolution and the conversion
+-- of written types.
+module Ark.Types
+
+import Ark.Util
+import Ark.Ast
+import Std.Exn
+import Std.Map as Map
+
+-- ================================================================ kinds
+
+pruneKind : Kind -> <IO> Kind
+pruneKind k = match k with
+  KVar _ r -> match readRef r with
+    Some k2 -> pruneKind k2
+    None -> k
+  _ -> k
+
+newKVar : Global -> <IO> Kind
+newKVar g = KVar (freshId g) (newRef None)
+
+-- Replace unresolved kind variables with Type.
+defaultKind : Kind -> <IO> Kind
+defaultKind k0 = match pruneKind k0 with
+  KVar _ r ->
+    writeRef r (Some KStar)
+    KStar
+  KArrow a b ->
+    let a2 = defaultKind a
+    KArrow a2 (defaultKind b)
+  k -> k
+
+kindString : Kind -> <IO> String
+kindString k0 = match pruneKind k0 with
+  KStar -> "Type"
+  KRow -> "Row"
+  KEffect -> "Effect"
+  KArrow a b ->
+    let from = match pruneKind a with
+      KArrow _ _ -> "(" ++ kindString a ++ ")"
+      _ -> kindString a
+    from ++ " -> " ++ kindString b
+  KVar i _ -> "k${i}"
+
+unifyKind : Kind -> Kind -> <IO> Bool
+unifyKind a0 b0 =
+  let a = pruneKind a0
+  let b = pruneKind b0
+  match (a, b) with
+    (KVar ia ra, _) -> match b with
+      KVar ib _ | ia == ib -> True
+      _ | occursKind ia b -> False
+        | otherwise ->
+            writeRef ra (Some b)
+            True
+    (_, KVar _ _) -> unifyKind b a
+    (KStar, KStar) -> True
+    (KRow, KRow) -> True
+    (KEffect, KEffect) -> True
+    (KArrow f1 t1, KArrow f2 t2) -> unifyKind f1 f2 && unifyKind t1 t2
+    _ -> False
+
+occursKind : Int -> Kind -> <IO> Bool
+occursKind v k = match pruneKind k with
+  KVar i _ -> i == v
+  KArrow a b -> occursKind v a || occursKind v b
+  _ -> False
+
+isRowKind : Kind -> <IO> Bool
+isRowKind k = match pruneKind k with
+  KRow -> True
+  _ -> False
+
+isStarKind : Kind -> <IO> Bool
+isStarKind k = match pruneKind k with
+  KStar -> True
+  _ -> False
+
+-- The parameter kinds of a type constructor kind.
+paramKinds : Kind -> Int -> <IO> List Kind
+paramKinds k n = match n <= 0 with
+  True -> []
+  False -> match pruneKind k with
+    KArrow a b -> a :: paramKinds b (n - 1)
+    _ -> error "paramKinds: not an arrow kind"
+
+-- ================================================================ types
+
+prune : Type -> <IO> Type
+prune t = match t with
+  TMeta m -> match readRef (metaRef m) with
+    Some t2 -> prune t2
+    None -> t
+  _ -> t
+
+zonk : Type -> <IO> Type
+zonk t0 = match prune t0 with
+  TApp f a ->
+    let f2 = zonk f
+    TApp f2 (zonk a)
+  TFun a e r ->
+    let a2 = zonk a
+    let e2 = zonk e
+    TFun a2 e2 (zonk r)
+  TRowExt l r ->
+    let l2 = zonk l
+    TRowExt l2 (zonk r)
+  t -> t
+
+-- The head of a type application spine and its arguments.
+headOf : Type -> <IO> (Type, List Type)
+headOf t = headAcc (prune t) []
+
+private headAcc : Type -> List Type -> <IO> (Type, List Type)
+headAcc t args = match t with
+  TApp f a -> headAcc (prune f) (a :: args)
+  _ -> (t, args)
+
+mkAppT : Type -> List Type -> Type
+mkAppT f args = foldl (\acc a -> TApp acc a) f args
+
+-- Split a row into its labels and its tail.
+flattenRow : Type -> <IO> (List Type, Type)
+flattenRow t = flattenAcc (prune t) []
+
+private flattenAcc : Type -> List Type -> <IO> (List Type, Type)
+flattenAcc t acc = match t with
+  TRowExt l r -> flattenAcc (prune r) (l :: acc)
+  _ -> (reverse acc, t)
+
+mkRow : List Type -> Type -> Type
+mkRow labels tail = foldr (\l acc -> TRowExt l acc) tail labels
+
+-- The effect constructor name of a row label.
+labelName : Type -> <IO> String
+labelName l =
+  let (h, _) = headOf l
+  match h with
+    TCon n _ -> n
+    TSkol _ n _ _ -> "'" ++ n
+    TMeta m -> "?" ++ show (metaId m)
+    _ -> "?"
+
+substGen : Type -> List Type -> <IO> Type
+substGen t sub = match t with
+  TGen i -> at i sub
+  TApp f a ->
+    let f2 = substGen f sub
+    TApp f2 (substGen a sub)
+  TFun a e r ->
+    let a2 = substGen a sub
+    let e2 = substGen e sub
+    TFun a2 e2 (substGen r sub)
+  TRowExt l r ->
+    let l2 = substGen l sub
+    TRowExt l2 (substGen r sub)
+  TMeta m -> match readRef (metaRef m) with
+    Some _ -> substGen (prune t) sub
+    None -> t
+  _ -> t
+
+-- Unbound meta variables of a type, in order of first occurrence.
+metasOf : Type -> <IO> List Meta
+metasOf t = reverse (metasAcc t [])
+
+-- Unbound meta variables of several types.
+metasOfMany : List Type -> <IO> List Meta
+metasOfMany ts = reverse (foldl (\acc t -> metasAcc t acc) [] ts)
+
+hasMeta : List Meta -> Meta -> Bool
+hasMeta ms m = anyOf (\x -> metaId x == metaId m) ms
+
+private metasAcc : Type -> List Meta -> <IO> List Meta
+metasAcc t0 acc = match prune t0 with
+  TMeta m -> match anyOf (\x -> metaId x == metaId m) acc with
+    True -> acc
+    False -> m :: acc
+  TApp f a -> metasAcc a (metasAcc f acc)
+  TFun a e r -> metasAcc r (metasAcc e (metasAcc a acc))
+  TRowExt l r -> metasAcc r (metasAcc l acc)
+  _ -> acc
+
+typesEqual : Type -> Type -> <IO> Bool
+typesEqual a0 b0 =
+  let a = prune a0
+  let b = prune b0
+  match (a, b) with
+    (TCon x _, TCon y _) -> x == y
+    (TMeta x, TMeta y) -> metaId x == metaId y
+    (TSkol x _ _ _, TSkol y _ _ _) -> x == y
+    (TGen x, TGen y) -> x == y
+    (TApp f1 a1, TApp f2 a2) -> typesEqual f1 f2 && typesEqual a1 a2
+    (TFun a1 e1 r1, TFun a2 e2 r2) -> typesEqual a1 a2 && typesEqual e1 e2 && typesEqual r1 r2
+    (TRowEmpty, TRowEmpty) -> True
+    (TRowExt l1 r1, TRowExt l2 r2) -> typesEqual l1 l2 && typesEqual r1 r2
+    _ -> False
+
+-- Whether two pruned types are the same variable (or both the empty row).
+sameVar : Type -> Type -> Bool
+sameVar a b = match (a, b) with
+  (TMeta x, TMeta y) -> metaId x == metaId y
+  (TSkol x _ _ _, TSkol y _ _ _) -> x == y
+  (TRowEmpty, TRowEmpty) -> True
+  _ -> False
+
+isMeta : Type -> Bool
+isMeta (TMeta _) = True
+isMeta _ = False
+
+isClosedRow : Type -> <IO> Bool
+isClosedRow t = match prune t with
+  TRowEmpty -> True
+  _ -> False
+
+arity : Type -> <IO> Int
+arity t = match prune t with
+  TFun _ _ r -> 1 + arity r
+  _ -> 0
+
+-- ================================================================ printing
+
+-- occurrence counts, names, used names, names of quantified variables
+type Printer = Printer (Ref (Map.Map String Int)) (Ref (Map.Map String String)) (Ref (Map.Map String Bool)) (Ref (List String))
+
+newPrinter : Unit -> <IO> Printer
+newPrinter () = Printer (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef [])
+
+private varKey : Type -> String
+varKey t = match t with
+  TMeta m -> "m" ++ show (metaId m)
+  TSkol i _ _ _ -> "s" ++ show i
+  TGen i -> "g" ++ show i
+  _ -> "?"
+
+-- Record occurrences of variables so that a row variable occurring only
+-- once can be omitted when printing.
+pcount : Printer -> Type -> <IO> Unit
+pcount pr t0 =
+  let Printer counts _ _ _ = pr
+  let bump k = modifyRef counts (\m -> Map.insert k (Map.findWithDefault 0 k m + 1) m)
+  match prune t0 with
+    t@(TMeta _) -> bump (varKey t)
+    t@(TSkol _ _ _ _) -> bump (varKey t)
+    t@(TGen _) -> bump (varKey t)
+    TApp f a ->
+      pcount pr f
+      pcount pr a
+    TFun a e r ->
+      pcount pr a
+      pcount pr e
+      pcount pr r
+    TRowExt l r ->
+      pcount pr l
+      pcount pr r
+    _ -> ()
+
+private occurrences : Printer -> Type -> <IO> Int
+occurrences (Printer counts _ _ _) t = Map.findWithDefault 0 (varKey t) (readRef counts)
+
+letters : Bool -> List String
+letters row = match row with
+  True -> mapList charToString (chars "efghijklmnopqrstuvwxyzabcd")
+  False -> mapList charToString (chars "abcdefghijklmnopqrstuvwxyz")
+
+pfresh : Printer -> String -> Bool -> <IO> String
+pfresh pr base row =
+  let Printer _ _ used _ = pr
+  let isUsed n = Map.member n (readRef used)
+  let mark n =
+    modifyRef used (Map.insert n True)
+    n
+  match base != "" && not (isUsed base) with
+    True -> mark base
+    False ->
+      let loop i ls = match ls with
+        [] -> loop (i + 1) (letters row)
+        l :: rest ->
+          let n = match i > 0 with
+            True -> l ++ show i
+            False -> l
+          match isUsed n with
+            True -> loop i rest
+            False -> mark n
+      loop 0 (letters row)
+
+private nameOf : Printer -> Type -> String -> Bool -> <IO> String
+nameOf pr t base row =
+  let Printer _ names _ _ = pr
+  let key = varKey t
+  match Map.lookup key (readRef names) with
+    Some n -> n
+    None ->
+      let n = pfresh pr base row
+      modifyRef names (Map.insert key n)
+      n
+
+-- prec: 0 top, 1 function argument, 2 application argument
+ptyp : Printer -> Type -> Int -> <IO> String
+ptyp pr t0 prec = match prune t0 with
+  TCon n _ -> shortName n
+  t@(TMeta m) -> nameOf pr t "" (isRowKind (metaKind m))
+  t@(TSkol _ n k _) -> nameOf pr t n (isRowKind k)
+  TGen i ->
+    let Printer _ _ _ gen = pr
+    let gs = readRef gen
+    match i < length gs with
+      True -> at i gs
+      False -> "g${i}"
+  TFun a e r ->
+    let s1 = ptyp pr a 1 ++ " -> "
+    let ra = rowAnnot pr e
+    let s2 = match ra with
+      "" -> s1
+      _ -> s1 ++ ra ++ " "
+    let s = s2 ++ ptyp pr r 0
+    match prec > 0 with
+      True -> "(" ++ s ++ ")"
+      False -> s
+  t@(TApp _ _) ->
+    let (h, args) = headOf t
+    let tuple = match h with
+      TCon n _ ->
+        let name = shortName n
+        startsWith "Tuple" name && length args > 1 && "Tuple${length args}" == name
+      _ -> False
+    match tuple with
+      True -> "(" ++ joinWith ", " (mapList (\a -> ptyp pr a 0) args) ++ ")"
+      False ->
+        let hs = ptyp pr h 2
+        let s = joinWith " " (hs :: mapList (\a -> ptyp pr a 2) args)
+        match prec > 1 with
+          True -> "(" ++ s ++ ")"
+          False -> s
+  t@TRowEmpty -> prow pr t
+  t@(TRowExt _ _) -> prow pr t
+
+prow : Printer -> Type -> <IO> String
+prow pr t =
+  let (labels, tail) = flattenRow t
+  let parts = mapList (\l -> ptyp pr l 0) labels
+  let s = "<" ++ joinWith ", " parts
+  let s2 = match tail with
+    TRowEmpty -> s
+    _ -> match parts with
+      [] -> s ++ ptyp pr tail 0
+      _ -> s ++ " | " ++ ptyp pr tail 0
+  s2 ++ ">"
+
+-- The effect of an arrow; a bare row variable is omitted.
+rowAnnot : Printer -> Type -> <IO> String
+rowAnnot pr t =
+  let (labels, tail) = flattenRow t
+  let bare = match labels with
+    [] -> match tail with
+      TMeta _ -> occurrences pr tail <= 1
+      TGen _ -> occurrences pr tail <= 1
+      TSkol _ _ _ _ -> occurrences pr tail <= 1
+      _ -> False
+    _ -> False
+  match bare with
+    True -> ""
+    False -> prow pr t
+
+typeString : Type -> <IO> String
+typeString t =
+  let pr = newPrinter ()
+  pcount pr t
+  ptyp pr t 0
+
+-- Render several types with a shared variable naming.
+typesString : List Type -> <IO> List String
+typesString ts =
+  let pr = newPrinter ()
+  forEach ts (pcount pr)
+  mapList (\t -> ptyp pr t 0) ts
+
+schemeString : Scheme -> <IO> String
+schemeString (Scheme kinds names preds t) =
+  let pr = newPrinter ()
+  let Printer _ _ _ gen = pr
+  forEach (indexed kinds) (\(i, k) ->
+    let base = match i < length names with
+      True -> at i names
+      False -> ""
+    let n = pfresh pr base (isRowKind k)
+    modifyRef gen (\gs -> snoc gs n))
+  pcount pr t
+  forEach preds (\(Pred _ pt) -> pcount pr pt)
+  let ps = mapList (\(Pred cl pt) -> shortName (className cl) ++ " " ++ ptyp pr pt 2) preds
+  let ctx = match ps with
+    [] -> ""
+    [one] -> one ++ " => "
+    _ -> "(" ++ joinWith ", " ps ++ ") => "
+  ctx ++ ptyp pr t 0
+
+-- ================================================================ checker state
+
+-- A local variable: position, unique id, scheme (None when monomorphic),
+-- monomorphic type, group dictionary parameters (recursive references).
+type LocalVar = LocalVar Pos String (Option Scheme) Type (Option (Ref (List String)))
+
+-- A wanted constraint.
+type Wanted = Wanted ClassInfo Type DictRef Pos
+
+-- A given constraint and its dictionary.
+type Given = Given ClassInfo Type DictExpr
+
+-- A pattern match to check for exhaustiveness: position, description,
+-- rows of patterns, whether each row is guarded.
+type MatchSite = MatchSite Pos String (List (List Pattern)) (List Bool)
+
+-- The type checker of one module.
+type Checker = Checker
+  Global
+  String                                  -- module name
+  Scope
+  Exports
+  (Ref (List Diag))                       -- errors (reversed)
+  (Ref Int)                               -- level
+  (Ref (List (String, LocalVar)))         -- local variables (innermost first)
+  (Ref (List (List Wanted)))              -- wanted scopes (each reversed)
+  (Ref (List Given))                      -- givens (innermost first)
+  (Ref Int)                               -- local id counter
+  (Ref (Map.Map String Sig))              -- signatures
+  (Ref (List MatchSite))                  -- match sites (reversed)
+  (Ref (List Decl))                       -- declarations (including derived instances)
+
+newChecker : Global -> String -> <IO> Checker
+newChecker g modName = Checker g modName (newScope ()) (newExports modName) (newRef []) (newRef 0) (newRef []) (newRef [[]]) (newRef []) (newRef 0) (newRef Map.empty) (newRef []) (newRef [])
+
+cG : Checker -> Global
+cG (Checker g _ _ _ _ _ _ _ _ _ _ _ _) = g
+
+cMod : Checker -> String
+cMod (Checker _ m _ _ _ _ _ _ _ _ _ _ _) = m
+
+cScope : Checker -> Scope
+cScope (Checker _ _ s _ _ _ _ _ _ _ _ _ _) = s
+
+cExports : Checker -> Exports
+cExports (Checker _ _ _ e _ _ _ _ _ _ _ _ _) = e
+
+cErrs : Checker -> Ref (List Diag)
+cErrs (Checker _ _ _ _ e _ _ _ _ _ _ _ _) = e
+
+cLevelRef : Checker -> Ref Int
+cLevelRef (Checker _ _ _ _ _ l _ _ _ _ _ _ _) = l
+
+cLocals : Checker -> Ref (List (String, LocalVar))
+cLocals (Checker _ _ _ _ _ _ l _ _ _ _ _ _) = l
+
+cWanted : Checker -> Ref (List (List Wanted))
+cWanted (Checker _ _ _ _ _ _ _ w _ _ _ _ _) = w
+
+cGivens : Checker -> Ref (List Given)
+cGivens (Checker _ _ _ _ _ _ _ _ g _ _ _ _) = g
+
+cNextLoc : Checker -> Ref Int
+cNextLoc (Checker _ _ _ _ _ _ _ _ _ n _ _ _) = n
+
+cSigs : Checker -> Ref (Map.Map String Sig)
+cSigs (Checker _ _ _ _ _ _ _ _ _ _ s _ _) = s
+
+cMatches : Checker -> Ref (List MatchSite)
+cMatches (Checker _ _ _ _ _ _ _ _ _ _ _ m _) = m
+
+cDecls : Checker -> Ref (List Decl)
+cDecls (Checker _ _ _ _ _ _ _ _ _ _ _ _ d) = d
+
+level : Checker -> <IO> Int
+level c = readRef (cLevelRef c)
+
+incLevel : Checker -> <IO> Unit
+incLevel c = modifyRef (cLevelRef c) (\l -> l + 1)
+
+decLevel : Checker -> <IO> Unit
+decLevel c = modifyRef (cLevelRef c) (\l -> l - 1)
+
+errorf : Checker -> Pos -> String -> <IO> Unit
+errorf c p msg = modifyRef (cErrs c) (\es -> diagAt p msg :: es)
+
+addError : Checker -> Diag -> <IO> Unit
+addError c d = modifyRef (cErrs c) (\es -> d :: es)
+
+errorCount : Checker -> <IO> Int
+errorCount c = length (readRef (cErrs c))
+
+sym : Checker -> String -> String
+sym c name = cMod c ++ "." ++ name
+
+opName2 : Char -> Option String
+opName2 r = match r with
+  '!' -> Some "bang"
+  '#' -> Some "hash"
+  '$' -> Some "dollar"
+  '%' -> Some "pct"
+  '&' -> Some "amp"
+  '*' -> Some "star"
+  '+' -> Some "plus"
+  '.' -> Some "dot"
+  '/' -> Some "slash"
+  '<' -> Some "lt"
+  '=' -> Some "eq"
+  '>' -> Some "gt"
+  '?' -> Some "qm"
+  '@' -> Some "at"
+  '\\' -> Some "bslash"
+  '^' -> Some "caret"
+  '|' -> Some "bar"
+  '-' -> Some "minus"
+  '~' -> Some "tilde"
+  ':' -> Some "colon"
+  _ -> None
+
+-- Turn a name (possibly an operator) into an identifier fragment.
+sanitize : String -> String
+sanitize name = concatStrings (mapList sanitizeChar (chars name))
+
+private sanitizeChar : Char -> String
+sanitizeChar r
+  | r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' = charToString r
+  | r == '\'' = "_q"
+  | charCode r > 127 = charToString r
+  | otherwise = match opName2 r with
+      Some n -> "_" ++ n
+      None -> "_op"
+
+freshLocalID : Checker -> String -> <IO> String
+freshLocalID c name =
+  let n = nextId (cNextLoc c)
+  sanitize name ++ "_" ++ show n
+
+newMetaV : Checker -> Kind -> <IO> Meta
+newMetaV c k = Meta (freshId (cG c)) k (newRef (level c)) (newRef None)
+
+newMeta : Checker -> Kind -> <IO> Type
+newMeta c k = TMeta (newMetaV c k)
+
+freshType : Checker -> <IO> Type
+freshType c = newMeta c KStar
+
+freshRow : Checker -> <IO> Type
+freshRow c = newMeta c KRow
+
+newSkolem : Checker -> String -> Kind -> <IO> Type
+newSkolem c name k = TSkol (freshId (cG c)) name k (level c)
+
+-- ================================================================ unification
+
+-- Unification failures are thrown with a message ("" for a plain mismatch).
+
+occursAdjust : Meta -> Type -> <Exn String, IO> Unit
+occursAdjust m t0 = match prune t0 with
+  TMeta t
+    | metaId t == metaId m -> throw "infinite type"
+    | otherwise ->
+        let ml = readRef (metaLevelRef m)
+        match readRef (metaLevelRef t) > ml with
+          True -> writeRef (metaLevelRef t) ml
+          False -> ()
+  TSkol _ n _ l | l > readRef (metaLevelRef m) -> throw "the rigid type variable '${n}' would escape its scope"
+  TApp f a ->
+    occursAdjust m f
+    occursAdjust m a
+  TFun a e r ->
+    occursAdjust m a
+    occursAdjust m e
+    occursAdjust m r
+  TRowExt l r ->
+    occursAdjust m l
+    occursAdjust m r
+  _ -> ()
+
+bindMeta : Meta -> Type -> <Exn String, IO> Unit
+bindMeta m t =
+  occursAdjust m t
+  writeRef (metaRef m) (Some t)
+
+isRow : Type -> <IO> Bool
+isRow t = match prune t with
+  TRowEmpty -> True
+  TRowExt _ _ -> True
+  TMeta m -> isRowKind (metaKind m)
+  TSkol _ _ k _ -> isRowKind k
+  _ -> False
+
+-- Make two types equal.
+unify : Checker -> Type -> Type -> <Exn String, IO> Unit
+unify c a0 b0 =
+  let a = prune a0
+  let b = prune b0
+  match sameVar a b with
+    True -> ()
+    False -> match (a, b) with
+      (TMeta ma, TMeta mb) | readRef (metaLevelRef mb) > readRef (metaLevelRef ma) -> bindMeta mb a
+      (TMeta ma, _) -> bindMeta ma b
+      (_, TMeta _) -> unify c b a
+      _ | isRow a || isRow b -> unifyRows c a b
+      (TCon x _, TCon y _) | x == y -> ()
+      (TApp f1 a1, TApp f2 a2) ->
+        unify c f1 f2
+        unify c a1 a2
+      (TFun a1 e1 r1, TFun a2 e2 r2) ->
+        unify c a1 a2
+        unify c e1 e2
+        unify c r1 r2
+      _ -> throw ""
+
+-- Match the labels of la against lb (by effect name), unifying matched
+-- pairs. Returns the unmatched labels of la and the unused labels of lb.
+matchLabels : Checker -> List Type -> List Type -> <Exn String, IO> (List Type, List Type)
+matchLabels c la lb =
+  let step (rest, avail) l =
+    let name = labelName l
+    let pick before after = match after with
+      [] -> (snoc rest l, avail)
+      l2 :: more
+        | labelName l2 == name ->
+            unify c l l2
+            (rest, reverse before ++ more)
+        | otherwise -> pick (l2 :: before) more
+    pick [] avail
+  foldl step ([], lb) la
+
+-- Unify two effect rows (scoped labels, Leijen-style).
+unifyRows : Checker -> Type -> Type -> <Exn String, IO> Unit
+unifyRows c a b =
+  let (la, ta0) = flattenRow a
+  let (lb, tb0) = flattenRow b
+  let (restA, restB) = matchLabels c la lb
+  let ta = prune ta0
+  let tb = prune tb0
+  match (restA, restB) with
+    ([], []) -> unifyTails c ta tb
+    _ ->
+      match (ta, tb) with
+        (TMeta x, TMeta y) | metaId x == metaId y -> throw "recursive row"
+        _ -> ()
+      match (restA, restB, ta, tb) with
+        ([], _, _, _) -> extendTail ta restB tb
+        (_, [], _, _) -> extendTail tb restA ta
+        (_, _, TMeta ma, TMeta mb) ->
+          let rm = newMetaV c KRow
+          let lvl = min (readRef (metaLevelRef ma)) (readRef (metaLevelRef mb))
+          writeRef (metaLevelRef rm) lvl
+          let r = TMeta rm
+          bindMeta ma (mkRow restB r)
+          unify c (TMeta mb) (mkRow restA r)
+        (_, _, TMeta _, _) -> missingEffect restA tb
+        _ -> missingEffect restB ta
+
+missingEffect : List Type -> Type -> <Exn String, IO> a
+missingEffect labels _ =
+  let names = mapList typeString labels
+  throw "effect ${joinNames names} is not allowed here"
+
+extendTail : Type -> List Type -> Type -> <Exn String, IO> Unit
+extendTail tail labels otherTail = match tail with
+  TMeta m -> bindMeta m (mkRow labels otherTail)
+  _ -> missingEffect labels tail
+
+unifyTails : Checker -> Type -> Type -> <Exn String, IO> Unit
+unifyTails _ a b = match sameVar a b with
+  True -> ()
+  False -> match (a, b) with
+    (TMeta m, _) -> bindMeta m b
+    (_, TMeta m) -> bindMeta m a
+    _ -> throw "effect rows do not match"
+
+-- Replace a closed effect row with an open one (subsumption).
+openRow : Checker -> Type -> <IO> Type
+openRow c eff =
+  let (labels, tail) = flattenRow eff
+  match tail with
+    TRowEmpty -> mkRow labels (freshRow c)
+    _ -> eff
+
+-- Open the closed effect rows along a function type's result spine.
+openFun : Checker -> Type -> <IO> Type
+openFun c t0 = match prune t0 with
+  TFun a e r ->
+    let e2 = openRow c e
+    TFun a e2 (openFun c r)
+  t -> t
+
+-- Check that the effects of row a are included in row b. Like
+-- unification, except that a rigid or closed tail of a may be used under
+-- extra labels of b (effect subsumption). Extra labels above a rigid tail
+-- are returned: the callee must run with those handlers masked.
+subRow : Checker -> Type -> Type -> <Exn String, IO> List Type
+subRow c a b =
+  let (la, ta0) = flattenRow a
+  let ta = prune ta0
+  let (lb, tb0) = flattenRow b
+  match isMeta ta && not (sameVar (prune tb0) ta) with
+    True ->
+      unify c a b
+      []
+    False ->
+      let (missing, extra) = matchLabels c la lb
+      let tb = prune tb0
+      match ta with
+        TMeta m | sameVar tb ta -> match missing with
+          [] -> extra
+          _ -> missingEffect missing ta
+        TRowEmpty -> match missing with
+          [] -> []
+          _ -> match tb with
+            TMeta mb ->
+              bindMeta mb (mkRow missing (newMeta c KRow))
+              []
+            _ -> missingEffect missing tb
+        _ | sameVar tb ta -> match missing with
+              [] -> extra
+              _ -> missingEffect missing tb
+          | otherwise -> match tb with
+              TMeta mb ->
+                bindMeta mb (mkRow missing ta)
+                extra
+              _ -> match missing with
+                [] -> throw "effect rows do not match"
+                _ -> missingEffect missing tb
+
+-- ================================================================ builtins
+
+preludeMod : String
+preludeMod = "Prelude"
+
+tIntName : String
+tIntName = "Prelude.Int"
+
+tFloatName : String
+tFloatName = "Prelude.Float"
+
+tStringName : String
+tStringName = "Prelude.String"
+
+tCharName : String
+tCharName = "Prelude.Char"
+
+tBoolName : String
+tBoolName = "Prelude.Bool"
+
+tUnitName : String
+tUnitName = "Prelude.Unit"
+
+tListName : String
+tListName = "Prelude.List"
+
+tIOName : String
+tIOName = "Prelude.IO"
+
+tupleName : Int -> String
+tupleName n = "Prelude.Tuple" ++ show n
+
+lookupTypeInfo : Global -> String -> <IO> TypeInfo
+lookupTypeInfo g name = match Map.lookup name (readRef (gTypes g)) with
+  Some ti -> ti
+  None -> error ("missing builtin type " ++ name)
+
+builtinType : Checker -> String -> <IO> Type
+builtinType c name =
+  let ti = lookupTypeInfo (cG c) name
+  TCon (typeInfoName ti) (typeInfoKind ti)
+
+tInt : Checker -> <IO> Type
+tInt c = builtinType c tIntName
+
+tFloat : Checker -> <IO> Type
+tFloat c = builtinType c tFloatName
+
+tString : Checker -> <IO> Type
+tString c = builtinType c tStringName
+
+tChar : Checker -> <IO> Type
+tChar c = builtinType c tCharName
+
+tBool : Checker -> <IO> Type
+tBool c = builtinType c tBoolName
+
+tUnit : Checker -> <IO> Type
+tUnit c = builtinType c tUnitName
+
+tList : Checker -> Type -> <IO> Type
+tList c a = TApp (builtinType c tListName) a
+
+tTuple : Checker -> List Type -> <IO> Type
+tTuple c ts = mkAppT (builtinType c (tupleName (length ts))) ts
+
+builtinCtor : Global -> String -> Int -> <IO> CtorInfo
+builtinCtor g typ tag = at tag (typeInfoCtors (lookupTypeInfo g typ))
+
+-- ================================================================ scope
+
+entryModule : TypeEntry -> String
+entryModule e = match e with
+  TEType ti -> typeInfoModule ti
+  TEClass ci -> classModule ci
+  TEEffect ei -> effectModule ei
+  TEAlias (AliasInfo _ _ _ m _ _) -> m
+  TEAmbig _ -> "?"
+
+entryName : TypeEntry -> String
+entryName e = match e with
+  TEType ti -> "t" ++ typeInfoName ti
+  TEClass ci -> "c" ++ className ci
+  TEEffect ei -> "e" ++ effectName ei
+  TEAlias (AliasInfo n _ _ _ _ _) -> "a" ++ n
+  TEAmbig _ -> "?"
+
+defineType : Checker -> String -> TypeEntry -> Pos -> <IO> Unit
+defineType c name v p =
+  let owned = match Map.lookup name (readRef (scopeTypes (cScope c))) with
+    Some (TEAmbig _) -> False
+    Some old -> entryModule old == cMod c
+    None -> False
+  match owned with
+    True -> errorf c p "type-level name '${name}' is already defined"
+    False ->
+      modifyRef (scopeTypes (cScope c)) (Map.insert name v)
+      modifyRef (exportsTypes (cExports c)) (Map.insert name v)
+
+defineValue : Checker -> String -> ValueInfo -> Bool -> <IO> Unit
+defineValue c name v priv =
+  let dup = match Map.lookup name (readRef (scopeValues (cScope c))) with
+    Some (VEValue ov) -> startsWith (cMod c ++ ".") (valueSym ov) && valueSym ov == sym c name
+    _ -> False
+  match dup with
+    True -> errorf c (valuePos v) "'${name}' is already defined"
+    False ->
+      modifyRef (scopeValues (cScope c)) (Map.insert name (VEValue v))
+      match priv with
+        True -> ()
+        False -> modifyRef (exportsValues (cExports c)) (Map.insert name v)
+      modifyRef (gValues (cG c)) (Map.insert (valueSym v) v)
+
+defineCtor : Checker -> String -> CtorInfo -> Pos -> Bool -> <IO> Unit
+defineCtor c name ci p priv =
+  let dup = match Map.lookup name (readRef (scopeCtors (cScope c))) with
+    Some (CEctor oc) -> ctorTypeModule oc == cMod c
+    _ -> False
+  match dup with
+    True -> errorf c p "constructor '${name}' is already defined"
+    False ->
+      modifyRef (scopeCtors (cScope c)) (Map.insert name (CEctor ci))
+      match priv with
+        True -> ()
+        False -> modifyRef (exportsCtors (cExports c)) (Map.insert name ci)
+
+valueModule : ValueInfo -> String
+valueModule v = match qualifierOf (valueSym v) with
+  "" -> "?"
+  m -> m
+
+-- Add an unqualified name imported from mod, marking clashes as ambiguous.
+addUnqualValue : Ref (Map.Map String ValEntry) -> String -> ValueInfo -> String -> <IO> Unit
+addUnqualValue m name v mod = match Map.lookup name (readRef m) with
+  Some (VEValue old)
+    | valueSym old == valueSym v -> ()
+    | otherwise -> modifyRef m (Map.insert name (VEAmbig [valueModule old, mod]))
+  Some (VEAmbig mods) -> modifyRef m (Map.insert name (VEAmbig (snoc mods mod)))
+  None -> modifyRef m (Map.insert name (VEValue v))
+
+addUnqualType : Ref (Map.Map String TypeEntry) -> String -> TypeEntry -> String -> <IO> Unit
+addUnqualType m name v mod = match Map.lookup name (readRef m) with
+  Some (TEAmbig mods) -> match v with
+    TEAmbig _ -> ()
+    _ -> modifyRef m (Map.insert name (TEAmbig (snoc mods mod)))
+  Some old
+    | entryName old == entryName v -> ()
+    | otherwise -> modifyRef m (Map.insert name (TEAmbig [entryModule old, mod]))
+  None -> modifyRef m (Map.insert name v)
+
+addUnqualCtor : Ref (Map.Map String CtorEntry) -> String -> CtorInfo -> String -> <IO> Unit
+addUnqualCtor m name ci mod = match Map.lookup name (readRef m) with
+  Some (CEctor old)
+    | ctorName old == ctorName ci -> ()
+    | otherwise -> modifyRef m (Map.insert name (CEAmbig [ctorTypeModule old, mod]))
+  Some (CEAmbig mods) -> modifyRef m (Map.insert name (CEAmbig (snoc mods mod)))
+  None -> modifyRef m (Map.insert name (CEctor ci))
+
+processImports : Checker -> List Import -> <IO> Unit
+processImports c imports0 =
+  let imports = match cMod c == preludeMod || anyOf (\i -> importPath i == preludeMod) imports0 with
+    True -> imports0
+    False -> Import noPos preludeMod "" [] True :: imports0
+  forEach imports (processImport c)
+
+private processImport : Checker -> Import -> <IO> Unit
+processImport c (Import ipos path ialias names all) =
+  let sc = cScope c
+  match Map.lookup path (readRef (gModules (cG c))) with
+    None -> errorf c ipos "unknown module '${path}'"
+    Some ex ->
+      let alias = match ialias with
+        "" -> shortName path
+        a -> a
+      let addQual q = modifyRef (scopeQuals sc) (\m -> Map.insert q (snoc (Map.findWithDefault [] q m) ex) m)
+      addQual alias
+      match ialias == "" && alias != path with
+        True -> addQual path
+        False -> ()
+      let exMod = exportsModule ex
+      match all || ialias == "" && isEmpty names with
+        True ->
+          forEach (Map.toList (readRef (exportsValues ex))) (\(n, v) -> addUnqualValue (scopeValues sc) n v exMod)
+          forEach (Map.toList (readRef (exportsTypes ex))) (\(n, v) -> addUnqualType (scopeTypes sc) n v exMod)
+          forEach (Map.toList (readRef (exportsCtors ex))) (\(n, v) -> addUnqualCtor (scopeCtors sc) n v exMod)
+        False -> forEach names (\(ImportName np n kind nall) -> match kind with
+          0 -> match Map.lookup n (readRef (exportsValues ex)) with
+            None -> errorf c np "module '${path}' does not export '${n}'"
+            Some v -> addUnqualValue (scopeValues sc) n v exMod
+          _ -> match Map.lookup n (readRef (exportsTypes ex)) with
+            None -> errorf c np "module '${path}' does not export type '${n}'"
+            Some t ->
+              addUnqualType (scopeTypes sc) n t exMod
+              match nall with
+                False -> ()
+                True -> match t with
+                  TEType ti -> forEach (typeInfoCtors ti) (\ci -> match Map.member (ctorShort ci) (readRef (exportsCtors ex)) with
+                    True -> addUnqualCtor (scopeCtors sc) (ctorShort ci) ci exMod
+                    False -> ())
+                  TEClass cl -> forEach (classMethods cl) (\mi -> match Map.lookup (methodName mi) (readRef (exportsValues ex)) with
+                    Some v -> addUnqualValue (scopeValues sc) (methodName mi) v exMod
+                    None -> ())
+                  TEEffect ei -> forEach (effectOps ei) (\op -> match Map.lookup (opName op) (readRef (exportsValues ex)) with
+                    Some v -> addUnqualValue (scopeValues sc) (opName op) v exMod
+                    None -> ())
+                  _ -> ())
+
+-- Resolve a module qualifier to its export tables.
+qualified : Checker -> Pos -> String -> <IO> Option (List Exports)
+qualified c p qual = match qual with
+  "#Prelude" -> match cMod c == preludeMod with
+    True -> Some [cExports c]
+    False -> match Map.lookup preludeMod (readRef (gModules (cG c))) with
+      Some ex -> Some [ex]
+      None -> Some []
+  _ -> match Map.lookup qual (readRef (scopeQuals (cScope c))) with
+    Some exs -> Some exs
+    None
+      | qual == cMod c -> Some [cExports c]
+      | otherwise ->
+          errorf c p "unknown module qualifier '${qual}'"
+          None
+
+private firstSome : List a -> (a -> <IO | e> Option b) -> <IO | e> Option b
+firstSome xs f = match xs with
+  [] -> None
+  x :: rest -> match f x with
+    Some y -> Some y
+    None -> firstSome rest f
+
+lookupValue : Checker -> Pos -> String -> String -> <IO> Option ValueInfo
+lookupValue c p qual name = match qual with
+  "" -> match Map.lookup name (readRef (scopeValues (cScope c))) with
+    Some (VEValue v) -> Some v
+    Some (VEAmbig mods) ->
+      errorf c p "'${name}' is ambiguous: it is exported by ${joinNames mods}"
+      None
+    None ->
+      errorf c p "unknown variable '${name}'"
+      None
+  _ -> match qualified c p qual with
+    None -> None
+    Some exs -> match firstSome exs (\ex -> Map.lookup name (readRef (exportsValues ex))) with
+      Some v -> Some v
+      None
+        | qual == "#Prelude" && cMod c == preludeMod -> match Map.lookup name (readRef (scopeValues (cScope c))) with
+            Some (VEValue v) -> Some v
+            _ ->
+              errorf c p "module '${qual}' has no value '${name}'"
+              None
+        | otherwise ->
+            errorf c p "module '${qual}' has no value '${name}'"
+            None
+
+lookupCtor : Checker -> Pos -> String -> String -> <IO> Option CtorInfo
+lookupCtor c p qual name = match qual with
+  "" -> match Map.lookup name (readRef (scopeCtors (cScope c))) with
+    Some (CEctor ci) -> Some ci
+    Some (CEAmbig mods) ->
+      errorf c p "constructor '${name}' is ambiguous: it is exported by ${joinNames mods}"
+      None
+    None ->
+      errorf c p "unknown constructor '${name}'"
+      None
+  _ ->
+    let exs = qualified c p qual
+    match firstSome (withDefault [] exs) (\ex -> Map.lookup name (readRef (exportsCtors ex))) with
+      Some ci -> Some ci
+      None ->
+        let fromScope = match qual == "#Prelude" with
+          True -> match Map.lookup name (readRef (scopeCtors (cScope c))) with
+            Some (CEctor ci) -> Some ci
+            _ -> None
+          False -> None
+        match fromScope with
+          Some ci -> Some ci
+          None ->
+            match exs with
+              Some _ -> errorf c p "module '${qual}' has no constructor '${name}'"
+              None -> ()
+            None
+
+lookupTypeName : Checker -> Pos -> String -> String -> <IO> Option TypeEntry
+lookupTypeName c p qual name = match qual with
+  "" -> match Map.lookup name (readRef (scopeTypes (cScope c))) with
+    Some (TEAmbig mods) ->
+      errorf c p "type '${name}' is ambiguous: it is exported by ${joinNames mods}"
+      None
+    None ->
+      errorf c p "unknown type '${name}'"
+      None
+    Some v -> Some v
+  _ ->
+    let exs = qualified c p qual
+    match firstSome (withDefault [] exs) (\ex -> Map.lookup name (readRef (exportsTypes ex))) with
+      Some v -> Some v
+      None ->
+        let fromScope = match qual == "#Prelude" with
+          True -> Map.lookup name (readRef (scopeTypes (cScope c)))
+          False -> None
+        match fromScope with
+          Some v -> Some v
+          None ->
+            match exs with
+              Some _ -> errorf c p "module '${qual}' has no type '${name}'"
+              None -> ()
+            None
+
+lookupClass : Checker -> Pos -> String -> String -> <IO> Option ClassInfo
+lookupClass c p qual name = match lookupTypeName c p qual name with
+  None -> None
+  Some (TEClass cl) -> Some cl
+  Some _ ->
+    errorf c p "'${name}' is not a class"
+    None
+
+-- ================================================================ locals
+
+pushLocal : Checker -> String -> LocalVar -> <IO> Unit
+pushLocal c name v = modifyRef (cLocals c) (\ls -> (name, v) :: ls)
+
+lookupLocal : Checker -> String -> <IO> Option LocalVar
+lookupLocal c name = lookup name (readRef (cLocals c))
+
+-- ================================================================ type conversion
+
+-- arrow effect defaults for unannotated arrows
+arrowAmbient : Int
+arrowAmbient = 0
+
+-- closed empty row (data constructor fields)
+arrowPure : Int
+arrowPure = 1
+
+-- fresh meta per arrow (expression annotations)
+arrowFresh : Int
+arrowFresh = 2
+
+-- Type variables while converting a written type: variables, kinds, names
+-- in TGen order, create TGen for new names (otherwise metas), reject
+-- unknown names, arrow mode, ambient row, spine counter.
+type TvEnv = TvEnv (Ref (Map.Map String Type)) (Ref (Map.Map String Kind)) (Ref (List String)) Bool (Ref Bool) (Ref Int) (Ref (Option Type)) (Ref Int)
+
+newTvEnv : Bool -> Int -> <IO> TvEnv
+newTvEnv gen arrows = TvEnv (newRef Map.empty) (newRef Map.empty) (newRef []) gen (newRef False) (newRef arrows) (newRef None) (newRef 0)
+
+envVars : TvEnv -> Ref (Map.Map String Type)
+envVars (TvEnv v _ _ _ _ _ _ _) = v
+
+envKinds : TvEnv -> Ref (Map.Map String Kind)
+envKinds (TvEnv _ k _ _ _ _ _ _) = k
+
+envNames : TvEnv -> <IO> List String
+envNames (TvEnv _ _ n _ _ _ _ _) = readRef n
+
+envGen : TvEnv -> Bool
+envGen (TvEnv _ _ _ g _ _ _ _) = g
+
+envFixed : TvEnv -> Ref Bool
+envFixed (TvEnv _ _ _ _ f _ _ _) = f
+
+envArrows : TvEnv -> Ref Int
+envArrows (TvEnv _ _ _ _ _ a _ _) = a
+
+envAmbient : TvEnv -> Ref (Option Type)
+envAmbient (TvEnv _ _ _ _ _ _ a _) = a
+
+envSpine : TvEnv -> Ref Int
+envSpine (TvEnv _ _ _ _ _ _ _ s) = s
+
+addGen : TvEnv -> String -> Kind -> <IO> Type
+addGen (TvEnv vars kinds names _ _ _ _ _) name k =
+  let t = TGen (length (readRef names))
+  modifyRef vars (Map.insert name t)
+  modifyRef kinds (Map.insert name k)
+  modifyRef names (\ns -> snoc ns name)
+  t
+
+envKindOf : TvEnv -> String -> <IO> Kind
+envKindOf env name = match Map.lookup name (readRef (envKinds env)) with
+  Some k -> k
+  None -> KStar
+
+tyVar : Checker -> Pos -> TvEnv -> String -> Kind -> <IO> Type
+tyVar c p env name k = match Map.lookup name (readRef (envVars env)) with
+  Some t ->
+    let old = envKindOf env name
+    match unifyKind old k with
+      True -> ()
+      False -> errorf c p "kind mismatch for type variable '${name}': expected ${kindString k}, but it is used as ${kindString old}"
+    t
+  None
+    | readRef (envFixed env) ->
+        errorf c p "unknown type variable '${name}'"
+        freshType c
+    | envGen env -> addGen env name k
+    | otherwise ->
+        let m = newMeta c k
+        modifyRef (envVars env) (Map.insert name m)
+        modifyRef (envKinds env) (Map.insert name k)
+        m
+
+ambientRow : Checker -> TvEnv -> <IO> Type
+ambientRow c env = match readRef (envArrows env) with
+  1 -> TRowEmpty
+  2 -> freshRow c
+  _ -> match readRef (envAmbient env) with
+    Some t -> t
+    None ->
+      let t = match envGen env with
+        True -> addGen env "ε" KRow
+        False -> freshRow c
+      writeRef (envAmbient env) (Some t)
+      t
+
+-- Convert a type expression, returning its kind.
+convType : Checker -> TypeExpr -> TvEnv -> <IO> (Type, Kind)
+convType c te env = match te with
+  TVarE p name ->
+    let fresh = newKVar (cG c)
+    let k = match Map.lookup name (readRef (envKinds env)) with
+      Some old -> old
+      None -> fresh
+    (tyVar c p env name k, k)
+  TConE _ _ _ -> convApp c te [] env
+  TAppE _ (con@(TConE _ _ _)) args -> convApp c con args env
+  TAppE _ f args ->
+    let (ft, kf) = convType c f env
+    let step (t, k) a =
+      let (at2, ka) = convArg c a env
+      let kr = newKVar (cG c)
+      match unifyKind k (KArrow ka kr) with
+        True -> ()
+        False -> errorf c (typePos a) "kind mismatch: cannot apply a type of kind ${kindString k} to ${kindString ka}"
+      (TApp t at2, kr)
+    foldl step (ft, kf) args
+  TFunE _ arg eff res ->
+    let a = convStar c arg env
+    let curried = match res with
+      TFunE _ _ _ _ -> True
+      _ -> False
+    let e = match eff with
+      Some r -> convRow c r env
+      None
+        | curried && readRef (envArrows env) == arrowAmbient -> TRowEmpty
+        | otherwise -> ambientRow c env
+    let r = convStar c res env
+    (TFun a e r, KStar)
+  TTupleE p elems ->
+    let ts = mapList (\e ->
+      let (t, k) = convArg c e env
+      match unifyKind k KStar with
+        True -> ()
+        False -> errorf c (typePos e) "expected a type, but this has kind ${kindString k}"
+      t) elems
+    match length ts > 12 with
+      True ->
+        errorf c p "tuples may have at most 12 elements"
+        (freshType c, KStar)
+      False -> (tTuple c ts, KStar)
+  TUnitE _ -> (tUnit c, KStar)
+
+-- Convert a type argument. In signatures, unannotated arrows inside type
+-- arguments are pure: a `List (Int -> Int)` holds pure functions.
+convArg : Checker -> TypeExpr -> TvEnv -> <IO> (Type, Kind)
+convArg c te env = match readRef (envArrows env) == arrowAmbient with
+  False -> convType c te env
+  True ->
+    writeRef (envArrows env) arrowPure
+    let r = convType c te env
+    writeRef (envArrows env) arrowAmbient
+    r
+
+convStar : Checker -> TypeExpr -> TvEnv -> <IO> Type
+convStar c te env =
+  let (t, k) = convType c te env
+  match unifyKind k KStar with
+    True -> ()
+    False -> errorf c (typePos te) "expected a type, but this has kind ${kindString k}"
+  t
+
+convRow : Checker -> RowE -> TvEnv -> <IO> Type
+convRow c (RowE p labels tailName) env =
+  let ls = mapList (\l ->
+    let (t, k) = convType c l env
+    match unifyKind k KEffect with
+      True -> ()
+      False -> errorf c (typePos l) "expected an effect, but this has kind ${kindString k}"
+    t) labels
+  let tail = match tailName with
+    "" -> TRowEmpty
+    _ -> tyVar c p env tailName KRow
+  mkRow ls tail
+
+private freshPair : Checker -> <IO> (Type, Kind)
+freshPair c =
+  let t = freshType c
+  (t, newKVar (cG c))
+
+convApp : Checker -> TypeExpr -> List TypeExpr -> TvEnv -> <IO> (Type, Kind)
+convApp c con args env =
+  let (p, qual, name) = match con with
+    TConE cp q n -> (cp, q, n)
+    _ -> error "convApp: not a constructor"
+  let headRes = match lookupTypeName c p qual name with
+    None -> Err (freshPair c)
+    Some (TEType ti) -> Ok (TCon (typeInfoName ti) (typeInfoKind ti), typeInfoKind ti, args)
+    Some (TEEffect ei) -> Ok (TCon (effectName ei) (effectKind ei), effectKind ei, args)
+    Some (TEAlias (AliasInfo _ params body _ ascope expanding))
+      | length args < length params ->
+          errorf c p "type alias '${name}' expects ${length params} arguments"
+          Err (freshPair c)
+      | readRef expanding ->
+          errorf c p "type alias '${name}' is recursive"
+          Err (freshPair c)
+      | otherwise ->
+          -- expand in the alias's defining scope with parameters bound
+          let sub = newTvEnv False (readRef (envArrows env))
+          writeRef (envFixed sub) True
+          forEach (zip params args) (\(pn, a) ->
+            let (t, kk) = convArg c a env
+            modifyRef (envVars sub) (Map.insert pn t)
+            modifyRef (envKinds sub) (Map.insert pn kk))
+          writeRef (envAmbient sub) (readRef (envAmbient env))
+          match readRef (envArrows env) == arrowAmbient && isNone (readRef (envAmbient env)) with
+            True -> writeRef (envAmbient sub) (Some (ambientRow c env))
+            False -> ()
+          let c2 = withScope c ascope
+          writeRef expanding True
+          let (h, k) = convType c2 body sub
+          writeRef expanding False
+          Ok (h, k, drop (length params) args)
+    Some (TEClass _) ->
+      errorf c p "'${name}' is a class, not a type"
+      Err (freshPair c)
+    Some (TEAmbig _) -> Err (freshPair c)
+  match headRes with
+    Err r -> r
+    Ok (head, k0, rest) -> applyArgs c name head k0 rest env
+
+private applyArgs : Checker -> String -> Type -> Kind -> List TypeExpr -> TvEnv -> <IO> (Type, Kind)
+applyArgs c name head k args env = match args with
+  [] -> (head, k)
+  a :: rest ->
+    let (at2, ka) = convArg c a env
+    let kr = newKVar (cG c)
+    match unifyKind k (KArrow ka kr) with
+      True -> applyArgs c name (TApp head at2) kr rest env
+      False ->
+        errorf c (typePos a) "kind mismatch: '${name}' cannot be applied to a type of kind ${kindString ka}"
+        freshPair c
+
+-- The checker with another scope (for alias expansion).
+withScope : Checker -> Scope -> Checker
+withScope (Checker g m _ e errs l locals w gv n sigs ms ds) s = Checker g m s e errs l locals w gv n sigs ms ds
+
+-- Convert the type of a definition. Along the spine of a curried
+-- function type, unannotated intermediate arrows (partial application) get
+-- their own polymorphic effect, while the final arrow gets the ambient
+-- effect.
+convSpine : Checker -> TypeExpr -> TvEnv -> <IO> Type
+convSpine c te env = match te with
+  TFunE _ arg None (res@(TFunE _ _ _ _)) | readRef (envArrows env) == arrowAmbient && envGen env ->
+    let a = convStar c arg env
+    modifyRef (envSpine env) (\s -> s + 1)
+    let eff = addGen env "ρ${readRef (envSpine env)}" KRow
+    let r = convSpine c res env
+    TFun a eff r
+  _ -> convStar c te env
+
+-- Names of row variables written as tails.
+rowTails : TypeExpr -> List String -> List String
+rowTails te acc = match te with
+  TFunE _ a eff r ->
+    let acc1 = match eff with
+      Some (RowE _ _ tl) | tl != "" && not (elem tl acc) -> snoc acc tl
+      _ -> acc
+    rowTails r (rowTails a acc1)
+  TAppE _ f args -> foldl (\ac x -> rowTails x ac) (rowTails f acc) args
+  TTupleE _ es -> foldl (\ac x -> rowTails x ac) acc es
+  _ -> acc
+
+-- Convert a written signature to a closed scheme. Free type variables are
+-- implicitly quantified.
+convScheme : Checker -> SchemeE -> TvEnv -> <IO> Scheme
+convScheme c (SchemeE preds te) env =
+  -- a signature that names exactly one row variable uses it as the
+  -- ambient effect of its unannotated arrows
+  match readRef (envArrows env) == arrowAmbient && envGen env && isNone (readRef (envAmbient env)) with
+    True -> match rowTails te [] with
+      [name] | not (Map.member name (readRef (envVars env))) ->
+        writeRef (envAmbient env) (Some (addGen env name KRow))
+      _ -> ()
+    False -> ()
+  let t = convSpine c te env
+  let ps = filterMap id (mapList (\(PredE p q cls pty) -> match lookupClass c p q cls with
+    None -> None
+    Some cl ->
+      let (pt, pk) = convType c pty env
+      let ck = classParamKind cl
+      match unifyKind pk ck with
+        True -> ()
+        False -> errorf c p "kind mismatch in constraint ${cls}: expected ${kindString ck}, got ${kindString pk}"
+      Some (Pred cl pt)) preds)
+  let names = envNames env
+  let kinds = mapList (\n -> defaultKind (envKindOf env n)) names
+  Scheme kinds names ps t
+
+-- Convert a top-level signature.
+sigScheme : Checker -> SchemeE -> <IO> Scheme
+sigScheme c se = convScheme c se (newTvEnv True arrowAmbient)

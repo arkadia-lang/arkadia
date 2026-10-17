@@ -1,0 +1,48 @@
+-- Rendering diagnostics with source snippets.
+module Ark.Render
+
+import Ark.Util
+import Ark.Ast
+import Std.Map as Map
+
+-- ANSI styles: red, bold, blue, reset (all empty without color).
+type Style = Style String String String String
+
+style : Bool -> Style
+style True = Style "\u{1b}[31;1m" "\u{1b}[1m" "\u{1b}[34;1m" "\u{1b}[0m"
+style False = Style "" "" "" ""
+
+-- Line n (1-based) of a file, from the given sources or the file system.
+sourceLine : Map.Map String String -> String -> Int -> <IO> Option String
+sourceLine srcs file n =
+  let content = match Map.lookup file srcs with
+    Some s -> Some s
+    None -> match readFile file with
+      Ok s -> Some s
+      Err _ -> None
+  match content with
+    None -> None
+    Some s -> match n >= 1 with
+      True -> nth (n - 1) (split "\n" s)
+      False -> None
+
+comparePos : Diag -> Diag -> Ordering
+comparePos (Diag (Pos f1 l1 c1) _ _) (Diag (Pos f2 l2 c2) _ _) = compare (f1, l1, c1) (f2, l2, c2)
+
+-- Format errors with source snippets, sorted by position.
+renderDiags : Map.Map String String -> List Diag -> Bool -> <IO> String
+renderDiags srcs errs color =
+  let Style red bold blue reset = style color
+  let one (Diag p msg notes) =
+    let head = bold ++ posString p ++ ":" ++ reset ++ " " ++ red ++ "error:" ++ reset ++ " " ++ bold ++ msg ++ reset ++ "\n"
+    let snippet = match posLine p > 0 with
+      False -> ""
+      True -> match sourceLine srcs (posFile p) (posLine p) with
+        None -> ""
+        Some line ->
+          let num = show (posLine p)
+          let pad = strRepeat (stringLength num) " "
+          let col = max 1 (posCol p)
+          blue ++ pad ++ " |" ++ reset ++ "\n" ++ blue ++ num ++ " |" ++ reset ++ " " ++ replace "\t" " " line ++ "\n" ++ blue ++ pad ++ " |" ++ reset ++ " " ++ strRepeat (col - 1) " " ++ red ++ "^" ++ reset ++ "\n"
+    head ++ snippet ++ concatStrings (mapList (\n -> "  " ++ blue ++ "= note:" ++ reset ++ " " ++ n ++ "\n") notes)
+  concatStrings (mapList one (sortBy comparePos errs))
