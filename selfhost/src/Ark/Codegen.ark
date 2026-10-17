@@ -609,20 +609,21 @@ genApp c e = match e with
         Some n -> Some (v, n)
         None -> None
       _ -> None
-    let direct = match lfun with
+    match lfun with
       Some (v, n) ->
         let vals = genExprs c args
         let fn = "lf_" ++ mangle v
         match compare (length vals) n with
-          EQ -> Some (boxed "${fn}(${codes vals})")
+          EQ -> boxed "${fn}(${codes vals})"
           GT ->
             let head = boxed "${fn}(${codes (take n vals)})"
             let hv = atom c head
-            Some (applyValue hv (drop n vals))
-          LT -> None
-      None -> None
-    match direct with
-      Some v -> v
+            applyValue hv (drop n vals)
+          LT ->
+            -- partial application: apply the closure (the arguments are
+            -- already evaluated)
+            let fv = atom c (genExpr c f)
+            applyValue fv vals
       None ->
         let fv = atom c (genExpr c f)
         let vals = genExprs c args

@@ -429,6 +429,9 @@ func (c *ctx) app(e *core.App) val {
 				head := boxed(fmt.Sprintf("%s(%s)", fn, codes(args[:n])))
 				return c.applyValue(c.atom(head), args[n:])
 			}
+			// partial application: apply the closure (the arguments are
+			// already evaluated)
+			return c.applyValue(c.atom(c.expr(e.Fn)), args)
 		}
 	}
 	f := c.atom(c.expr(e.Fn))

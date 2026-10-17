@@ -1,0 +1,13 @@
+-- Partial application of local functions evaluates the arguments once.
+noisy : Int -> <IO> Int
+noisy x =
+  println "evaluated ${x}"
+  x
+
+main () =
+  let add a b = a + b
+  let f = add (noisy 1)
+  println "${f 2}"
+  let add3 a b c = a + b + c
+  let g = add3 (noisy 10) (noisy 20)
+  println "${g 30} ${g 40}"
