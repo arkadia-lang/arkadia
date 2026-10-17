@@ -43,18 +43,22 @@ main () =
 | インデントによるブロック | `=`, `->`, `where`, `with` の後の字下げがブロックになる |
 | ガード節 | 関数定義と `match` の両方で `\| 条件 = 式` / `\| 条件 -> 式` |
 | where 節 | 等式の本体とガードにまたがる局所束縛。ローカル関数は相互再帰も可 |
-| セルフホスト | コンパイラ自身を Arkadia で実装した `arkc`（[`selfhost/`](selfhost)）が、Go 実装と同一のコードを生成し自分自身をビルドできる |
+| セルフホスト | `ark` コマンドは Arkadia で書かれたコンパイラ（[`compiler/`](compiler)）で、自分自身をビルドできる（固定点に達する） |
 
 ## インストール
 
-Go 1.22 以降が必要です（コンパイラ本体と、生成コードのビルドの両方に使います）。
+Go 1.22 以降と [just](https://github.com/casey/just) が必要です（Go はブートストラップと、生成コードのビルドの両方に使います）。
 
 ```sh
 git clone <this repository> arkadia && cd arkadia
-go build -o ~/.local/bin/ark ./cmd/ark
+just build      # ブートストラップ: bin/ark0 (Go) → bin/ark1 → bin/ark
+just install    # $GOBIN/ark から bin/ark へのシンボリックリンクを張る
 ```
 
-開発に必要なツール（Go・git・[just](https://github.com/casey/just)・Node.js）は Nix flake で管理しています。`nix develop` で開発環境に入り、タスクは `just` で実行します（`just check` / `just test` / `just fmt` / `just bootstrap`、一覧は `just`）。
+`ark` は標準ライブラリ（`lib/`）と Go ランタイム（`runtime/rt`）を、実行ファイル（シンボリックリンクの先）の親ディレクトリ、
+または `$ARKADIA_ROOT` から探します。リポジトリの外に置く場合は `ARKADIA_ROOT` にリポジトリのパスを設定してください。
+
+開発に必要なツール（Go・git・just・Node.js）は Nix flake で管理しています。`nix develop` で開発環境に入り、タスクは `just` で実行します（`just build` / `just check` / `just test` / `just fmt` / `just fixpoint`、一覧は `just`）。
 
 ## クイックスタート
 
@@ -196,18 +200,23 @@ git 依存は解決したコミットが `ark.lock` に記録されます。パ�
 
 ## セルフホスト
 
-[`selfhost/`](selfhost) には Arkadia で書かれた Arkadia コンパイラ `arkc` があります。
-字句解析から型推論（型クラス・エフェクト行）、Go コード生成、REPL、Language Server まで
-Go 実装を忠実に移植したもので、同じ入力に対してバイト単位で同一の Go コードを生成します。
+`ark` コマンドは Arkadia で書かれたコンパイラ（[`compiler/`](compiler)）です。
+字句解析から型推論（型クラス・エフェクト行）、Go コード生成、REPL、Language Server まですべて Arkadia で実装されています。
 
-```sh
-just selfhost     # Go 実装で arkc をビルド → bin/arkc
-just bootstrap    # arkc で arkc を 2 世代ビルドし、生成コードとバイナリが一致する（固定点）ことを確認
-bin/arkc run examples/lisp.ark
+最初の一段だけは Go で書かれたブートストラップ用コンパイラ（[`bootstrap/`](bootstrap)）でビルドします。
+
+```
+bootstrap/ ──go build──▶ bin/ark0 ──build──▶ bin/ark1 ──build──▶ bin/ark ──build──▶ (bin/ark と同一)
 ```
 
-`bin/arkc` は `ark` と同じコマンド（`new` / `build` / `run` / `check` / `test` / `fmt` / `doc` / `repl` / `emit` / `lsp`）を備えています。
-詳しくは [selfhost/README.md](selfhost/README.md) を参照してください。
+```sh
+just build        # bin/ark0 → bin/ark1 → bin/ark
+just fixpoint     # bin/ark で自分自身をビルドし、生成コードとバイナリが一致する（固定点）ことを確認
+```
+
+言語の機能追加や修正は `compiler/` に入れます。ブートストラップ用コンパイラは凍結されていて、
+`compiler/` のソース（とそれが使う標準ライブラリ）をビルドできる限り変更しません。
+詳しくは [compiler/README.md](compiler/README.md) と [bootstrap/README.md](bootstrap/README.md) を参照してください。
 
 ## 標準ライブラリ
 
@@ -281,17 +290,12 @@ main () = serve ":8080" (logRequests (router
 ## 実装の構成
 
 ```
-cmd/ark            CLI
-internal/syntax    字句解析（レイアウト規則）・構文解析・演算子優先順位・脱糖
-internal/types     カインド推論・型推論（HM + 型クラス + エフェクト行）・網羅性検査
-internal/core      中間言語 Core への変換（辞書・パターン・ハンドラ）
-internal/codegen   Core の最適化と Go コード生成
-internal/driver    モジュール読み込み・パッケージ管理・ビルド・テスト
-internal/lsp       Language Server Protocol 実装
-editors/vscode     VS Code 拡張（シンタックスハイライト + LSP クライアント）
-runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エフェクト）
-selfhost           Arkadia で書かれたコンパイラ arkc（セルフホスト版）
+compiler           コンパイラ ark（Arkadia で記述。モジュール構成は compiler/README.md）
 lib                標準ライブラリ（Arkadia で記述）
+runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エフェクト）
+bootstrap          ブートストラップ用コンパイラ（Go で記述、凍結）
+tests              テストスイート（compiler_test.go が bin/ark 相当のコンパイラで実行する）
+editors/vscode     VS Code 拡張（シンタックスハイライト + LSP クライアント）
 ```
 
 ## 制限事項

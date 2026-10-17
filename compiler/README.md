@@ -1,75 +1,72 @@
-# arkc — Arkadia で書かれた Arkadia コンパイラ
+# compiler — Arkadia コンパイラ `ark`
 
-`selfhost/` は Arkadia コンパイラを Arkadia 自身で実装した **セルフホスト版** です。
-Go 実装（`cmd/ark`, `internal/`）を忠実に移植したもので、同じ入力に対して
-**バイト単位で同一の Go コード** を生成します。ブートストラップは固定点に達します。
+`compiler/` は Arkadia コンパイラ `ark` の本体で、Arkadia 自身で書かれています。
+Go で書かれたブートストラップ用コンパイラ（[`../bootstrap`](../bootstrap)）で最初の一段をビルドし、
+以降は自分自身でビルドします。ブートストラップは固定点に達します。
 
 ```
-ark (Go 実装)  ──build──▶  arkc (stage 1)  ──build──▶  arkc (stage 2)  ──build──▶  arkc (stage 3)
-                               │                          │                          │
-                               └──── emit した Go コードはすべて同一、stage 2 と 3 のバイナリも同一 ────┘
+bin/ark0 (Go)  ──build──▶  bin/ark1  ──build──▶  bin/ark  ──build──▶  bin/ark2
+                               │                     │                    │
+                               └──── emit した Go コードはすべて同一、bin/ark と bin/ark2 のバイナリも同一 ────┘
 ```
 
-## ビルドとブートストラップ
+## ビルドとテスト
 
 ```sh
-just selfhost     # Go 実装で selfhost/ をビルド → bin/arkc
-just bootstrap    # arkc で自分自身を 2 回ビルドし、各世代の生成コードとバイナリが一致することを確認
+just build        # bin/ark0 → bin/ark1 → bin/ark
+just fixpoint     # bin/ark で自分自身をビルドし、各世代の生成コードとバイナリが一致することを確認
+just test         # テストスイート（../tests/compiler_test.go）
 ```
 
-`go test ./...` に含まれる `TestSelfHost`（`internal/driver/selfhost_test.go`）は次を検査します。
+`go test ./...` に含まれる `tests/compiler_test.go` は、上と同じ手順で自分自身がビルドしたコンパイラを作り、次を検査します。
 
-- `tests/run` と `examples` の全プログラムについて、arkc が Go 実装と同一の Go コードを生成する
+- 自分自身のソースについて、ブートストラップ用コンパイラがビルドした段と同一のコードを生成する（固定点）
+- `tests/run` と `examples` の全プログラムの出力が `.out` と一致する
 - `tests/errors` の全プログラムについて、期待されるコンパイルエラーを報告する
-- `tests/fmt` の整形例と、リポジトリの全ソース（およびインデントを崩したもの）について、Go 実装と同一の整形結果を出す
-- arkc 自身のソースについて同一のコードを生成し、arkc がビルドした arkc（stage 2）も同一のコードを生成する
+- `tests/fmt` の整形例と、リポジトリの全ソース（およびインデントを崩したもの）を安定して整形する
+- `tests/unit` の単体テストが通る
 
 ## 使い方
 
-`ark` と同じコマンドを備えています。
-
 ```sh
-bin/arkc run examples/json.ark
-bin/arkc new hello && cd hello && ../bin/arkc run && ../bin/arkc test
-bin/arkc build | run | check | test | fmt | emit | doc | repl | lsp | new | version
+bin/ark run examples/json.ark
+bin/ark new hello && cd hello && ../bin/ark run && ../bin/ark test
+bin/ark build | run | check | test | fmt | emit | doc | repl | lsp | new | version
 ```
 
 標準ライブラリ（`lib/`）と Go ランタイム（`runtime/rt`）は `$ARKADIA_ROOT`、
-または arkc の実行ファイルの親ディレクトリから探します（`bin/arkc` ならリポジトリのルート）。
-VS Code 拡張の LSP として使う場合も `ark lsp` と同じ応答を返します。
+または実行ファイルの親ディレクトリから探します（`bin/ark` ならリポジトリのルート）。
 
 ## 構成
 
-各モジュールは Go 実装のパッケージ・ファイルにほぼ一対一で対応しています。
+| モジュール | 内容 |
+|---|---|
+| `Ark.Ast` | トークン・構文木（型検査器が埋める `Ref` 付き）・型・カインド・各種 Info |
+| `Ark.Lexer` | 字句解析・レイアウト規則 |
+| `Ark.Format` | ソースの整形（`ark fmt`） |
+| `Ark.Parser` | 再帰下降パーサ（エラーは `Exn` エフェクトで脱出） |
+| `Ark.Fixity` | 演算子の結合性解決・負号/セクション/補間の脱糖 |
+| `Ark.Types` | カインド・型の操作、型の表示、単一化（エフェクト行）、検査器の状態、名前解決、型式の変換 |
+| `Ark.Infer` | 式・パターン・束縛の型推論、制約解決、汎化 |
+| `Ark.Check` | 宣言（型・エフェクト・クラス・インスタンス・deriving）とモジュール単位の検査 |
+| `Ark.Exhaust` | 網羅性検査 |
+| `Ark.Loader` / `Ark.Render` | モジュールの読み込み・エラー表示 |
+| `Ark.Core` / `Ark.Lower` | 中間言語 Core とその生成 |
+| `Ark.Opt` / `Ark.Codegen` | Core の最適化と Go コード生成 |
+| `Ark.Project` / `Ark.Build` | `ark.toml`（path / git 依存、`ark.lock`）、Go モジュールの生成と `go build` |
+| `Ark.Repl` / `Ark.Lsp` / `Ark.Json` | REPL、Language Server |
+| `Main` | CLI |
 
-| モジュール | 内容 | Go 実装 |
-|---|---|---|
-| `Ark.Ast` | トークン・構文木（型検査器が埋める `Ref` 付き）・型・カインド・各種 Info | `syntax/ast.go`, `syntax/token.go`, `types/types.go`, `types/env.go` |
-| `Ark.Lexer` | 字句解析・レイアウト規則 | `syntax/lexer.go`, `syntax/layout.go` |
-| `Ark.Format` | ソースの整形（`arkc fmt`） | `syntax/format.go` |
-| `Ark.Parser` | 再帰下降パーサ（エラーは `Exn` エフェクトで脱出） | `syntax/parser.go` |
-| `Ark.Fixity` | 演算子の結合性解決・負号/セクション/補間の脱糖 | `syntax/fixity.go` |
-| `Ark.Types` | カインド・型の操作、型の表示、単一化（エフェクト行）、検査器の状態、名前解決、型式の変換 | `types/types.go`, `types/unify.go`, `types/check.go` |
-| `Ark.Infer` | 式・パターン・束縛の型推論、制約解決、汎化 | `types/infer.go`, `types/binds.go` |
-| `Ark.Check` | 宣言（型・エフェクト・クラス・インスタンス・deriving）とモジュール単位の検査 | `types/decls.go`, `types/binds.go` |
-| `Ark.Exhaust` | 網羅性検査 | `types/exhaust.go` |
-| `Ark.Loader` / `Ark.Render` | モジュールの読み込み・エラー表示 | `driver/load.go`, `diag/diag.go` |
-| `Ark.Core` / `Ark.Lower` | 中間言語 Core とその生成 | `core/` |
-| `Ark.Opt` / `Ark.Codegen` | Core の最適化と Go コード生成 | `codegen/` |
-| `Ark.Project` / `Ark.Build` | `ark.toml`（path / git 依存、`ark.lock`）、Go モジュールの生成と `go build` | `driver/project.go`, `driver/build.go` |
-| `Ark.Repl` / `Ark.Lsp` / `Ark.Json` | REPL、Language Server | `driver/repl.go`, `lsp/` |
-| `Main` | CLI | `driver/cli.go` |
+## 開発メモ
 
-## 実装メモ
-
+- **ブートストラップの制約**: `compiler/src` と、それが import する標準ライブラリのモジュールは、
+  ブートストラップ用コンパイラ（凍結）でもビルドできる必要があります。新しい言語機能は `compiler/` に実装しますが、
+  それをコンパイラ自身のソースや、コンパイラが import する標準ライブラリのモジュールで使うには、先にブートストラップ用コンパイラを更新する必要があります。
+  `runtime/rt` の変更も、ブートストラップ用コンパイラが生成するコードと互換に保ちます。
 - **可変状態**: 型検査器のメタ変数・カインド変数、辞書の解、検査結果の注釈などは
   `Ref`（`newRef` / `readRef` / `writeRef`、`<IO>` エフェクト付き）で表します。
-  Go 実装がポインタで共有している状態を、構文木やレコードに `Ref` を持たせて再現しています。
 - **エラー**: パーサの脱出と単一化の失敗は `Std.Exn` の `throw` / `try` で表します
   （どちらも継続を捨てるハンドラなので、ランタイムでは panic/recover の高速パスで動きます）。
-- **生成コードの一致**: 一意な名前の採番（`x_12`, `arg$3`, `t45` など）や走査順序まで
-  Go 実装と同じになるように移植しています。Go 実装を変更するときは arkc にも同じ変更を入れてください
-  （`TestSelfHost` が差分を検出します）。
 - **FFI**（`native/native.go`）は標準ライブラリにない汎用の機能だけに限っています:
   可変参照、Go と同じ数値リテラルの解釈と浮動小数の表示、パス操作、`go/format` による整形、
   外部コマンドの実行、LSP 用の標準入出力。コンパイラのロジックはすべて Arkadia で書かれています。
