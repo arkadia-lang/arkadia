@@ -26,7 +26,10 @@ func Optimize(p *core.Program) {
 	}
 	for _, f := range p.Funcs {
 		if isSmall(f) {
-			o.small[f.Sym] = f
+			// Keep the unoptimized body: optimizing it may introduce let
+			// bindings (from inlined calls), whose names would clash when
+			// the function is inlined twice into the same scope.
+			o.small[f.Sym] = &core.Func{Sym: f.Sym, Params: f.Params, Body: f.Body}
 		}
 	}
 	for round := 0; round < 3; round++ {
