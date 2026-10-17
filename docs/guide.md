@@ -408,4 +408,11 @@ foreign sqrt : Float -> Float = "rt.FloatSqrt"
 - 自己末尾呼び出し（トップレベル関数・ローカル関数）はループにコンパイルされます。それ以外の再帰も Go の伸長可能なスタックにより深い再帰が可能です。
 - 値は一様表現（`any`）ですが、`Int`/`Float` の演算は静的に分かる範囲でボックス化せずに行います。
 - メモリは Go の GC が管理します。
-- 実行時エラー（`error`、0 除算、パターン不一致、未処理エフェクト）はメッセージを表示して終了します。`ARKADIA_TRACE=1` で Go のスタックトレースを表示します。
+- 実行時エラー（`error`、0 除算、パターン不一致、未処理エフェクト）はメッセージと、エラーが起きた時点で実行中だった Arkadia の関数（内側から順、再帰はまとめて回数表示）を表示して終了します。`ARKADIA_TRACE=1` で Go のスタックトレースも表示します。
+
+```
+runtime error: division by zero
+  in Main.average
+  in Main.loop (4 times)
+  in Main.main
+```

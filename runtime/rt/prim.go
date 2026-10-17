@@ -17,7 +17,8 @@ import (
 
 // ArkError is a runtime error raised by `error` or by the runtime.
 type ArkError struct {
-	Msg string
+	Msg   string
+	Trace []string // Arkadia functions on the stack where it was raised
 }
 
 func (e *ArkError) Error() string { return e.Msg }
@@ -59,9 +60,14 @@ func run(entry func()) (code int) {
 				code = e.Code
 			case *ArkError:
 				fmt.Fprintf(os.Stderr, "runtime error: %s\n", e.Msg)
+				if e.Trace == nil {
+					e.Trace = arkTrace()
+				}
+				printTrace(e.Trace)
 				code = 1
 			default:
 				fmt.Fprintf(os.Stderr, "runtime error: %v\n", r)
+				printTrace(arkTrace())
 				if os.Getenv("ARKADIA_TRACE") != "" {
 					os.Stderr.Write(debug.Stack())
 				}

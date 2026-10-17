@@ -196,7 +196,7 @@ func Handle(h *Handler, body func() Value) Value {
 					}
 					return
 				}
-				f.ch <- msg{kind: msgPanic, err: r}
+				f.ch <- msg{kind: msgPanic, err: withTrace(r)}
 			}
 		}()
 		cur = f
