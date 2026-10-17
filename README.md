@@ -54,6 +54,8 @@ git clone <this repository> arkadia && cd arkadia
 go build -o ~/.local/bin/ark ./cmd/ark
 ```
 
+Nix を使う場合は `nix develop` で Go と make の入った開発環境に入れます（`make check` / `make test` / `make bootstrap`）。
+
 ## クイックスタート
 
 ```sh
