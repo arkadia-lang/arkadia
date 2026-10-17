@@ -21,3 +21,73 @@ capitalize : String -> String
 capitalize s = match chars s with
   [] -> ""
   c :: cs -> toUpper (charToString c) ++ fromChars cs
+
+foreign lastIndexOf : String -> String -> Option Int = "rt.StringLastIndexOf"
+-- Split around the first occurrence of the separator.
+foreign splitOnce : String -> String -> Option (String, String) = "rt.StringSplitOnce"
+-- Number of non-overlapping occurrences of a substring.
+foreign occurrences : String -> String -> Int = "rt.StringCount"
+foreign replaceFirst : String -> String -> String -> String = "rt.StringReplaceFirst"
+-- Remove the given characters from both ends: trimChars "-*" "--a*" == "a"
+foreign trimChars : String -> String -> String = "rt.StringTrimChars"
+foreign equalIgnoringCase : String -> String -> Bool = "rt.StringEqualFold"
+-- Length in UTF-8 bytes (`stringLength` counts characters).
+foreign byteLength : String -> Int = "rt.StringByteLength"
+
+-- The first n characters.
+take : Int -> String -> String
+take n s = substring 0 n s
+
+drop : Int -> String -> String
+drop n s = substring n (stringLength s) s
+
+takeEnd : Int -> String -> String
+takeEnd n s =
+  let len = stringLength s
+  substring (len - n) len s
+
+dropEnd : Int -> String -> String
+dropEnd n s = substring 0 (stringLength s - n) s
+
+stripPrefix : String -> String -> Option String
+stripPrefix pre s
+  | startsWith pre s = Some (drop (stringLength pre) s)
+  | otherwise = None
+
+stripSuffix : String -> String -> Option String
+stripSuffix suf s
+  | endsWith suf s = Some (dropEnd (stringLength suf) s)
+  | otherwise = None
+
+-- Pad on both sides to the given width (extra padding goes on the right).
+center : Int -> Char -> String -> String
+center n c s =
+  let total = n - stringLength s
+  let left = total / 2
+  padRight n c (padLeft (stringLength s + left) c s)
+
+-- Only whitespace (or empty).
+isBlank : String -> Bool
+isBlank s = trim s == ""
+
+-- Lines, accepting both "\n" and "\r\n" line endings.
+splitLines : String -> List String
+splitLines s = lines (replace "\r\n" "\n" s)
+
+uncapitalize : String -> String
+uncapitalize s = match chars s with
+  [] -> ""
+  c :: cs -> toLower (charToString c) ++ fromChars cs
+
+-- Break text into lines of at most `width` characters at spaces. Words
+-- longer than the width get a line of their own.
+wrap : Int -> String -> List String
+wrap width s = match words s with
+  [] -> []
+  w :: ws -> Prelude.reverse (wrapAcc width ws w [])
+
+private wrapAcc : Int -> List String -> String -> List String -> List String
+wrapAcc _ [] line acc = line :: acc
+wrapAcc width (w :: ws) line acc
+  | stringLength line + 1 + stringLength w <= width = wrapAcc width ws (line ++ " " ++ w) acc
+  | otherwise = wrapAcc width ws w (line :: acc)

@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------- bits
@@ -231,5 +233,40 @@ func StringCharAt(i, s Value) Value {
 
 func StringTrimStart(s Value) Value { return strings.TrimLeft(s.(string), " \t\r\n") }
 func StringTrimEnd(s Value) Value   { return strings.TrimRight(s.(string), " \t\r\n") }
+
+func StringLastIndexOf(sub, s Value) Value {
+	i := strings.LastIndex(s.(string), sub.(string))
+	if i < 0 {
+		return None
+	}
+	return Some(int64(utf8.RuneCountInString(s.(string)[:i])))
+}
+
+// StringSplitOnce splits around the first occurrence of sep.
+func StringSplitOnce(sep, s Value) Value {
+	before, after, found := strings.Cut(s.(string), sep.(string))
+	if !found {
+		return None
+	}
+	return Some(Tuple(before, after))
+}
+
+func StringCount(sub, s Value) Value { return int64(strings.Count(s.(string), sub.(string))) }
+
+func StringReplaceFirst(old, new, s Value) Value {
+	return strings.Replace(s.(string), old.(string), new.(string), 1)
+}
+
+func StringTrimChars(cutset, s Value) Value { return strings.Trim(s.(string), cutset.(string)) }
+func StringEqualFold(a, b Value) Value      { return strings.EqualFold(a.(string), b.(string)) }
+func StringByteLength(s Value) Value        { return int64(len(s.(string))) }
+
+// ---------------------------------------------------------------- chars
+
+func CharToUpper(c Value) Value   { return unicode.ToUpper(c.(rune)) }
+func CharToLower(c Value) Value   { return unicode.ToLower(c.(rune)) }
+func CharIsPunct(c Value) Value   { return unicode.IsPunct(c.(rune)) || unicode.IsSymbol(c.(rune)) }
+func CharIsControl(c Value) Value { return unicode.IsControl(c.(rune)) }
+func CharIsPrint(c Value) Value   { return unicode.IsPrint(c.(rune)) }
 
 func NanoTime(_ Value) Value { return time.Now().UnixNano() }
