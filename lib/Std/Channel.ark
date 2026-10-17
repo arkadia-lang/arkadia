@@ -1,0 +1,82 @@
+-- Channels: queues that pass values between tasks (Std.Task).
+--
+--   import Std.Channel as Chan
+--   import Std.Task as Task
+--
+--   main () =
+--     let ch = Chan.new 10
+--     Task.scoped (\s ->
+--       let _ = Task.fork s (\_ ->
+--         forEach [1 .. 5] (\i -> Chan.send ch (i * i))
+--         Chan.close ch)
+--       Chan.forEach ch (\n -> println (show n)))
+--
+-- A channel created with capacity 0 is unbuffered: send waits for a
+-- receiver. Sending and receiving are cancellation points.
+module Std.Channel
+
+type Channel a
+
+-- An alternative of `select`.
+type Case b
+
+-- A channel holding up to n values that have not been received yet.
+foreign new : Int -> <IO> Channel a = "rt.ChanNew"
+
+-- Send a value, waiting while the channel is full. Sending on a closed
+-- channel is an error.
+foreign send : Channel a -> a -> <IO> Unit = "rt.ChanSend"
+
+-- Receive a value, waiting while the channel is empty: None once the
+-- channel is closed and every value sent has been received.
+foreign receive : Channel a -> <IO> Option a = "rt.ChanReceive"
+
+-- Send without waiting: False if the channel is full.
+foreign trySend : Channel a -> a -> <IO> Bool = "rt.ChanTrySend"
+
+-- Receive without waiting: None if no value is available now.
+foreign tryReceive : Channel a -> <IO> Option a = "rt.ChanTryReceive"
+
+-- No more values will be sent; receivers get the remaining ones, then None.
+foreign close : Channel a -> <IO> Unit = "rt.ChanClose"
+
+-- The number of values sent and not yet received.
+foreign length : Channel a -> <IO> Int = "rt.ChanLength"
+
+-- Wait until one of the alternatives can proceed and return its result.
+-- When several can, one is chosen at random.
+--
+--   match Chan.select [Chan.onReceive jobs Job, Chan.after 1.0 Idle] with
+--     Job (Some j) -> run j
+--     Job None -> ()   -- jobs was closed
+--     Idle -> println "waiting..."
+foreign select : List (Case b) -> <IO> b = "rt.ChanSelect"
+
+-- Receive a value (None if the channel is closed) and map it to the result.
+foreign onReceive : Channel a -> (Option a -> <> b) -> Case b = "rt.SelectOnReceive"
+
+-- Send a value; the result is the given one.
+foreign onSend : Channel a -> a -> b -> Case b = "rt.SelectOnSend"
+
+-- Proceed after a number of seconds with the given result.
+foreign after : Float -> b -> Case b = "rt.SelectAfter"
+
+-- Receive every value until the channel is closed.
+forEach : Channel a -> (a -> <IO | e> Unit) -> <IO | e> Unit
+forEach ch f = match receive ch with
+  Some x ->
+    f x
+    forEach ch f
+  None -> ()
+
+-- All the values received until the channel is closed.
+toList : Channel a -> <IO> List a
+toList ch =
+  let loop acc = match receive ch with
+    Some x -> loop (x :: acc)
+    None -> reverse acc
+  loop []
+
+-- Send every element of a list, in order.
+sendAll : Channel a -> List a -> <IO> Unit
+sendAll ch xs = Prelude.forEach xs (send ch)
