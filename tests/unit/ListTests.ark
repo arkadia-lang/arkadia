@@ -1,0 +1,96 @@
+-- Unit tests for Std.List.
+module ListTests
+
+import Std.List
+
+test "unfold and rangeStep" =
+  assertEq (unfold (\n -> match n > 0 with
+      True -> Some (n, n - 1)
+      False -> None) 3) [3, 2, 1]
+  assertEq (rangeStep 0 10 3) [0, 3, 6, 9]
+  assertEq (rangeStep 5 0 -2) [5, 3, 1]
+  assertEq (cycle 5 [1, 2]) [1, 2, 1, 2, 1]
+
+test "span, break and init" =
+  assertEq (span even [2, 4, 5, 6]) ([2, 4], [5, 6])
+  assertEq (break (\x -> x > 2) [1, 2, 3, 1]) ([1, 2], [3, 1])
+  assertEq (init [1, 2, 3]) (Some [1, 2])
+  assertEq (init ([] : List Int)) None
+
+test "takeLast, dropLast, dropWhileEnd" =
+  assertEq (takeLast 2 [1, 2, 3], dropLast 2 [1, 2, 3]) ([2, 3], [1])
+  assertEq (dropWhileEnd (\c -> c == ' ') (chars "ab  ")) ['a', 'b']
+
+test "prefixes and suffixes" =
+  assertEq (stripPrefix [1, 2] [1, 2, 3]) (Some [3])
+  assertEq (stripSuffix [3] [1, 2, 3]) (Some [1, 2])
+  assert (isPrefixOf [1] [1, 2] && isSuffixOf [2] [1, 2] && isInfixOf [2, 3] [1, 2, 3, 4]) "affixes"
+  assert (not (isInfixOf [3, 2] [1, 2, 3])) "not infix"
+
+test "chunks, windows and splitting" =
+  assertEq (chunksOf 2 [1, 2, 3, 4, 5]) [[1, 2], [3, 4], [5]]
+  assertEq (windows 2 [1, 2, 3]) [[1, 2], [2, 3]]
+  assertEq (windows 4 [1, 2, 3]) []
+  assertEq (splitOn 0 [1, 0, 2, 3, 0]) [[1], [2, 3], []]
+
+test "inits, tails, subsequences, permutations" =
+  assertEq (inits [1, 2]) [[], [1], [1, 2]]
+  assertEq (tails [1, 2]) [[1, 2], [2], []]
+  assertEq (subsequences [1, 2, 3]) [[], [1], [2], [1, 2], [3], [1, 3], [2, 3], [1, 2, 3]]
+  assertEq (permutations [1, 2, 3]) [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]]
+
+test "searching" =
+  assertEq (findIndex (\x -> x > 2) [1, 3, 5]) (Some 1)
+  assertEq (findIndices even [1, 2, 3, 4]) [1, 3]
+  assertEq (elemIndex 'c' (chars "abc")) (Some 2)
+  assertEq (findMap (\x -> match x > 1 with
+      True -> Some (x * 10)
+      False -> None) [1, 2, 3]) (Some 20)
+  assertEq (maximumOn snd [(1, 'a'), (2, 'c'), (3, 'c')]) (Some (2, 'c'))
+  assertEq (minimumOn negate [1, 5, 3]) (Some 5)
+  assertEq (countBy odd [1, 2, 3]) 2
+  assertEq (and [True, False], or [True, False]) (False, True)
+
+test "updating by position" =
+  assertEq (updateAt 1 (* 10) [1, 2, 3]) [1, 20, 3]
+  assertEq (setAt 5 0 [1, 2]) [1, 2]
+  assertEq (removeAt 0 [1, 2, 3], insertAt 1 9 [1, 2]) ([2, 3], [1, 9, 2])
+  assertEq (swap 0 2 [1, 2, 3]) [3, 2, 1]
+
+test "transformations" =
+  assertEq (mapIndexed (\i x -> i * x) [5, 5, 5]) [0, 5, 10]
+  assertEq (foldlIndexed (\acc i x -> acc + i * x) 0 [1, 1, 1]) 3
+  assertEq (intercalate [0] [[1], [2, 3]]) [1, 0, 2, 3]
+  assertEq (transpose [[1, 2, 3], [4], [5, 6]]) [[1, 4, 5], [2, 6], [3]]
+  assertEq (scanl (+) 0 [1, 2, 3]) [0, 1, 3, 6]
+  assertEq (scanr (+) 0 [1, 2, 3]) [6, 5, 3, 0]
+  assertEq (reduce (*) [2, 3, 4], reduce (*) ([] : List Int)) (Some 24, None)
+  assertEq (foldWhile (\acc x -> match acc + x > 5 with
+      True -> Err acc
+      False -> Ok (acc + x)) 0 [1, 2, 3, 4]) 3
+  assertEq (mapAccum (\s x -> (s + x, s)) 0 [1, 2, 3]) (6, [0, 1, 3])
+  assertEq (partitionResults [Ok 1, Err "a", Ok 2]) (["a"], [1, 2])
+  assertEq (catOptions [Some 1, None, Some 3]) [1, 3]
+
+test "zipping" =
+  assertEq (zip3 [1, 2] ['a', 'b'] [True]) [(1, 'a', True)]
+  assertEq (unzip3 [(1, 'a', "x"), (2, 'b', "y")]) ([1, 2], ['a', 'b'], ["x", "y"])
+  assertEq (pairwise [1, 2, 3]) [(1, 2), (2, 3)]
+  assertEq (cartesian [1, 2] ['a', 'b']) [(1, 'a'), (1, 'b'), (2, 'a'), (2, 'b')]
+
+test "grouping and deduplication" =
+  assertEq (group [1, 1, 2, 1]) [[1, 1], [2], [1]]
+  assertEq (groupOn (\x -> x / 10) [1, 5, 12, 31]) [(0, [1, 5]), (1, [12]), (3, [31])]
+  assertEq (nubOn fst [(1, 'a'), (2, 'b'), (1, 'c')]) [(1, 'a'), (2, 'b')]
+  assertEq (nubSorted [3, 1, 3, 2, 1]) [1, 2, 3]
+  assertEq (frequencies (chars "abca")) [('a', 2), ('b', 1), ('c', 1)]
+
+test "sorting and set-like operations" =
+  assertEq (sortDesc [2, 3, 1]) [3, 2, 1]
+  assertEq (insertSorted 3 [1, 2, 4, 5]) [1, 2, 3, 4, 5]
+  assert (isSorted [1, 2, 2, 3] && not (isSorted [2, 1])) "isSorted"
+  assertEq (delete 2 [1, 2, 3, 2]) [1, 3, 2]
+  assertEq (difference [1, 2, 3, 4] [2, 4]) [1, 3]
+  assertEq (union [1, 2] [2, 3, 3]) [1, 2, 3]
+  assertEq (intersect [1, 2, 3] [3, 1]) [1, 3]
+  assertEq (sumBy stringLength ["ab", "cde"]) 5

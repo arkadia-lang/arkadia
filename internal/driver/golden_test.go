@@ -75,14 +75,15 @@ func TestCompileErrors(t *testing.T) {
 	}
 }
 
-// TestUnitTests builds the Arkadia unit tests with the test runner.
+// TestUnitTests builds the Arkadia unit tests (every module in tests/unit)
+// with the test runner.
 func TestUnitTests(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a native executable")
 	}
-	f := "../../tests/unit/StdTests.ark"
-	l := NewLoader([]string{filepath.Dir(f)})
-	p, err := l.LoadModules([]string{"StdTests"})
+	dir := "../../tests/unit"
+	l := NewLoader([]string{dir})
+	p, err := l.LoadModules(modulesIn(dir))
 	if err != nil {
 		t.Fatal(l.Sources.Render(err, false))
 	}

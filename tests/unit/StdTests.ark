@@ -1,4 +1,5 @@
--- Unit tests for the standard library, run with `ark test tests/unit/StdTests.ark`.
+-- Unit tests for the Prelude and the standard library. Run every module
+-- under tests/unit with `go test ./internal/driver -run TestUnitTests`.
 module StdTests
 
 import Std.Map as Map

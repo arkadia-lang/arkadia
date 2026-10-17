@@ -1,0 +1,411 @@
+-- More list functions. Nothing here shadows a Prelude name, so the module
+-- can be imported unqualified:
+--
+--   import Std.List
+--   groupBy (\a b -> a / 10 == b / 10) [1, 5, 12, 18, 31]  -- [[1, 5], [12, 18], [31]]
+module Std.List
+
+-- ===================================================================
+-- Building lists
+-- ===================================================================
+
+singleton : a -> List a
+singleton x = [x]
+
+-- Build a list from a seed: `None` stops, `Some (x, s)` emits x and continues.
+unfold : (b -> Option (a, b)) -> b -> List a
+unfold f s = reverse (unfoldAcc f s [])
+
+private unfoldAcc : (b -> Option (a, b)) -> b -> List a -> List a
+unfoldAcc f s acc = match f s with
+  None -> acc
+  Some (x, s2) -> unfoldAcc f s2 (x :: acc)
+
+-- `rangeStep a b step` counts from a towards b (exclusive) by step.
+rangeStep : Int -> Int -> Int -> List Int
+rangeStep a b step
+  | step > 0 = unfold (\i -> match i < b with
+      True -> Some (i, i + step)
+      False -> None) a
+  | step < 0 = unfold (\i -> match i > b with
+      True -> Some (i, i + step)
+      False -> None) a
+  | otherwise = error "Std.List.rangeStep: step must not be zero"
+
+-- The first n elements of the list repeated forever.
+cycle : Int -> List a -> List a
+cycle _ [] = []
+cycle n xs = take n (concat (replicate (n / length xs + 1) xs))
+
+-- ===================================================================
+-- Sublists
+-- ===================================================================
+
+-- All but the last element.
+init : List a -> Option (List a)
+init [] = None
+init xs = Some (reverse (drop 1 (reverse xs)))
+
+-- `span p xs` is (takeWhile p xs, dropWhile p xs), in one pass.
+span : (a -> Bool) -> List a -> (List a, List a)
+span p xs = spanAcc p xs []
+
+private spanAcc : (a -> Bool) -> List a -> List a -> (List a, List a)
+spanAcc p (x :: xs) acc
+  | p x = spanAcc p xs (x :: acc)
+spanAcc _ xs acc = (reverse acc, xs)
+
+-- `break p` is `span (not << p)`.
+break : (a -> Bool) -> List a -> (List a, List a)
+break p xs = span (\x -> not (p x)) xs
+
+takeLast : Int -> List a -> List a
+takeLast n xs = drop (length xs - n) xs
+
+dropLast : Int -> List a -> List a
+dropLast n xs = take (length xs - n) xs
+
+-- Drop the longest prefix whose elements satisfy p, from the end.
+dropWhileEnd : (a -> Bool) -> List a -> List a
+dropWhileEnd p xs = reverse (dropWhile p (reverse xs))
+
+stripPrefix : Eq a => List a -> List a -> Option (List a)
+stripPrefix [] ys = Some ys
+stripPrefix (x :: xs) (y :: ys)
+  | x == y = stripPrefix xs ys
+stripPrefix _ _ = None
+
+stripSuffix : Eq a => List a -> List a -> Option (List a)
+stripSuffix suf xs = map reverse (stripPrefix (reverse suf) (reverse xs))
+
+-- Split into chunks of n elements (the last one may be shorter).
+chunksOf : Int -> List a -> List (List a)
+chunksOf n xs
+  | n <= 0 = error "Std.List.chunksOf: size must be positive"
+  | otherwise = reverse (chunksAcc n xs [])
+
+private chunksAcc : Int -> List a -> List (List a) -> List (List a)
+chunksAcc _ [] acc = acc
+chunksAcc n xs acc =
+  let (c, rest) = splitAt n xs
+  chunksAcc n rest (c :: acc)
+
+-- All contiguous sublists of length n: windows 2 [1, 2, 3] == [[1, 2], [2, 3]]
+windows : Int -> List a -> List (List a)
+windows n xs
+  | n <= 0 = []
+  | otherwise = reverse (windowsAcc n (length xs) xs [])
+
+private windowsAcc : Int -> Int -> List a -> List (List a) -> List (List a)
+windowsAcc n len xs acc
+  | len < n = acc
+  | otherwise = match xs with
+      [] -> acc
+      _ :: rest -> windowsAcc n (len - 1) rest (take n xs :: acc)
+
+-- Split at every element satisfying p, dropping the separators.
+splitWhen : (a -> Bool) -> List a -> List (List a)
+splitWhen p xs = match break p xs with
+  (chunk, []) -> [chunk]
+  (chunk, _ :: rest) -> chunk :: splitWhen p rest
+
+-- Split at every occurrence of a separator element.
+splitOn : Eq a => a -> List a -> List (List a)
+splitOn sep xs = splitWhen (\x -> x == sep) xs
+
+-- inits [1, 2] == [[], [1], [1, 2]]
+inits : List a -> List (List a)
+inits xs = map (\n -> take n xs) (0 .. length xs)
+
+-- tails [1, 2] == [[1, 2], [2], []]
+tails : List a -> List (List a)
+tails [] = [[]]
+tails (x :: xs) = (x :: xs) :: tails xs
+
+-- All subsequences, in order: subsequences [1, 2] == [[], [1], [2], [1, 2]]
+subsequences : List a -> List (List a)
+subsequences xs = [] :: nonEmptySubsequences xs
+
+private nonEmptySubsequences : List a -> List (List a)
+nonEmptySubsequences [] = []
+nonEmptySubsequences (x :: xs) =
+  [x] :: foldr (\ys r -> ys :: (x :: ys) :: r) [] (nonEmptySubsequences xs)
+
+-- All permutations, in lexicographic order of positions.
+permutations : List a -> List (List a)
+permutations [] = [[]]
+permutations xs =
+  concatMap (\(i, x) -> map (\p -> x :: p) (permutations (removeAt i xs))) (enumerate xs)
+
+-- ===================================================================
+-- Predicates
+-- ===================================================================
+
+isPrefixOf : Eq a => List a -> List a -> Bool
+isPrefixOf xs ys = isSome (stripPrefix xs ys)
+
+isSuffixOf : Eq a => List a -> List a -> Bool
+isSuffixOf xs ys = isPrefixOf (reverse xs) (reverse ys)
+
+isInfixOf : Eq a => List a -> List a -> Bool
+isInfixOf xs ys = any (isPrefixOf xs) (tails ys)
+
+and : List Bool -> Bool
+and bs = all id bs
+
+or : List Bool -> Bool
+or bs = any id bs
+
+-- Number of elements satisfying p.
+countBy : (a -> Bool) -> List a -> Int
+countBy p xs = foldl (\n x -> match p x with
+    True -> n + 1
+    False -> n) 0 xs
+
+-- ===================================================================
+-- Searching and indexing
+-- ===================================================================
+
+findIndex : (a -> Bool) -> List a -> Option Int
+findIndex p xs = findIndexFrom p xs 0
+
+private findIndexFrom : (a -> Bool) -> List a -> Int -> Option Int
+findIndexFrom _ [] _ = None
+findIndexFrom p (x :: xs) i
+  | p x = Some i
+  | otherwise = findIndexFrom p xs (i + 1)
+
+findIndices : (a -> Bool) -> List a -> List Int
+findIndices p xs = filterMap (\(i, x) -> match p x with
+    True -> Some i
+    False -> None) (enumerate xs)
+
+elemIndex : Eq a => a -> List a -> Option Int
+elemIndex x xs = findIndex (\y -> y == x) xs
+
+-- Return the first element that maps to Some.
+findMap : (a -> Option b) -> List a -> Option b
+findMap _ [] = None
+findMap f (x :: xs) = match f x with
+  Some y -> Some y
+  None -> findMap f xs
+
+maximumBy : (a -> a -> Ordering) -> List a -> Option a
+maximumBy _ [] = None
+maximumBy cmp (x :: xs) = Some (foldl (\m y -> match cmp y m with
+    GT -> y
+    _ -> m) x xs)
+
+minimumBy : (a -> a -> Ordering) -> List a -> Option a
+minimumBy _ [] = None
+minimumBy cmp (x :: xs) = Some (foldl (\m y -> match cmp y m with
+    LT -> y
+    _ -> m) x xs)
+
+-- The element with the largest key (the first one on ties).
+maximumOn : Ord b => (a -> b) -> List a -> Option a
+maximumOn f xs = maximumBy (\x y -> compare (f x) (f y)) xs
+
+minimumOn : Ord b => (a -> b) -> List a -> Option a
+minimumOn f xs = minimumBy (\x y -> compare (f x) (f y)) xs
+
+-- ===================================================================
+-- Updating by position
+-- ===================================================================
+
+-- Positions outside the list leave it unchanged.
+updateAt : Int -> (a -> a) -> List a -> List a
+updateAt i f xs = mapIndexed (\j x -> match i == j with
+    True -> f x
+    False -> x) xs
+
+setAt : Int -> a -> List a -> List a
+setAt i v xs = updateAt i (const v) xs
+
+removeAt : Int -> List a -> List a
+removeAt i xs = take i xs ++ drop (i + 1) xs
+
+insertAt : Int -> a -> List a -> List a
+insertAt i v xs = take i xs ++ (v :: drop i xs)
+
+-- Swap the elements at two positions.
+swap : Int -> Int -> List a -> List a
+swap i j xs = match (nth i xs, nth j xs) with
+  (Some a, Some b) -> setAt j a (setAt i b xs)
+  _ -> xs
+
+-- ===================================================================
+-- Transformations
+-- ===================================================================
+
+mapIndexed : (Int -> a -> b) -> List a -> List b
+mapIndexed f xs = mapList (\(i, x) -> f i x) (enumerate xs)
+
+-- foldl with the element's index.
+foldlIndexed : (b -> Int -> a -> b) -> b -> List a -> b
+foldlIndexed f z xs = foldl (\acc (i, x) -> f acc i x) z (enumerate xs)
+
+-- `intercalate sep xss` puts sep between the lists and concatenates.
+intercalate : List a -> List (List a) -> List a
+intercalate sep xss = concat (intersperse sep xss)
+
+transpose : List (List a) -> List (List a)
+transpose [] = []
+transpose xss = match filter (\xs -> not (isEmpty xs)) xss with
+  [] -> []
+  rows -> filterMap head rows :: transpose (filterMap tail rows)
+
+-- Running folds: scanl (+) 0 [1, 2, 3] == [0, 1, 3, 6]
+scanl : (b -> a -> b) -> b -> List a -> List b
+scanl f z xs = reverse (scanlAcc f z xs [z])
+
+private scanlAcc : (b -> a -> b) -> b -> List a -> List b -> List b
+scanlAcc _ _ [] acc = acc
+scanlAcc f z (x :: xs) acc =
+  let z2 = f z x
+  scanlAcc f z2 xs (z2 :: acc)
+
+-- scanr (+) 0 [1, 2, 3] == [6, 5, 3, 0]
+scanr : (a -> b -> b) -> b -> List a -> List b
+scanr f z xs = foldr (\x acc -> match acc with
+    b :: _ -> f x b :: acc
+    [] -> [f x z]) [z] xs
+
+-- Fold without an initial value; None for the empty list.
+reduce : (a -> a -> a) -> List a -> Option a
+reduce _ [] = None
+reduce f (x :: xs) = Some (foldl f x xs)
+
+-- Like foldl, but the step function may stop early with `Err`.
+foldWhile : (b -> a -> Result b b) -> b -> List a -> b
+foldWhile _ z [] = z
+foldWhile f z (x :: xs) = match f z x with
+  Ok z2 -> foldWhile f z2 xs
+  Err z2 -> z2
+
+-- Thread an accumulator through a map: mapAccum (\s x -> (s + x, s)) 0 [1, 2, 3] == (6, [0, 1, 3])
+mapAccum : (s -> a -> (s, b)) -> s -> List a -> (s, List b)
+mapAccum f s xs = mapAccumAcc f s xs []
+
+private mapAccumAcc : (s -> a -> (s, b)) -> s -> List a -> List b -> (s, List b)
+mapAccumAcc _ s [] acc = (s, reverse acc)
+mapAccumAcc f s (x :: xs) acc =
+  let (s2, y) = f s x
+  mapAccumAcc f s2 xs (y :: acc)
+
+-- Split a list of results into the Ok values and the errors.
+partitionResults : List (Result e a) -> (List e, List a)
+partitionResults rs = foldr (\r (es, as) -> match r with
+    Ok a -> (es, a :: as)
+    Err e -> (e :: es, as)) ([], []) rs
+
+-- Keep the Some values.
+catOptions : List (Option a) -> List a
+catOptions os = filterMap id os
+
+-- ===================================================================
+-- Zipping
+-- ===================================================================
+
+zip3 : List a -> List b -> List c -> List (a, b, c)
+zip3 xs ys zs = zipWith3 (\x y z -> (x, y, z)) xs ys zs
+
+zipWith3 : (a -> b -> c -> d) -> List a -> List b -> List c -> List d
+zipWith3 f xs ys zs = reverse (zipWith3Acc f xs ys zs [])
+
+private zipWith3Acc : (a -> b -> c -> d) -> List a -> List b -> List c -> List d -> List d
+zipWith3Acc f (x :: xs) (y :: ys) (z :: zs) acc = zipWith3Acc f xs ys zs (f x y z :: acc)
+zipWith3Acc _ _ _ _ acc = acc
+
+unzip3 : List (a, b, c) -> (List a, List b, List c)
+unzip3 ts = (mapList (\(a, _, _) -> a) ts, mapList (\(_, b, _) -> b) ts, mapList (\(_, _, c) -> c) ts)
+
+-- Pairs of consecutive elements: pairwise [1, 2, 3] == [(1, 2), (2, 3)]
+pairwise : List a -> List (a, a)
+pairwise xs = match xs with
+  [] -> []
+  _ :: rest -> zip xs rest
+
+-- All pairs (x, y) with x from the first list and y from the second.
+cartesian : List a -> List b -> List (a, b)
+cartesian xs ys = concatMap (\x -> mapList (\y -> (x, y)) ys) xs
+
+-- ===================================================================
+-- Grouping
+-- ===================================================================
+
+-- Group adjacent elements that are related by eq.
+groupBy : (a -> a -> Bool) -> List a -> List (List a)
+groupBy _ [] = []
+groupBy eq (x :: xs) =
+  let (same, rest) = span (eq x) xs
+  (x :: same) :: groupBy eq rest
+
+-- Group adjacent equal elements: group [1, 1, 2, 1] == [[1, 1], [2], [1]]
+group : Eq a => List a -> List (List a)
+group xs = groupBy (==) xs
+
+-- Group adjacent elements with the same key.
+groupOn : Eq b => (a -> b) -> List a -> List (b, List a)
+groupOn f xs = filterMap (\g -> match g with
+    x :: _ -> Some (f x, g)
+    [] -> None) (groupBy (\a b -> f a == f b) xs)
+
+-- Remove duplicates by a key, keeping the first occurrence.
+nubBy : (a -> a -> Bool) -> List a -> List a
+nubBy eq xs = reverse (nubByAcc eq xs [])
+
+private nubByAcc : (a -> a -> Bool) -> List a -> List a -> List a
+nubByAcc _ [] acc = acc
+nubByAcc eq (x :: xs) acc
+  | any (eq x) acc = nubByAcc eq xs acc
+  | otherwise = nubByAcc eq xs (x :: acc)
+
+nubOn : Eq b => (a -> b) -> List a -> List a
+nubOn f xs = nubBy (\a b -> f a == f b) xs
+
+-- Remove duplicates of a sortable list in O(n log n); the result is sorted.
+nubSorted : Ord a => List a -> List a
+nubSorted xs = map (\g -> match g with
+    x :: _ -> x
+    [] -> error "unreachable") (group (sort xs))
+
+-- Number of occurrences of each element, in order of first appearance.
+frequencies : Eq a => List a -> List (a, Int)
+frequencies xs = map (\x -> (x, countBy (\y -> y == x) xs)) (nub xs)
+
+-- ===================================================================
+-- Sorting and set-like operations
+-- ===================================================================
+
+sortDesc : Ord a => List a -> List a
+sortDesc xs = sortBy (\a b -> compare b a) xs
+
+-- Insert into a sorted list, keeping it sorted.
+insertSorted : Ord a => a -> List a -> List a
+insertSorted x xs =
+  let (lo, hi) = span (\y -> y <= x) xs
+  lo ++ (x :: hi)
+
+isSorted : Ord a => List a -> Bool
+isSorted xs = all (\(a, b) -> a <= b) (pairwise xs)
+
+-- Remove the first occurrence of an element.
+delete : Eq a => a -> List a -> List a
+delete x xs = match break (\y -> y == x) xs with
+  (before, _ :: after) -> before ++ after
+  (before, []) -> before
+
+-- Elements of the first list that are not in the second.
+difference : Eq a => List a -> List a -> List a
+difference xs ys = filter (\x -> not (elem x ys)) xs
+
+union : Eq a => List a -> List a -> List a
+union xs ys = xs ++ filter (\y -> not (elem y xs)) (nub ys)
+
+intersect : Eq a => List a -> List a -> List a
+intersect xs ys = filter (\x -> elem x ys) xs
+
+-- Sum of the values of a function over the list.
+sumBy : Num b => (a -> b) -> List a -> b
+sumBy f xs = foldl (\acc x -> acc + f x) (fromInt 0) xs
