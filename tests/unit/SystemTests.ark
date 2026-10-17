@@ -1,0 +1,57 @@
+-- Unit tests for Std.Ref, Std.Path, Std.Time and Std.IO.
+module SystemTests
+
+import Std.Ref
+import Std.Path
+import Std.Time
+import Std.IO
+
+test "references" =
+  let r = newRef 0
+  forEach [1 .. 10] (\i -> modifyRef r (+ i))
+  assertEq (readRef r) 55
+  assertEq (swapRef r 1) 55
+  assertEq (updateRef r (\v -> (v + 1, v * 100))) 100
+  assertEq (readRef r) 2
+
+test "paths" =
+  assertEq ("src" </> "Std" </> "Map.ark") "src/Std/Map.ark"
+  assertEq (joinPaths ["a", "b/", "../c"]) "a/c"
+  assertEq (baseName "a/b.txt", dirName "a/b.txt", extension "a/b.tar.gz") ("b.txt", "a", ".gz")
+  assertEq (stem "dir/main.ark", replaceExtension ".go" "a/b.ark", dropExtension "x") ("main", "a/b.go", "x")
+  assertEq (normalize "a/./b/../c//d", isAbsolute "/x", isAbsolute "x") ("a/c/d", True, False)
+  assertEq (splitPath "/usr/local/bin") ["usr", "local", "bin"]
+  assertEq (relativeTo "/a" "/a/b/c") (Ok "b/c")
+  assert (matchGlob "*.ark" "Map.ark" && not (matchGlob "*.ark" "Map.go")) "matchGlob"
+
+test "time" =
+  let t = now ()
+  assert (t > 1700000000.0) "now is after 2023"
+  assert (nowMillis () >= truncate (t * 1000.0)) "millis agree"
+  assertEq (formatIso 0.0) "1970-01-01T00:00:00Z"
+  assertEq (toUtcParts 1000000000.0) (2001, 9, 9, 1, 46, 40)
+  assertEq (formatUtc "2006/01/02" 86400.0) "1970/01/02"
+  let (v, secs) = measure (\_ ->
+    sleep 0.01
+    42)
+  assert (v == 42 && secs >= 0.01) "measure"
+
+test "formatting durations" =
+  assertEq (map formatDuration [0.0000005, 0.25, 1.5, 125.0, 3720.0]) ["1µs", "250ms", "1.50s", "2m05s", "1h02m"]
+
+test "files" =
+  let dir = withDefault "/tmp" (getEnv "TMPDIR") </> "arkadia-system-test-${nowMillis ()}"
+  let ok r = match r with
+    Ok x -> x
+    Err e -> fail e
+  ok (makeDir (dir </> "sub"))
+  ok (writeLines (dir </> "a.txt") ["one", "two"])
+  ok (copyFile (dir </> "a.txt") (dir </> "sub" </> "b.txt"))
+  assertEq (readLines (dir </> "sub" </> "b.txt")) (Ok ["one", "two", ""])
+  ok (renameFile (dir </> "a.txt") (dir </> "c.txt"))
+  assertEq (map sort (walkFiles dir)) (Ok [dir </> "c.txt", dir </> "sub" </> "b.txt"])
+  assert (isDirectory dir && not (isDirectory (dir </> "c.txt"))) "isDirectory"
+  ok (removeAll dir)
+  assert (not (fileExists dir)) "removed"
+  ok (setEnv "ARKADIA_TEST_VAR" "x")
+  assertEq (getEnv "ARKADIA_TEST_VAR") (Some "x")

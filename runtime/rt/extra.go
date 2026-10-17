@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -236,6 +237,97 @@ func RunCommand(name, args Value) Value {
 		}
 	}
 	return Ok(Tuple(code, out.String(), errb.String()))
+}
+
+func IsDirectory(path Value) Value {
+	fi, err := os.Stat(path.(string))
+	return err == nil && fi.IsDir()
+}
+
+func RenameFile(from, to Value) Value {
+	if err := os.Rename(from.(string), to.(string)); err != nil {
+		return Err(err.Error())
+	}
+	return Ok(Unit)
+}
+
+func RemoveAll(path Value) Value {
+	if err := os.RemoveAll(path.(string)); err != nil {
+		return Err(err.Error())
+	}
+	return Ok(Unit)
+}
+
+func CurrentDir(_ Value) Value {
+	dir, err := os.Getwd()
+	if err != nil {
+		return Err(err.Error())
+	}
+	return Ok(dir)
+}
+
+func SetEnv(name, value Value) Value {
+	if err := os.Setenv(name.(string), value.(string)); err != nil {
+		return Err(err.Error())
+	}
+	return Ok(Unit)
+}
+
+// ---------------------------------------------------------------- paths
+
+func PathJoin(a, b Value) Value   { return filepath.Join(a.(string), b.(string)) }
+func PathBase(p Value) Value      { return filepath.Base(p.(string)) }
+func PathDir(p Value) Value       { return filepath.Dir(p.(string)) }
+func PathExt(p Value) Value       { return filepath.Ext(p.(string)) }
+func PathClean(p Value) Value     { return filepath.Clean(p.(string)) }
+func PathIsAbs(p Value) Value     { return filepath.IsAbs(p.(string)) }
+func PathSeparator() Value        { return string(filepath.Separator) }
+func PathAbs(p Value) Value       { return resultOf(filepath.Abs(p.(string))) }
+func PathRel(base, p Value) Value { return resultOf(filepath.Rel(base.(string), p.(string))) }
+func PathMatch(pat, name Value) Value {
+	ok, err := filepath.Match(pat.(string), name.(string))
+	return err == nil && ok
+}
+
+func resultOf(s string, err error) Value {
+	if err != nil {
+		return Err(err.Error())
+	}
+	return Ok(s)
+}
+
+// ---------------------------------------------------------------- references
+
+// Ref is a mutable cell.
+type Ref struct{ V Value }
+
+func RefNew(v Value) Value    { return &Ref{V: v} }
+func RefGet(r Value) Value    { return r.(*Ref).V }
+func RefSet(r, v Value) Value { r.(*Ref).V = v; return Unit }
+
+// ---------------------------------------------------------------- time
+
+func UnixTime(_ Value) Value   { return float64(time.Now().UnixNano()) / 1e9 }
+func UnixMillis(_ Value) Value { return time.Now().UnixMilli() }
+func Sleep(secs Value) Value {
+	Flush()
+	time.Sleep(time.Duration(secs.(float64) * float64(time.Second)))
+	return Unit
+}
+
+func timeOf(secs Value) time.Time {
+	f := secs.(float64)
+	sec := math.Floor(f)
+	return time.Unix(int64(sec), int64((f-sec)*1e9))
+}
+
+func FormatTimeUTC(layout, secs Value) Value   { return timeOf(secs).UTC().Format(layout.(string)) }
+func FormatTimeLocal(layout, secs Value) Value { return timeOf(secs).Local().Format(layout.(string)) }
+
+// TimeParts splits a time into (year, month, day, hour, minute, second) in UTC.
+func TimeParts(secs Value) Value {
+	t := timeOf(secs).UTC()
+	return Tuple(int64(t.Year()), int64(t.Month()), int64(t.Day()), int64(t.Hour()), int64(t.Minute()), int64(t.Second()))
 }
 
 // ---------------------------------------------------------------- strings

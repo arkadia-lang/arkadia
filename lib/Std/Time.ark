@@ -1,0 +1,53 @@
+-- Wall-clock time, sleeping and timing. Times are seconds since the Unix
+-- epoch as Float. (`clock` in the Prelude measures seconds since start.)
+--
+--   import Std.Time
+--   let (result, secs) = measure (\_ -> work ())
+--   println "took ${formatDuration secs}"
+module Std.Time
+
+-- Seconds since the Unix epoch.
+foreign now : Unit -> <IO> Float = "rt.UnixTime"
+-- Milliseconds since the Unix epoch.
+foreign nowMillis : Unit -> <IO> Int = "rt.UnixMillis"
+-- Pause for a number of seconds.
+foreign sleep : Float -> <IO> Unit = "rt.Sleep"
+-- Format with a Go layout string, e.g. "2006-01-02 15:04:05".
+foreign formatUtc : String -> Float -> String = "rt.FormatTimeUTC"
+foreign formatLocal : String -> Float -> String = "rt.FormatTimeLocal"
+-- (year, month, day, hour, minute, second) in UTC.
+foreign toUtcParts : Float -> (Int, Int, Int, Int, Int, Int) = "rt.TimeParts"
+
+-- RFC 3339 in UTC: "2026-10-17T09:30:00Z"
+formatIso : Float -> String
+formatIso t = formatUtc "2006-01-02T15:04:05Z07:00" t
+
+-- Run a computation and return its result with the elapsed seconds.
+measure : (Unit -> <IO | e> a) -> <IO | e> (a, Float)
+measure action =
+  let start = clock ()
+  let result = action ()
+  (result, clock () - start)
+
+-- A short human-readable duration: "250ms", "1.50s", "2m05s", "1h02m".
+formatDuration : Float -> String
+formatDuration secs
+  | secs < 0.001 = "${round (secs * 1000000.0)}µs"
+  | secs < 1.0 = "${round (secs * 1000.0)}ms"
+  | secs < 60.0 = "${twoDecimals secs}s"
+  | secs < 3600.0 =
+      let s = round secs
+      "${s / 60}m${pad2 (s % 60)}s"
+  | otherwise =
+      let m = round (secs / 60.0)
+      "${m / 60}h${pad2 (m % 60)}m"
+
+private twoDecimals : Float -> String
+twoDecimals x =
+  let hundredths = round (x * 100.0)
+  "${hundredths / 100}.${pad2 (hundredths % 100)}"
+
+private pad2 : Int -> String
+pad2 n
+  | n < 10 = "0${n}"
+  | otherwise = show n

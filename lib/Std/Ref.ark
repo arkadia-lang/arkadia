@@ -1,0 +1,31 @@
+-- Mutable references. Reading and writing a reference is an IO effect; for
+-- state local to a computation, prefer Std.State.
+--
+--   import Std.Ref
+--   let r = newRef 0
+--   forEach [1 .. 10] (\i -> modifyRef r (+ i))
+--   readRef r   -- 55
+module Std.Ref
+
+type Ref a
+
+foreign newRef : a -> <IO> Ref a = "rt.RefNew"
+foreign readRef : Ref a -> <IO> a = "rt.RefGet"
+foreign writeRef : Ref a -> a -> <IO> Unit = "rt.RefSet"
+
+modifyRef : Ref a -> (a -> <IO | e> a) -> <IO | e> Unit
+modifyRef r f = writeRef r (f (readRef r))
+
+-- Replace the value and return the old one.
+swapRef : Ref a -> a -> <IO> a
+swapRef r v =
+  let old = readRef r
+  writeRef r v
+  old
+
+-- Update the value and return a result computed from the old value.
+updateRef : Ref a -> (a -> <IO | e> (a, b)) -> <IO | e> b
+updateRef r f =
+  let (v, result) = f (readRef r)
+  writeRef r v
+  result

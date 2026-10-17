@@ -1,0 +1,47 @@
+-- File path manipulation (purely textual, using the host OS conventions).
+--
+--   import Std.Path
+--   "src" </> "Main.ark"            -- "src/Main.ark"
+--   extension "lib/Std/Map.ark"     -- ".ark"
+module Std.Path
+
+infixr 5 </>
+
+foreign (</>) : String -> String -> String = "rt.PathJoin"
+-- The last element: baseName "a/b.txt" == "b.txt"
+foreign baseName : String -> String = "rt.PathBase"
+-- All but the last element: dirName "a/b.txt" == "a"
+foreign dirName : String -> String = "rt.PathDir"
+-- The extension including the dot, or "": extension "a/b.tar.gz" == ".gz"
+foreign extension : String -> String = "rt.PathExt"
+-- Remove redundant separators and "." / ".." elements.
+foreign normalize : String -> String = "rt.PathClean"
+foreign isAbsolute : String -> Bool = "rt.PathIsAbs"
+foreign separator : String = "rt.PathSeparator"
+-- Shell-style pattern matching on a name: matchGlob "*.ark" "Map.ark"
+foreign matchGlob : String -> String -> Bool = "rt.PathMatch"
+-- The absolute form of a path, relative to the current directory.
+foreign absolute : String -> <IO> Result String String = "rt.PathAbs"
+-- A path relative to a base directory: relativeTo "/a" "/a/b/c" == Ok "b/c"
+foreign relativeTo : String -> String -> Result String String = "rt.PathRel"
+
+joinPaths : List String -> String
+joinPaths [] = ""
+joinPaths (p :: ps) = foldl (</>) p ps
+
+-- The file name without its extension: stem "dir/main.ark" == "main"
+stem : String -> String
+stem p =
+  let base = baseName p
+  substring 0 (stringLength base - stringLength (extension base)) base
+
+-- Replace (or add) the extension: replaceExtension ".go" "a/b.ark" == "a/b.go"
+replaceExtension : String -> String -> String
+replaceExtension ext p = dropExtension p ++ ext
+
+dropExtension : String -> String
+dropExtension p = substring 0 (stringLength p - stringLength (extension p)) p
+
+-- The elements of a path: splitPath "a/b/c" == ["a", "b", "c"]
+splitPath : String -> List String
+splitPath p = filter (\s -> s != "") (split separator p)

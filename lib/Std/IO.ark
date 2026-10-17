@@ -5,7 +5,14 @@ foreign appendFile : String -> String -> <IO> Result String Unit = "rt.AppendFil
 foreign fileExists : String -> <IO> Bool = "rt.FileExists"
 foreign removeFile : String -> <IO> Result String Unit = "rt.RemoveFile"
 foreign listDir : String -> <IO> Result String (List String) = "rt.ListDir"
+-- Create a directory and any missing parents.
 foreign makeDir : String -> <IO> Result String Unit = "rt.MakeDir"
+foreign isDirectory : String -> <IO> Bool = "rt.IsDirectory"
+foreign renameFile : String -> String -> <IO> Result String Unit = "rt.RenameFile"
+-- Remove a file or a directory with everything in it.
+foreign removeAll : String -> <IO> Result String Unit = "rt.RemoveAll"
+foreign currentDir : Unit -> <IO> Result String String = "rt.CurrentDir"
+foreign setEnv : String -> String -> <IO> Result String Unit = "rt.SetEnv"
 
 -- Run a program: returns (exit code, stdout, stderr).
 foreign runCommand : String -> List String -> <IO> Result String (Int, String, String) = "rt.RunCommand"
@@ -19,3 +26,27 @@ stdinLines () =
   match readLine () with
     None -> []
     Some l -> l :: stdinLines ()
+
+writeLines : String -> List String -> <IO> Result String Unit
+writeLines path ls = writeFile path (concatStrings (mapList (\l -> l ++ "\n") ls))
+
+copyFile : String -> String -> <IO> Result String Unit
+copyFile from to = match readFile from with
+  Ok content -> writeFile to content
+  Err e -> Err e
+
+-- All files under a directory (recursively), as paths starting with it.
+walkFiles : String -> <IO> Result String (List String)
+walkFiles dir = match listDir dir with
+  Err e -> Err e
+  Ok names -> walkEntries dir names []
+
+private walkEntries : String -> List String -> List String -> <IO> Result String (List String)
+walkEntries _ [] acc = Ok (reverse acc)
+walkEntries dir (name :: rest) acc =
+  let path = dir ++ "/" ++ name
+  match isDirectory path with
+    True -> match walkFiles path with
+      Ok files -> walkEntries dir rest (reverse files ++ acc)
+      Err e -> Err e
+    False -> walkEntries dir rest (path :: acc)
