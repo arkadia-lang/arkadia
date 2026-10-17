@@ -27,7 +27,8 @@ Commands:
   build [file.ark]   compile the project (or a single file) to a native executable
   run [file.ark]     build and run; arguments after -- are passed to the program
   check [file.ark]   type check without building
-  test [file.ark]    run the project's tests (declarations ` + "`test \"name\" = ...`" + `)
+  test [file.ark]    run the project's tests (declarations ` + "`test \"name\" = ...`" + `);
+                     -run <text> runs only those whose "Module › name" contains <text>
   doc <Module>       show the public interface of a module
   repl               start an interactive session
   emit [file.ark]    print the generated Go code
@@ -252,8 +253,12 @@ func firstArg(args []string) string {
 
 func cmdTest(args []string) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	run := fs.String("run", "", "run only the tests whose `Module › name` contains this text")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *run != "" {
+		os.Setenv("ARKADIA_TEST_RUN", *run)
 	}
 	file := fs.Arg(0)
 	t, err := resolveTarget(file, false)

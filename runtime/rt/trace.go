@@ -113,7 +113,7 @@ func arkSymbol(s string) string {
 	case len(parts) == 3 && parts[1] == "dflt":
 		name = parts[0] + " default " + unsanitize(parts[2])
 	case len(parts) == 2 && parts[0] == "" && strings.HasPrefix(parts[1], "test"):
-		name = "test"
+		name = "<test>"
 	default:
 		name = unsanitize(demangle(strings.Join(parts, "$")))
 	}

@@ -28,7 +28,8 @@ Commands:
   build [file.ark]   compile the project (or a single file) to a native executable
   run [file.ark]     build and run; arguments after -- are passed to the program
   check [file.ark]   type check without building
-  test [file.ark]    run the project's tests
+  test [file.ark]    run the project's tests; -run <text> runs only those
+                     whose "Module › name" contains <text>
   emit [file.ark]    print the generated Go code
   doc <Module>       show the public interface of a module
   new <name>         create a new project in directory <name>
@@ -240,7 +241,11 @@ cmdEmit root argv = match resolveTarget (firstOr argv) with
           0
 
 cmdTest : String -> List String -> <IO> Int
-cmdTest root argv =
+cmdTest root argv0 =
+  let (run, argv) = testFilter argv0 "" []
+  let _ = match run with
+    "" -> Ok ()
+    r -> setEnv "ARKADIA_TEST_RUN" r
   let file = firstOr argv
   match resolveTarget file with
     Err e -> failMsg e
@@ -257,6 +262,16 @@ cmdTest root argv =
         match loadFile l tfile with
           Err errs -> failDiags l errs
           Ok prog -> runTests root l prog t
+
+-- The -run option of the test command and the other arguments.
+private testFilter : List String -> String -> List String -> (String, List String)
+testFilter argv run rest = match argv with
+  [] -> (run, reverse rest)
+  flag :: value :: more | flag == "-run" || flag == "--run" -> testFilter more value rest
+  a :: more -> match (startsWith "-run=" a, startsWith "--run=" a) with
+    (True, _) -> testFilter more (substring 5 (stringLength a) a) rest
+    (_, True) -> testFilter more (substring 6 (stringLength a) a) rest
+    _ -> testFilter more run (a :: rest)
 
 runTests : String -> Loader -> Program -> Target -> <IO> Int
 runTests root l (prog@(Program mods g _)) (t@(Target _ _ _ natives)) =

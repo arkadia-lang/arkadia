@@ -3,6 +3,7 @@ package rt
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -23,9 +24,14 @@ func RunTests(failEff int, tests []TestCase) {
 	if !color {
 		green, red, dim, reset = "", "", "", ""
 	}
-	passed, failed := 0, 0
+	passed, failed, skipped := 0, 0, 0
+	filter := os.Getenv("ARKADIA_TEST_RUN")
 	start := time.Now()
 	for _, t := range tests {
+		if filter != "" && !strings.Contains(t.Module+" › "+t.Name, filter) {
+			skipped++
+			continue
+		}
 		msg := runOne(failEff, t)
 		if msg == "" {
 			passed++
@@ -36,11 +42,19 @@ func RunTests(failEff int, tests []TestCase) {
 		}
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
+	skip := ""
+	if skipped > 0 {
+		skip = fmt.Sprintf(", %d skipped", skipped)
+	}
 	if failed > 0 {
-		fmt.Fprintf(stdout, "\n%s%d failed%s, %d passed (%s)\n", red, failed, reset, passed, elapsed)
+		fmt.Fprintf(stdout, "\n%s%d failed%s, %d passed%s (%s)\n", red, failed, reset, passed, skip, elapsed)
 		panic(&ExitSignal{Code: 1})
 	}
-	fmt.Fprintf(stdout, "\n%sall %d tests passed%s (%s)\n", green, passed, reset, elapsed)
+	if passed == 0 {
+		fmt.Fprintf(stdout, "no tests match %q\n", filter)
+		return
+	}
+	fmt.Fprintf(stdout, "\n%sall %d tests passed%s%s (%s)\n", green, passed, reset, skip, elapsed)
 }
 
 func runOne(failEff int, t TestCase) (msg string) {
@@ -53,6 +67,15 @@ func runOne(failEff int, t TestCase) (msg string) {
 				msg = e.msg
 			case *ArkError:
 				msg = "runtime error: " + e.Msg
+				if e.Trace == nil {
+					e.Trace = arkTrace()
+				}
+				for i, line := range e.Trace {
+					if i == 8 || strings.Contains(line, "<test>") {
+						break
+					}
+					msg += "\n      in " + line
+				}
 			case *ExitSignal:
 				msg = fmt.Sprintf("test called exit %d", e.Code)
 			default:
