@@ -3,14 +3,10 @@ module Main
 
 import Ark.Util
 import Ark.Ast
-import Ark.Lexer
-import Ark.Parser
-import Ark.Fixity
 import Ark.Types
 import Ark.Check
 import Ark.Loader
 import Ark.Render
-import Ark.Debug
 import Ark.Project
 import Ark.Build
 import Ark.Repl
@@ -67,7 +63,6 @@ cli argv = match argv with
     "repl" -> withRoot (\root -> repl root version)
     "lsp" -> withRoot (\root -> serve (libDir root) version)
     "test" -> withRoot (\root -> cmdTest root rest)
-    "debug" -> withRoot (\root -> cmdDebug root rest)
     "version" -> versionCmd ()
     "--version" -> versionCmd ()
     "-v" -> versionCmd ()
@@ -354,63 +349,3 @@ cmdNew argv = match argv with
   _ ->
     eprintln "usage: arkc new <name>"
     2
-
--- ================================================================ debugging
-
--- Dumps used to compare the phases with the Go implementation.
-cmdDebug : String -> List String -> <IO> Int
-cmdDebug root argv = match argv with
-  ["tokens", file] -> match readFile file with
-    Err e -> failMsg e
-    Ok src -> match lex file src with
-      Ok toks ->
-        print (concatStrings (mapList (dumpTok "") toks))
-        0
-      Err errs ->
-        println ("ERR " ++ joinWith "\n" (mapList diagString errs))
-        0
-  ["ast", file] -> match readFile file with
-    Err e -> failMsg e
-    Ok src -> match parseModule file src with
-      Ok m ->
-        print (dumpModule m)
-        0
-      Err errs ->
-        println ("ERR " ++ joinWith "\n" (mapList diagString errs))
-        0
-  ["types", file] ->
-    let l = newLoader [pathDir file] (libDir root)
-    match loadFile l file with
-      Err errs ->
-        print (renderDiags (loaderSources l) errs False)
-        0
-      Ok (Program mods g main) ->
-        forEach mods (\m ->
-          println ("module " ++ moduleName m)
-          match Map.lookup (moduleName m) (readRef (gModules g)) with
-            Some ex -> forEach (Map.toList (readRef (exportsValues ex))) (\(n, v) -> match readRef (valueSchemeRef v) with
-              Some sc -> println ("  " ++ n ++ " : " ++ schemeString sc)
-              None -> ())
-            None -> ())
-        match checkMain g main with
-          [] -> ()
-          errs -> print (renderDiags (loaderSources l) errs False)
-        0
-  _ ->
-    eprintln "usage: arkc debug (tokens|ast|types) <file.ark>"
-    2
-
-dumpTok : String -> Token -> String
-dumpTok ind t =
-  let fl = match tokFirst t with
-    True -> " F"
-    False -> ""
-  let sp = match tokSpace t with
-    True -> " S"
-    False -> ""
-  let head = ind ++ show (tagOf (tokKind t)) ++ " " ++ tokText t ++ " q=" ++ tokQual t ++ " " ++ posString (tokPos t) ++ " s=" ++ tokStr t ++ fl ++ sp ++ "\n"
-  head ++ concatStrings (mapList (dumpPart ind) (tokParts t))
-
-dumpPart : String -> InterpPart -> String
-dumpPart ind (InterpLit s) = ind ++ "  lit " ++ s ++ "\n"
-dumpPart ind (InterpExpr toks p) = ind ++ "  expr " ++ posString p ++ "\n" ++ concatStrings (mapList (dumpTok (ind ++ "    ")) toks)

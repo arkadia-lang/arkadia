@@ -96,20 +96,6 @@ at i xs = match nth i xs with
   Some x -> x
   None -> error "index out of range: ${i}"
 
--- Replace the element at an index.
-setAt : Int -> a -> List a -> List a
-setAt i v xs = setAtAcc i v xs []
-
-private setAtAcc : Int -> a -> List a -> List a -> List a
-setAtAcc _ _ [] acc = reverse acc
-setAtAcc i v (x :: rest) acc
-  | i == 0 = reverseOnto2 acc (v :: rest)
-  | otherwise = setAtAcc (i - 1) v rest (x :: acc)
-
-private reverseOnto2 : List a -> List a -> List a
-reverseOnto2 [] ys = ys
-reverseOnto2 (x :: xs) ys = reverseOnto2 xs (x :: ys)
-
 -- All but the last element.
 initList : List a -> List a
 initList xs = reverse (drop 1 (reverse xs))
@@ -136,6 +122,6 @@ allOf p (x :: xs)
   | p x = allOf p xs
   | otherwise = False
 
--- Insertion sort for strings (stable, bytewise like Go).
+-- Sort strings bytewise (like Go's sort.Strings).
 sortStrings : List String -> List String
 sortStrings xs = sortBy compare xs
