@@ -149,9 +149,9 @@ func isDefinition(s string) bool {
 	depth := 0
 	for i := 0; i < len(line); i++ {
 		switch line[i] {
-		case '(', '[':
+		case '(', '[', '{':
 			depth++
-		case ')', ']':
+		case ')', ']', '}':
 			depth--
 		case '"':
 			return false

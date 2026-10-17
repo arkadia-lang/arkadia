@@ -133,8 +133,8 @@ private defScan : List Char -> Char -> Int -> Bool
 defScan cs prev depth = match cs with
   [] -> False
   c :: rest
-    | c == '(' || c == '[' -> defScan rest c (depth + 1)
-    | c == ')' || c == ']' -> defScan rest c (depth - 1)
+    | c == '(' || c == '[' || c == '{' -> defScan rest c (depth + 1)
+    | c == ')' || c == ']' || c == '}' -> defScan rest c (depth - 1)
     | c == '"' -> False
     | c == '=' && depth == 0 && not (nextIn rest "=>") && not (elem prev (chars "=!<>")) -> True
     | c == ':' && depth == 0 && not (nextIn rest ":") && prev != ':' -> True
