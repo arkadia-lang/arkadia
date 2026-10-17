@@ -11,8 +11,13 @@ install:
 test:
 	CGO_ENABLED=0 go test ./...
 
+# Go sources are gofmt'ed and Arkadia sources ark fmt'ed (tests/errors holds
+# deliberately malformed programs).
+ARK_SOURCES = lib examples selfhost/src tests/run tests/unit
+
 check:
 	gofmt -l . && CGO_ENABLED=0 go vet ./...
+	CGO_ENABLED=0 go run ./cmd/ark fmt -check $(ARK_SOURCES)
 
 # The self-hosted compiler (selfhost/), built by the Go implementation.
 selfhost: build
