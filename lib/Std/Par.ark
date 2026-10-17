@@ -1,0 +1,66 @@
+-- Deterministic parallelism for pure functions.
+--
+--   import Std.Par as Par
+--   Par.map (\n -> fib n) [30, 31, 32, 33]
+--   Par.reduce (+) 0 (Par.map score items)
+--
+-- The functions passed here are pure (`<>`): the type system rules out
+-- every effect they do not handle themselves, so evaluating them in
+-- parallel cannot race and gives exactly the result of evaluating them in
+-- order. Errors are deterministic too: if several elements fail, the error
+-- raised is the one of the first failing element, as with `map`.
+--
+-- The work is shared by as many tasks as there are processors (see
+-- Std.Task.processors); a parallel function called inside another runs
+-- in parallel as well.
+module Std.Par
+
+import Std.Array (Array)
+
+-- Apply a function to every element in parallel.
+foreign map : (a -> <> b) -> List a -> List b = "rt.ParMap"
+
+-- Apply a function to every element of an array in parallel.
+foreign mapArray : (a -> <> b) -> Array a -> Array b = "rt.ParMapArray"
+
+-- [f 0, f 1, ..., f (n - 1)], computed in parallel.
+foreign generate : Int -> (Int -> <> a) -> List a = "rt.ParGenerate"
+
+-- The elements that satisfy a predicate, tested in parallel.
+foreign filter : (a -> <> Bool) -> List a -> List a = "rt.ParFilter"
+
+-- Evaluate two computations in parallel.
+foreign both : (Unit -> <> a) -> (Unit -> <> b) -> (a, b) = "rt.ParBoth"
+
+-- Combine the elements with an associative operator and its identity:
+-- reduce op z [x1, ..., xn] == z `op` x1 `op` ... `op` xn. Runs of
+-- elements are combined in parallel, then their results in order.
+foreign reduce : (a -> a -> <> a) -> a -> List a -> a = "rt.ParReduce"
+
+-- Sort stably with a comparison function, in parallel.
+foreign sortBy : (a -> a -> <> Ordering) -> List a -> List a = "rt.ParSortBy"
+
+sort : Ord a => List a -> List a
+sort xs = sortBy compare xs
+
+-- Evaluate the computations in parallel and return their results in order.
+sequence : List (Unit -> <> a) -> List a
+sequence fs = map (\f -> f ()) fs
+
+-- Map in parallel, then combine with an associative operator.
+mapReduce : (a -> <> b) -> (b -> b -> <> b) -> b -> List a -> b
+mapReduce f op z xs = reduce op z (map f xs)
+
+-- Map to a monoid in parallel and combine the results in order.
+foldMap : Monoid m => (a -> <> m) -> List a -> m
+foldMap f xs = reduce (<>) empty (map f xs)
+
+sum : Num a => List a -> a
+sum xs = reduce (+) (fromInt 0) xs
+
+-- Whether some / every element satisfies a predicate (all are tested).
+any : (a -> <> Bool) -> List a -> Bool
+any p xs = reduce (\a b -> a || b) False (map p xs)
+
+all : (a -> <> Bool) -> List a -> Bool
+all p xs = reduce (\a b -> a && b) True (map p xs)
