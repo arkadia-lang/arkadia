@@ -359,6 +359,7 @@ func (c *ctx) expr(e core.Expr) val {
 		t := c.newTmp()
 		c.line("var %s rt.Value", t)
 		c.stmt(e, dest{kind: dAssign, v: t})
+		c.line("_ = %s", t) // the value may be discarded
 		return val{code: t, atomic: true}
 	}
 	panic(fmt.Sprintf("codegen expr: %T", e))

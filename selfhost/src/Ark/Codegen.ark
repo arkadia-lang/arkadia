@@ -568,6 +568,8 @@ genExpr c e = match e with
     let t = newTmp c
     line c "var ${t} rt.Value"
     genStmt c e (DAssign t)
+    -- the value may be discarded
+    line c "_ = ${t}"
     GVal t "" True
 
 literal : Val -> GVal

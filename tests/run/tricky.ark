@@ -115,6 +115,11 @@ main () =
   printLn (map show [Some 1, None])
   printLn (zipWith3 (\a b c -> a + b + c) [1, 2] [10, 20] [100, 200])
   printLn (uncurry (+) (3, 4), curry fst 1 2)
+  -- a discarded match whose value is computed into a temporary
+  let _ = match countUp 3 0 with
+    0 -> println "zero"
+    _ -> ()
+  println "done"
 
 zipWith3 : (a -> b -> c -> d) -> List a -> List b -> List c -> List d
 zipWith3 f (a :: as) (b :: bs) (c :: cs) = f a b c :: zipWith3 f as bs cs
