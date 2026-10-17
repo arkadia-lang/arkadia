@@ -2,6 +2,7 @@ package rt
 
 import (
 	"fmt"
+	"runtime"
 	"sync/atomic"
 )
 
@@ -247,26 +248,65 @@ func (h *Handler) loop(fb *fiber, f *frame, outer *frame) Value {
 		m.resume <- resumeMsg{abort: true, target: f}
 		return h.Ops[m.op](m.args, nil)
 	}
-	var resumed atomic.Bool
-	k := Fn1(func(v Value) Value {
-		if resumed.Swap(true) {
-			panic(&ArkError{Msg: "continuation of " + effName(h.Eff) + " resumed more than once"})
+	c := &cont{h: h, f: f, outer: outer, rch: m.resume}
+	// A continuation that is dropped without being resumed abandons the
+	// computation when it is collected, so that its goroutine ends.
+	runtime.SetFinalizer(c, (*cont).abandon)
+	k := Fn1(c.resume)
+	defer func() {
+		if r := recover(); r != nil {
+			// the handler is being unwound: nothing will resume the
+			// computation
+			r = withTrace(r)
+			c.abandon()
+			panic(r)
 		}
-		rf := peekFiber()
-		if rf == nil {
-			return withFiber(func(rf *fiber) Value { return resume(h, rf, f, outer, m.resume, v) })
-		}
-		return resume(h, rf, f, outer, m.resume, v)
-	})
+	}()
 	return h.Ops[m.op](m.args, k)
 }
 
-// resume resumes the computation handled by frame f from the goroutine of
-// fb and handles it there until its next operation.
-func resume(h *Handler, fb *fiber, f, outer *frame, rch chan resumeMsg, v Value) Value {
+// cont is the continuation of a computation suspended in an operation.
+type cont struct {
+	h        *Handler
+	f, outer *frame
+	rch      chan resumeMsg
+	state    atomic.Int32 // contSuspended, contResumed or contAbandoned
+}
+
+const (
+	contSuspended = iota
+	contResumed
+	contAbandoned
+)
+
+// abandon unwinds the suspended computation (with abortSignal) unless it
+// has been resumed.
+func (c *cont) abandon() {
+	if c.state.CompareAndSwap(contSuspended, contAbandoned) {
+		c.rch <- resumeMsg{abort: true, target: c.f}
+	}
+}
+
+// resume resumes the computation from the current goroutine and handles
+// it there until its next operation.
+func (c *cont) resume(v Value) Value {
+	if !c.state.CompareAndSwap(contSuspended, contResumed) {
+		if c.state.Load() == contResumed {
+			panic(&ArkError{Msg: "continuation of " + effName(c.h.Eff) + " resumed more than once"})
+		}
+		panic(&ArkError{Msg: "continuation of " + effName(c.h.Eff) + " resumed after its handler was unwound"})
+	}
+	fb := peekFiber()
+	if fb == nil {
+		return withFiber(func(fb *fiber) Value { return c.resumeOn(fb, v) })
+	}
+	return c.resumeOn(fb, v)
+}
+
+func (c *cont) resumeOn(fb *fiber, v Value) Value {
 	saved := fb.cur
-	rch <- resumeMsg{val: v, task: fb.task, txn: fb.txn}
-	r := h.loop(fb, f, outer)
+	c.rch <- resumeMsg{val: v, task: fb.task, txn: fb.txn}
+	r := c.h.loop(fb, c.f, c.outer)
 	fb.cur = saved
 	return r
 }
