@@ -1,0 +1,1186 @@
+-- The recursive descent parser. Parse errors abort with the Exn effect.
+module Ark.Parser
+
+import Ark.Util
+import Ark.Ast
+import Ark.Lexer
+import Std.Exn
+import Std.Array as Arr
+import Std.Map as Map
+
+-- tokens, number of tokens, index, pending layout tokens absorbed while
+-- parsing a type, set when the last operand ended with an unparenthesized
+-- lambda/match/handle (which extends as far as possible)
+type P = P (Arr.Array Token) Int (Ref Int) (Ref Int) (Ref Bool)
+
+newParser : List Token -> <IO> P
+newParser toks =
+  let arr = Arr.fromList toks
+  P arr (Arr.length arr) (newRef 0) (newRef 0) (newRef False)
+
+pIndex : P -> Ref Int
+pIndex (P _ _ i _ _) = i
+
+pTypeIndent : P -> Ref Int
+pTypeIndent (P _ _ _ t _) = t
+
+pTrailing : P -> Ref Bool
+pTrailing (P _ _ _ _ b) = b
+
+-- ================================================================ entry points
+
+-- Parse a whole source file.
+parseModule : String -> String -> <IO> Result (List Diag) Module
+parseModule file src = match lex file src with
+  Err errs -> Err errs
+  Ok toks ->
+    let p = newParser toks
+    match try (\_ -> moduleBody p file) with
+      Ok m -> Ok m
+      Err d -> Err [d]
+
+-- ================================================================ token helpers
+
+peek : P -> <IO> Token
+peek (P toks _ i _ _) = Arr.at (readRef i) toks
+
+peekN : P -> Int -> <IO> Token
+peekN (P toks n i _ _) k = match readRef i + k < n with
+  True -> Arr.at (readRef i + k) toks
+  False -> Arr.at (n - 1) toks
+
+peekKind : P -> <IO> TokKind
+peekKind p = tokKind (peek p)
+
+at : P -> TokKind -> <IO> Bool
+at p k = tokKind (peek p) == k
+
+atOp : P -> String -> <IO> Bool
+atOp p op =
+  let t = peek p
+  tokKind t == OP && tokText t == op && tokQual t == ""
+
+next : P -> <IO> Token
+next (P toks n i _ _) =
+  let j = readRef i
+  let t = Arr.at j toks
+  match j < n - 1 with
+    True -> writeRef i (j + 1)
+    False -> ()
+  t
+
+skip : P -> <IO> Unit
+skip p =
+  let _ = next p
+  ()
+
+-- Whether the next token is the contextual keyword w.
+atWord : P -> String -> <IO> Bool
+atWord p w =
+  let t = peek p
+  tokKind t == LIDENT && tokQual t == "" && tokText t == w
+
+accept : P -> TokKind -> <IO> Bool
+accept p k = match at p k with
+  True ->
+    skip p
+    True
+  False -> False
+
+fail : Pos -> String -> <Exn Diag> a
+fail pos msg = throw (diagAt pos msg)
+
+unexpected : P -> String -> <Exn Diag, IO> a
+unexpected p what =
+  let t = peek p
+  match tokKind t with
+    INDENT -> fail (tokPos t) "unexpected indentation; expected ${what}"
+    DEDENT -> fail (tokPos t) "unexpected end of line; expected ${what}"
+    NEWLINE -> fail (tokPos t) "unexpected end of line; expected ${what}"
+    _ | tokFirst t -> fail (tokPos t) "unexpected ${tokString t} at the start of a line; expected ${what} (check the indentation)"
+      | otherwise -> fail (tokPos t) "unexpected ${tokString t}; expected ${what}"
+
+expect : P -> TokKind -> <Exn Diag, IO> Token
+expect p k = match at p k with
+  True -> next p
+  False -> unexpected p (kindName k)
+
+expect_ : P -> TokKind -> <Exn Diag, IO> Unit
+expect_ p k =
+  let _ = expect p k
+  ()
+
+skipNewlines : P -> <IO> Unit
+skipNewlines p = match at p NEWLINE with
+  True ->
+    skip p
+    skipNewlines p
+  False -> ()
+
+-- Parse items of an indented block: `item` is called for each element.
+-- The block's INDENT has already been consumed.
+blockItems : P -> (Unit -> <Exn Diag, IO | e> a) -> <Exn Diag, IO | e> List a
+blockItems p item =
+  let loop acc =
+    let x = item ()
+    match accept p NEWLINE with
+      True -> match at p DEDENT with
+        True ->
+          skip p
+          reverse (x :: acc)
+        False -> loop (x :: acc)
+      False ->
+        expect_ p DEDENT
+        reverse (x :: acc)
+  loop []
+
+-- ================================================================ module
+
+moduleBody : P -> String -> <Exn Diag, IO> Module
+moduleBody p file =
+  skipNewlines p
+  let name = match at p KwModule with
+    True ->
+      skip p
+      let n = qualifiedUpper p
+      endDecl p
+      n
+    False -> ""
+  skipNewlines p
+  let imports = parseImports p []
+  let decls = parseDecls p []
+  Module name file imports (mergeClauses decls)
+
+parseImports : P -> List Import -> <Exn Diag, IO> List Import
+parseImports p acc = match at p KwImport with
+  True ->
+    let imp = importDecl p
+    endDecl p
+    skipNewlines p
+    parseImports p (imp :: acc)
+  False -> reverse acc
+
+parseDecls : P -> List Decl -> <Exn Diag, IO> List Decl
+parseDecls p acc = match at p EOF with
+  True -> reverse acc
+  False ->
+    let d = decl p
+    endDecl p
+    skipNewlines p
+    parseDecls p (d :: acc)
+
+endDecl : P -> <Exn Diag, IO> Unit
+endDecl p = match at p EOF with
+  True -> ()
+  False -> match at p NEWLINE with
+    True -> skip p
+    False -> unexpected p "end of declaration"
+
+qualifiedUpper : P -> <Exn Diag, IO> String
+qualifiedUpper p =
+  let t = expect p UIDENT
+  match tokQual t with
+    "" -> tokText t
+    q -> q ++ "." ++ tokText t
+
+importDecl : P -> <Exn Diag, IO> Import
+importDecl p =
+  let pos = tokPos (expect p KwImport)
+  let path = qualifiedUpper p
+  let alias = match atWord p "as" with
+    True ->
+      skip p
+      tokText (expect p UIDENT)
+    False -> ""
+  match at p LPAREN with
+    False -> Import pos path alias [] False
+    True ->
+      skip p
+      match at p OP && tokText (peek p) == ".." with
+        True ->
+          skip p
+          expect_ p RPAREN
+          Import pos path alias [] True
+        False ->
+          let names = importNames p []
+          expect_ p RPAREN
+          Import pos path alias names False
+
+importNames : P -> List ImportName -> <Exn Diag, IO> List ImportName
+importNames p acc = match at p RPAREN with
+  True -> reverse acc
+  False ->
+    let t = peek p
+    let n = match tokKind t with
+      LIDENT ->
+        skip p
+        ImportName (tokPos t) (tokText t) 0 False
+      UIDENT ->
+        skip p
+        match at p LPAREN && tokKind (peekN p 1) == OP && tokText (peekN p 1) == ".." with
+          True ->
+            skip p
+            skip p
+            expect_ p RPAREN
+            ImportName (tokPos t) (tokText t) 1 True
+          False -> ImportName (tokPos t) (tokText t) 1 False
+      LPAREN ->
+        skip p
+        let op = expect p OP
+        expect_ p RPAREN
+        ImportName (tokPos t) (tokText op) 0 False
+      _ -> unexpected p "import name"
+    match accept p COMMA with
+      True -> importNames p (n :: acc)
+      False -> reverse (n :: acc)
+
+-- Group consecutive equations of the same function.
+mergeClauses : List Decl -> List Decl
+mergeClauses ds = reverse (foldl mergeDecl [] ds)
+
+private mergeDecl : List Decl -> Decl -> List Decl
+mergeDecl acc d = match (d, acc) with
+  (DFun _ b _, DFun pp prev priv :: rest) | bindName b != "" && bindName prev == bindName b && isNone (bindPat prev) ->
+    DFun pp (withClauses (bindClauses prev ++ bindClauses b) prev) priv :: rest
+  _ -> d :: acc
+
+mergeBinds : List Bind -> List Bind
+mergeBinds bs = reverse (foldl mergeBind [] bs)
+
+private mergeBind : List Bind -> Bind -> List Bind
+mergeBind acc b = match acc with
+  prev :: rest | bindName b != "" && bindName prev == bindName b && isNone (bindPat prev) ->
+    withClauses (bindClauses prev ++ bindClauses b) prev :: rest
+  _ -> b :: acc
+
+-- ================================================================ declarations
+
+decl : P -> <Exn Diag, IO> Decl
+decl p =
+  let t = peek p
+  match tokKind t with
+    KwPrivate ->
+      skip p
+      match decl p with
+        DFun pos b _ -> DFun pos b True
+        DSig (Sig pos n s _) -> DSig (Sig pos n s True)
+        DType pos n ps cs ds _ -> DType pos n ps cs ds True
+        _ -> fail (tokPos t) "'private' is only allowed on functions, signatures and types"
+    KwType -> typeDecl p
+    KwClass -> classDecl p
+    KwInstance -> instanceDecl p
+    KwEffect -> effectDecl p
+    KwForeign -> foreignDecl p
+    KwInfixl -> fixityDecl p
+    KwInfixr -> fixityDecl p
+    KwInfix -> fixityDecl p
+    _ | atWord p "test" && tokKind (peekN p 1) == STRING ->
+          skip p
+          let name = expect p STRING
+          expect_ p EQUALS
+          let body = body p
+          DTest (tokPos t) (tokStr name) body (newRef "")
+      | atWord p "alias" && tokKind (peekN p 1) == UIDENT -> aliasDecl p
+      | otherwise -> match trySig p with
+          Some s -> DSig s
+          None ->
+            let b = funBind p
+            DFun (bindPos b) b False
+
+-- Parse `name : scheme` if present.
+trySig : P -> <Exn Diag, IO> Option Sig
+trySig p =
+  let t = peek p
+  match tokKind t with
+    LIDENT | tokQual t == "" && tokKind (peekN p 1) == COLON ->
+      skip p
+      skip p
+      Some (Sig (tokPos t) (tokText t) (schemeTop p) False)
+    LPAREN | tokKind (peekN p 1) == OP && tokKind (peekN p 2) == RPAREN && tokKind (peekN p 3) == COLON ->
+      skip p
+      let op = next p
+      skip p
+      skip p
+      Some (Sig (tokPos t) (tokText op) (schemeTop p) False)
+    _ -> None
+
+-- One equation: `f p1 .. pn = e`, `(op) a b = e` or `a op b = e`.
+funBind : P -> <Exn Diag, IO> Bind
+funBind p =
+  let t = peek p
+  let (name, params) = match tokKind t with
+    LPAREN | tokKind (peekN p 1) == OP && tokKind (peekN p 2) == RPAREN ->
+      skip p
+      let n = tokText (next p)
+      skip p
+      (n, paramPatterns p)
+    _ | isInfixDef p ->
+          let left = patApp p
+          let n = match at p BACKTICK with
+            True ->
+              skip p
+              let id = tokText (expect p LIDENT)
+              expect_ p BACKTICK
+              id
+            False -> tokText (next p)
+          let right = patApp p
+          (n, [left, right])
+      | tokKind t == LIDENT && tokQual t == "" ->
+          skip p
+          (tokText t, paramPatterns p)
+      | otherwise -> unexpected p "declaration"
+  let r = rhs p EQUALS
+  mkBind (tokPos t) name None [Clause (tokPos t) params r] None
+
+-- Speculatively parse a pattern and report whether it is followed by an
+-- operator, i.e. the equation defines an infix operator.
+isInfixDef : P -> <IO> Bool
+isInfixDef p = match startsPatAtom p with
+  False -> False
+  True ->
+    let save = readRef (pIndex p)
+    let res = try (\_ ->
+      let _ = patApp p
+      let k = peekKind p
+      k == OP || k == BACKTICK)
+    writeRef (pIndex p) save
+    match res with
+      Ok b -> b
+      Err _ -> False
+
+paramPatterns : P -> <Exn Diag, IO> List Pattern
+paramPatterns p =
+  let loop acc = match startsPatAtom p with
+    True -> loop (patAtom p :: acc)
+    False -> reverse acc
+  loop []
+
+-- `= body` or guards `| cond = body`; sep is EQUALS for definitions and
+-- ARROW for match arms.
+rhs : P -> TokKind -> <Exn Diag, IO> Rhs
+rhs p sep = match at p BAR with
+  True ->
+    let loop acc = match at p BAR with
+      True ->
+        let pos = tokPos (next p)
+        let cond = expr p
+        expect_ p sep
+        let b = body p
+        loop (Guard pos cond b :: acc)
+      False -> reverse acc
+    RGuards (loop [])
+  False ->
+    expect_ p sep
+    RBody (body p)
+
+typeDecl : P -> <Exn Diag, IO> Decl
+typeDecl p =
+  let pos = tokPos (expect p KwType)
+  let name = tokText (expect p UIDENT)
+  let paramLoop acc = match at p LIDENT && not (atWord p "deriving") with
+    True -> paramLoop (tokText (next p) :: acc)
+    False -> reverse acc
+  let params = paramLoop []
+  let (ctors, deriv) = match accept p EQUALS with
+    False -> ([], [])
+    True -> match at p INDENT with
+      True ->
+        skip p
+        let loop cs ds =
+          let (cs2, ds2) = match atWord p "deriving" with
+            True -> (cs, derivingClause p)
+            False ->
+              let _ = accept p BAR
+              (ctorAlts p cs, ds)
+          match accept p NEWLINE with
+            True -> loop cs2 ds2
+            False ->
+              expect_ p DEDENT
+              (cs2, ds2)
+        loop [] []
+      False ->
+        let _ = accept p BAR
+        (ctorAlts p [], [])
+  let deriv2 = match atWord p "deriving" with
+    True -> derivingClause p
+    False -> deriv
+  DType pos name params ctors deriv2 False
+
+-- Parse `C1 .. | C2 ..` appending to the constructors so far.
+ctorAlts : P -> List CtorDecl -> <Exn Diag, IO> List CtorDecl
+ctorAlts p acc =
+  let c = ctorDecl p
+  match accept p BAR with
+    True -> ctorAlts p (snoc acc c)
+    False -> snoc acc c
+
+derivingClause : P -> <Exn Diag, IO> List String
+derivingClause p =
+  skip p
+  match accept p LPAREN with
+    True ->
+      let loop acc = match at p RPAREN with
+        True -> reverse acc
+        False ->
+          let n = tokText (expect p UIDENT)
+          match accept p COMMA with
+            True -> loop (n :: acc)
+            False -> reverse (n :: acc)
+      let names = loop []
+      expect_ p RPAREN
+      names
+    False -> [tokText (expect p UIDENT)]
+
+ctorDecl : P -> <Exn Diag, IO> CtorDecl
+ctorDecl p =
+  let t = expect p UIDENT
+  let loop acc = match startsTypeAtom p && not (atWord p "deriving") with
+    True -> loop (typeAtom p :: acc)
+    False -> reverse acc
+  CtorDecl (tokPos t) (tokText t) (loop [])
+
+aliasDecl : P -> <Exn Diag, IO> Decl
+aliasDecl p =
+  let pos = tokPos (next p)
+  let name = tokText (expect p UIDENT)
+  let loop acc = match at p LIDENT with
+    True -> loop (tokText (next p) :: acc)
+    False -> reverse acc
+  let params = loop []
+  expect_ p EQUALS
+  DAlias pos name params (typeTop p)
+
+-- Convert a parsed type (C a or (C a, D b)) into constraints.
+predsFromType : TypeExpr -> <Exn Diag> List PredE
+predsFromType t = match t with
+  TTupleE _ elems -> concatMap predsFromType elems
+  TUnitE _ -> []
+  TAppE _ (TConE _ q c) [arg] -> [PredE (typePos t) q c arg]
+  _ -> fail (typePos t) "invalid constraint"
+
+classDecl : P -> <Exn Diag, IO> Decl
+classDecl p =
+  let pos = tokPos (expect p KwClass)
+  let t0 = btype p
+  let (supers, t) = match accept p DARROW with
+    True ->
+      let s = predsFromType t0
+      (s, btype p)
+    False -> ([], t0)
+  let (name, param) = match predsFromType t with
+    [PredE _ "" c (TVarE _ v)] -> (c, v)
+    [PredE _ "" _ _] -> fail (typePos t) "class parameter must be a type variable"
+    _ -> fail (typePos t) "expected class head `Name a`"
+  let (sigs, defaults) = match accept p KwWhere with
+    True ->
+      expect_ p INDENT
+      let items = blockItems p (\_ -> match trySig p with
+        Some s -> Ok s
+        None -> Err (funBind p))
+      (filterMap okOf items, mergeBinds (filterMap errOf items))
+    False -> ([], [])
+  DClass pos name param supers sigs defaults
+
+private okOf : Result a b -> Option b
+okOf (Ok x) = Some x
+okOf _ = None
+
+private errOf : Result a b -> Option a
+errOf (Err x) = Some x
+errOf _ = None
+
+instanceDecl : P -> <Exn Diag, IO> Decl
+instanceDecl p =
+  let pos = tokPos (expect p KwInstance)
+  let t0 = btype p
+  let (ctx, t) = match accept p DARROW with
+    True ->
+      let c = predsFromType t0
+      (c, btype p)
+    False -> ([], t0)
+  let (qual, cls, head) = match t with
+    TAppE _ (TConE _ q c) [h] -> (q, c, h)
+    _ -> fail (typePos t) "expected instance head `Class Type`"
+  let binds = match accept p KwWhere with
+    True ->
+      expect_ p INDENT
+      mergeBinds (blockItems p (\_ -> funBind p))
+    False -> []
+  DInstance pos ctx qual cls head binds False
+
+effectDecl : P -> <Exn Diag, IO> Decl
+effectDecl p =
+  let pos = tokPos (expect p KwEffect)
+  let name = tokText (expect p UIDENT)
+  let loop acc = match at p LIDENT with
+    True -> loop (tokText (next p) :: acc)
+    False -> reverse acc
+  let params = loop []
+  let ops = match accept p KwWhere with
+    True ->
+      expect_ p INDENT
+      blockItems p (\_ -> match trySig p with
+        Some s -> s
+        None -> unexpected p "operation signature")
+    False -> []
+  DEffect pos name params ops
+
+foreignDecl : P -> <Exn Diag, IO> Decl
+foreignDecl p =
+  let pos = tokPos (expect p KwForeign)
+  let name = match at p LPAREN with
+    True ->
+      skip p
+      let n = tokText (expect p OP)
+      expect_ p RPAREN
+      n
+    False -> tokText (expect p LIDENT)
+  expect_ p COLON
+  let sc = schemeTop p
+  expect_ p EQUALS
+  let target = tokStr (expect p STRING)
+  DForeign pos name sc target
+
+fixityDecl : P -> <Exn Diag, IO> Decl
+fixityDecl p =
+  let t = next p
+  let assoc = match tokKind t with
+    KwInfixl -> 1
+    KwInfixr -> 2
+    _ -> 0
+  let n = expect p INT
+  let prec = withDefault 0 (parseInt (tokText n))
+  let loop acc = match at p OP || at p BACKTICK with
+    True -> match accept p BACKTICK with
+      True ->
+        let op = tokText (expect p LIDENT)
+        expect_ p BACKTICK
+        loop (op :: acc)
+      False ->
+        let op = tokText (next p)
+        let _ = accept p COMMA
+        loop (op :: acc)
+    False -> reverse acc
+  match loop [] with
+    [] -> unexpected p "operator"
+    ops -> DFixity (tokPos t) assoc prec ops
+
+-- ================================================================ types
+
+skipTypeLayout : P -> <IO> Unit
+skipTypeLayout p =
+  let ti = pTypeIndent p
+  match peekKind p with
+    INDENT ->
+      writeRef ti (readRef ti + 1)
+      skip p
+      skipTypeLayout p
+    NEWLINE | readRef ti > 0 ->
+      skip p
+      skipTypeLayout p
+    DEDENT | readRef ti > 0 ->
+      writeRef ti (readRef ti - 1)
+      skip p
+      skipTypeLayout p
+    _ -> ()
+
+finishTypeLayout : P -> <IO> Unit
+finishTypeLayout p =
+  let ti = pTypeIndent p
+  match readRef ti > 0 && at p DEDENT with
+    True ->
+      writeRef ti (readRef ti - 1)
+      skip p
+      finishTypeLayout p
+    False -> writeRef ti 0
+
+schemeTop : P -> <Exn Diag, IO> SchemeE
+schemeTop p =
+  let saved = readRef (pTypeIndent p)
+  writeRef (pTypeIndent p) 0
+  let s = scheme p
+  finishTypeLayout p
+  writeRef (pTypeIndent p) saved
+  s
+
+typeTop : P -> <Exn Diag, IO> TypeExpr
+typeTop p =
+  let saved = readRef (pTypeIndent p)
+  writeRef (pTypeIndent p) 0
+  let t = typ p
+  finishTypeLayout p
+  writeRef (pTypeIndent p) saved
+  t
+
+scheme : P -> <Exn Diag, IO> SchemeE
+scheme p =
+  let t = typ p
+  match accept p DARROW with
+    True ->
+      skipTypeLayout p
+      let preds = predsFromType t
+      SchemeE preds (typ p)
+    False -> SchemeE [] t
+
+typ : P -> <Exn Diag, IO> TypeExpr
+typ p =
+  skipTypeLayout p
+  let t = btype p
+  skipTypeLayout p
+  match at p ARROW with
+    True ->
+      let pos = tokPos (next p)
+      skipTypeLayout p
+      let r = match atOp p "<" || atOp p "<>" with
+        True -> Some (row p)
+        False -> None
+      let res = typ p
+      TFunE pos t r res
+    False -> t
+
+row : P -> <Exn Diag, IO> RowE
+row p =
+  let pos = tokPos (peek p)
+  match atOp p "<>" with
+    True ->
+      skip p
+      RowE pos [] ""
+    False ->
+      skip p
+      skipTypeLayout p
+      let labels0 = match atOp p ">" || at p BAR with
+        True -> []
+        False ->
+          let loop acc =
+            skipTypeLayout p
+            let l = btype p
+            skipTypeLayout p
+            match accept p COMMA with
+              True -> loop (l :: acc)
+              False -> reverse (l :: acc)
+          loop []
+      let (labels, tail) = match accept p BAR with
+        True -> (labels0, tokText (expect p LIDENT))
+        False -> match reverse labels0 with
+          TVarE _ v :: rest -> (reverse rest, v)
+          _ -> (labels0, "")
+      skipTypeLayout p
+      match atOp p ">" with
+        True ->
+          skip p
+          RowE pos labels tail
+        False -> unexpected p "'>'"
+
+startsTypeAtom : P -> <IO> Bool
+startsTypeAtom p = match peekKind p with
+  LIDENT -> True
+  UIDENT -> True
+  LPAREN -> True
+  _ -> False
+
+btype : P -> <Exn Diag, IO> TypeExpr
+btype p =
+  skipTypeLayout p
+  let f = typeAtom p
+  let loop acc = match startsTypeAtom p with
+    True -> loop (typeAtom p :: acc)
+    False -> reverse acc
+  match loop [] with
+    [] -> f
+    args -> match f with
+      TAppE pos g as -> TAppE pos g (as ++ args)
+      _ -> TAppE (typePos f) f args
+
+typeAtom : P -> <Exn Diag, IO> TypeExpr
+typeAtom p =
+  let t = peek p
+  match tokKind t with
+    LIDENT ->
+      skip p
+      match tokQual t with
+        "" -> TVarE (tokPos t) (tokText t)
+        _ -> fail (tokPos t) "type variables cannot be qualified"
+    UIDENT ->
+      skip p
+      TConE (tokPos t) (tokQual t) (tokText t)
+    LPAREN ->
+      skip p
+      skipTypeLayout p
+      match accept p RPAREN with
+        True -> TUnitE (tokPos t)
+        False ->
+          let first = typ p
+          match at p COMMA with
+            True ->
+              let loop acc = match accept p COMMA with
+                True -> loop (typ p :: acc)
+                False -> reverse acc
+              let elems = first :: loop []
+              skipTypeLayout p
+              expect_ p RPAREN
+              TTupleE (tokPos t) elems
+            False ->
+              skipTypeLayout p
+              expect_ p RPAREN
+              first
+    _ -> unexpected p "type"
+
+-- ================================================================ patterns
+
+startsPatAtom : P -> <IO> Bool
+startsPatAtom p =
+  let t = peek p
+  match tokKind t with
+    LIDENT -> tokQual t == ""
+    UIDENT -> True
+    UNDERSCORE -> True
+    INT -> True
+    FLOAT -> True
+    STRING -> True
+    CHAR -> True
+    LPAREN -> True
+    LBRACKET -> True
+    _ -> False
+
+pattern : P -> <Exn Diag, IO> Pattern
+pattern p =
+  let pat = patApp p
+  match atOp p "::" with
+    True ->
+      let pos = tokPos (next p)
+      let rest = pattern p
+      mkPCon pos "" "::" [pat, rest]
+    False -> pat
+
+patApp : P -> <Exn Diag, IO> Pattern
+patApp p =
+  let t = peek p
+  match tokKind t with
+    UIDENT ->
+      skip p
+      let loop acc = match startsPatAtom p with
+        True -> loop (patAtom p :: acc)
+        False -> reverse acc
+      mkPCon (tokPos t) (tokQual t) (tokText t) (loop [])
+    _ -> patAtom p
+
+litFromToken : Token -> <Exn Diag> Lit
+litFromToken t = match tokKind t with
+  INT -> LInt (withDefault 0 (parseIntLit (tokText t)))
+  FLOAT -> LFloat (withDefault 0.0 (parseFloatLit (tokText t)))
+  STRING -> LString (tokStr t)
+  CHAR -> LChar (firstChar (tokStr t))
+  _ -> fail (tokPos t) "expected literal"
+
+patAtom : P -> <Exn Diag, IO> Pattern
+patAtom p =
+  let t = peek p
+  match tokKind t with
+    LIDENT ->
+      skip p
+      match at p AT with
+        True ->
+          skip p
+          let inner = patAtom p
+          PAs (tokPos t) (tokText t) (newRef "") inner
+        False -> mkPVar (tokPos t) (tokText t)
+    UIDENT ->
+      skip p
+      mkPCon (tokPos t) (tokQual t) (tokText t) []
+    UNDERSCORE ->
+      skip p
+      PWild (tokPos t)
+    k | k == INT || k == FLOAT || k == STRING || k == CHAR ->
+      skip p
+      PLit (tokPos t) (litFromToken t)
+    LBRACKET ->
+      skip p
+      let loop acc = match at p RBRACKET with
+        True -> reverse acc
+        False ->
+          let x = pattern p
+          match accept p COMMA with
+            True -> loop (x :: acc)
+            False -> reverse (x :: acc)
+      let elems = loop []
+      expect_ p RBRACKET
+      PList (tokPos t) elems
+    LPAREN ->
+      skip p
+      match accept p RPAREN with
+        True -> PUnit (tokPos t)
+        False ->
+          let first = pattern p
+          match accept p COLON with
+            True ->
+              let ty = typeTop p
+              expect_ p RPAREN
+              PAnnot (tokPos t) first ty
+            False -> match at p COMMA with
+              True ->
+                let loop acc = match accept p COMMA with
+                  True -> loop (pattern p :: acc)
+                  False -> reverse acc
+                let elems = first :: loop []
+                expect_ p RPAREN
+                PTuple (tokPos t) elems
+              False ->
+                expect_ p RPAREN
+                first
+    _ -> unexpected p "pattern"
+
+-- ================================================================ expressions
+
+-- An expression that may be an indented block.
+body : P -> <Exn Diag, IO> Expr
+body p = match peekKind p with
+  INDENT -> block p
+  KwLet -> inlineBlock p
+  _ ->
+    let e = expr p
+    match at p SEMI with
+      True -> inlineBlockFrom p e
+      False -> e
+
+stmt : P -> <Exn Diag, IO> Stmt
+stmt p = match at p KwLet with
+  True ->
+    let lp = tokPos (next p)
+    let b = letBind p lp
+    match at p KwIn with
+      True ->
+        skip p
+        SExpr (ELet lp [b] (body p))
+      False -> SLet b
+  False -> SExpr (expr p)
+
+-- Statements separated by ';' on one line.
+inlineBlock : P -> <Exn Diag, IO> Expr
+inlineBlock p =
+  let pos = tokPos (peek p)
+  let first = stmt p
+  match moreStmts p [first] with
+    [SExpr e] -> e
+    stmts -> EBlock pos stmts
+
+private moreStmts : P -> List Stmt -> <Exn Diag, IO> List Stmt
+moreStmts p acc = match accept p SEMI with
+  True -> moreStmts p (snoc acc (stmt p))
+  False -> acc
+
+inlineBlockFrom : P -> Expr -> <Exn Diag, IO> Expr
+inlineBlockFrom p first = EBlock (exprPos first) (moreStmts p [SExpr first])
+
+block : P -> <Exn Diag, IO> Expr
+block p =
+  let pos = tokPos (expect p INDENT)
+  let loop acc =
+    let s = match at p KwLet with
+      True ->
+        let lp = tokPos (next p)
+        let b = letBind p lp
+        match at p KwIn with
+          True ->
+            skip p
+            SExpr (ELet lp [b] (body p))
+          False -> SLet b
+      False -> SExpr (expr p)
+    match accept p NEWLINE || accept p SEMI with
+      True -> match at p DEDENT with
+        True ->
+          skip p
+          reverse (s :: acc)
+        False -> loop (s :: acc)
+      False -> match at p DEDENT with
+        True ->
+          skip p
+          reverse (s :: acc)
+        False -> unexpected p "end of line"
+  match reverse (foldl mergeStmt [] (loop [])) with
+    [SExpr e] -> e
+    stmts -> EBlock pos stmts
+
+-- Merge consecutive clauses of local functions.
+private mergeStmt : List Stmt -> Stmt -> List Stmt
+mergeStmt acc s = match (s, acc) with
+  (SLet b, SLet prev :: rest) | bindName b != "" && bindName prev == bindName b && isNone (bindPat prev) && isNone (bindSig b) && clausesMergeable prev b ->
+    SLet (withClauses (bindClauses prev ++ bindClauses b) prev) :: rest
+  _ -> s :: acc
+
+private clausesMergeable : Bind -> Bind -> Bool
+clausesMergeable prev b = match (bindClauses prev, bindClauses b) with
+  (_ :: _, c :: _) -> not (isEmpty (clauseParams c))
+  _ -> False
+
+-- The part after `let`.
+letBind : P -> Pos -> <Exn Diag, IO> Bind
+letBind p pos =
+  let t = peek p
+  match tokKind t == LIDENT && tokQual t == "" && tokKind (peekN p 1) == COLON with
+    True ->
+      skip p
+      skip p
+      let sc = schemeTop p
+      let r = rhs p EQUALS
+      mkBind (tokPos t) (tokText t) None [Clause (tokPos t) [] r] (Some sc)
+    False
+      | tokKind t == LIDENT && tokQual t == "" && not (isInfixDef p) -> funBind p
+      | tokKind t == LPAREN && tokKind (peekN p 1) == OP && tokKind (peekN p 2) == RPAREN -> funBind p
+      | isInfixDef p -> funBind p
+      | otherwise ->
+          let pat = pattern p
+          expect_ p EQUALS
+          let b = body p
+          mkBind pos "" (Some pat) [Clause pos [] (RBody b)] None
+
+expr : P -> <Exn Diag, IO> Expr
+expr p =
+  let e = opExpr p False
+  match at p COLON with
+    True ->
+      let pos = tokPos (next p)
+      EAnnot pos e (schemeTop p)
+    False -> e
+
+-- An operator chain. With allowTrailing, a chain ending with an operator
+-- (left section) is returned as a section.
+opExpr : P -> Bool -> <Exn Diag, IO> Expr
+opExpr p allowTrailing = opLoop p allowTrailing [] []
+
+-- operands and operators so far (reversed)
+private opLoop : P -> Bool -> List Expr -> List Expr -> <Exn Diag, IO> Expr
+opLoop p allowTrailing operands ops =
+  writeRef (pTrailing p) False
+  let e = prefixOperand p
+  let operands1 = e :: operands
+  match readRef (pTrailing p) with
+    True ->
+      writeRef (pTrailing p) False
+      chain (reverse operands1) (reverse ops)
+    False -> match tryOperator p with
+      None -> chain (reverse operands1) (reverse ops)
+      Some op
+        | allowTrailing && at p RPAREN -> ESection (exprPos op) op (Some (chain (reverse operands1) (reverse ops))) None
+        | at p INDENT ->
+            let b = block p
+            chain (reverse (b :: operands1)) (reverse (op :: ops))
+        | otherwise -> opLoop p allowTrailing operands1 (op :: ops)
+
+chain : List Expr -> List Expr -> Expr
+chain operands ops = match (operands, ops) with
+  ([e], []) -> e
+  (first :: _, _) -> EOpChain (exprPos first) operands ops
+  _ -> error "chain: no operands"
+
+tryOperator : P -> <Exn Diag, IO> Option Expr
+tryOperator p =
+  let t = peek p
+  match tokKind t with
+    OP ->
+      skip p
+      Some (mkVar (tokPos t) (tokQual t) (tokText t))
+    BACKTICK ->
+      skip p
+      let id = peek p
+      match tokKind id == LIDENT || tokKind id == UIDENT with
+        True -> ()
+        False -> unexpected p "identifier"
+      skip p
+      expect_ p BACKTICK
+      Some (mkVar (tokPos id) (tokQual id) (tokText id))
+    _ -> None
+
+prefixOperand : P -> <Exn Diag, IO> Expr
+prefixOperand p =
+  let t = peek p
+  match tokKind t with
+    OP | tokText t == "-" ->
+      skip p
+      ENeg (tokPos t) (prefixOperand p)
+    k | k == BACKSLASH || k == KwMatch || k == KwHandle || k == KwLet ->
+      let e = blockExpr p
+      writeRef (pTrailing p) True
+      e
+    _ -> app p
+
+blockExpr : P -> <Exn Diag, IO> Expr
+blockExpr p =
+  let t = peek p
+  match tokKind t with
+    BACKSLASH ->
+      skip p
+      let loop acc = match at p ARROW with
+        True -> reverse acc
+        False -> match startsPatAtom p with
+          True -> loop (patAtom p :: acc)
+          False -> unexpected p "lambda parameter or '->'"
+      match loop [] with
+        [] -> fail (tokPos t) "lambda needs at least one parameter"
+        params ->
+          expect_ p ARROW
+          ELam (tokPos t) params (body p)
+    KwMatch ->
+      skip p
+      let scrut = expr p
+      expect_ p KwWith
+      expect_ p INDENT
+      let arms = blockItems p (\_ ->
+        let pos = tokPos (peek p)
+        let pat = pattern p
+        Arm pos pat (rhs p ARROW))
+      EMatch (tokPos t) scrut arms
+    KwHandle ->
+      skip p
+      let hbody = expr p
+      expect_ p KwWith
+      expect_ p INDENT
+      let ret = newRef None
+      let ops = blockItems p (\_ -> handlerClause p ret)
+      EHandle (tokPos t) hbody (readRef ret) (filterMap id ops) (newRef "")
+    KwLet ->
+      skip p
+      let b = letBind p (tokPos t)
+      match at p NEWLINE && tokKind (peekN p 1) == KwIn with
+        True -> skip p
+        False -> ()
+      expect_ p KwIn
+      ELet (tokPos t) [b] (body p)
+    _ -> unexpected p "expression"
+
+-- One handler clause; the return clause is stored in ret.
+handlerClause : P -> Ref (Option HandlerClause) -> <Exn Diag, IO> Option HandlerClause
+handlerClause p ret =
+  let c = peek p
+  match accept p KwReturn with
+    True ->
+      let pat = patAtom p
+      match readRef ret with
+        Some _ -> fail (tokPos c) "duplicate return clause"
+        None -> ()
+      expect_ p ARROW
+      let b = body p
+      writeRef ret (Some (HandlerClause (tokPos c) "" [pat] b (newRef None)))
+      None
+    False ->
+      let id = expect p LIDENT
+      let params = paramPatterns p
+      expect_ p ARROW
+      let b = body p
+      Some (HandlerClause (tokPos c) (tokText id) params b (newRef None))
+
+startsAtom : P -> <IO> Bool
+startsAtom p = match peekKind p with
+  LIDENT -> True
+  UIDENT -> True
+  INT -> True
+  FLOAT -> True
+  STRING -> True
+  INTERP -> True
+  CHAR -> True
+  LPAREN -> True
+  LBRACKET -> True
+  _ -> False
+
+app : P -> <Exn Diag, IO> Expr
+app p =
+  let f = atom p
+  let loop acc = match startsAtom p with
+    True -> loop (atom p :: acc)
+    False -> match peekKind p with
+      k | k == BACKSLASH || k == KwMatch || k == KwHandle ->
+        let b = blockExpr p
+        writeRef (pTrailing p) True
+        reverse (b :: acc)
+      _ -> reverse acc
+  match loop [] with
+    [] -> f
+    args -> mkApp (exprPos f) f args
+
+atom : P -> <Exn Diag, IO> Expr
+atom p =
+  let t = peek p
+  match tokKind t with
+    LIDENT ->
+      skip p
+      mkVar (tokPos t) (tokQual t) (tokText t)
+    UIDENT ->
+      skip p
+      mkCon (tokPos t) (tokQual t) (tokText t)
+    k | k == INT || k == FLOAT || k == STRING || k == CHAR ->
+      skip p
+      ELit (tokPos t) (litFromToken t)
+    INTERP ->
+      skip p
+      interp t
+    LBRACKET ->
+      skip p
+      let loop acc = match at p RBRACKET with
+        True -> reverse acc
+        False ->
+          let x = expr p
+          match accept p COMMA with
+            True -> loop (x :: acc)
+            False -> reverse (x :: acc)
+      let elems = loop []
+      expect_ p RBRACKET
+      match elems with
+        [c@(EOpChain _ _ [op])] | varName op == ".." -> c
+        _ -> EList (tokPos t) elems
+    LPAREN ->
+      skip p
+      parenExpr p t
+    _ -> unexpected p "expression"
+
+parenExpr : P -> Token -> <Exn Diag, IO> Expr
+parenExpr p t = match accept p RPAREN with
+  True -> EUnit (tokPos t)
+  False
+    | at p OP && tokText (peek p) != "-" || at p BACKTICK ->
+        let op = withDefault (EUnit (tokPos t)) (tryOperator p)
+        match accept p RPAREN with
+          True -> op
+          False ->
+            let right = expr p
+            expect_ p RPAREN
+            ESection (tokPos t) op None (Some right)
+    | at p OP && tokText (peek p) == "-" && tokKind (peekN p 1) == RPAREN ->
+        let op = withDefault (EUnit (tokPos t)) (tryOperator p)
+        skip p
+        op
+    | otherwise ->
+        let first = opExpr p True
+        match first with
+          ESection _ _ _ _ ->
+            expect_ p RPAREN
+            first
+          _ -> match peekKind p with
+            COLON ->
+              let pos = tokPos (next p)
+              let ty = schemeTop p
+              expect_ p RPAREN
+              EAnnot pos first ty
+            COMMA ->
+              let loop acc = match accept p COMMA with
+                True -> loop (expr p :: acc)
+                False -> reverse acc
+              let elems = first :: loop []
+              expect_ p RPAREN
+              ETuple (tokPos t) elems
+            _ ->
+              expect_ p RPAREN
+              first
+
+interp : Token -> <Exn Diag, IO> Expr
+interp t =
+  let part pp = match pp with
+    InterpLit s -> ELit (tokPos t) (LString s)
+    InterpExpr toks ppos ->
+      match length toks <= 1 with
+        True -> fail ppos "empty interpolation"
+        False -> ()
+      let sub = newParser toks
+      let x = expr sub
+      match at sub EOF with
+        True -> x
+        False -> unexpected sub "'}'"
+  EInterp (tokPos t) (mapList part (tokParts t))

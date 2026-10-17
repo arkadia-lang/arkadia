@@ -3,6 +3,8 @@ module Main
 import Ark.Util
 import Ark.Ast
 import Ark.Lexer
+import Ark.Parser
+import Ark.Debug
 
 dumpTok : String -> Token -> String
 dumpTok ind t =
@@ -23,6 +25,11 @@ main () = match args () with
   ["tokens", file] -> match readFile file with
     Ok src -> match lex file src with
       Ok toks -> print (concatStrings (mapList (dumpTok "") toks))
+      Err errs -> println ("ERR " ++ joinWith "\n" (mapList diagString errs))
+    Err e -> println e
+  ["parse", file] -> match readFile file with
+    Ok src -> match parseModule file src with
+      Ok m -> print (dumpModule m)
       Err errs -> println ("ERR " ++ joinWith "\n" (mapList diagString errs))
     Err e -> println e
   _ -> println "usage"
