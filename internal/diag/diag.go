@@ -73,6 +73,74 @@ func (s *Sources) line(file string, n int) (string, bool) {
 	return lines[n-1], true
 }
 
+// DocComment returns the comment lines directly above the declaration of
+// name at pos (or above its type signature), without the comment markers.
+func (s *Sources) DocComment(pos Pos, name string) string {
+	start := pos.Line
+	// skip the signature: the closest line above at the same indentation
+	// that is not a comment
+	for k := pos.Line - 1; k >= 1; k-- {
+		line, ok := s.line(pos.File, k)
+		if !ok {
+			return ""
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			break
+		}
+		if indentOf(line) > pos.Col-1 {
+			continue // continuation of a multi-line signature
+		}
+		if isSignatureOf(strings.TrimPrefix(trimmed, "private "), name) {
+			start = k
+		}
+		break
+	}
+	var lines []string
+	for k := start - 1; k >= 1; k-- {
+		line, ok := s.line(pos.File, k)
+		if !ok {
+			break
+		}
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "--") || strings.HasPrefix(trimmed, "---") {
+			break
+		}
+		text := strings.TrimPrefix(trimmed, "--")
+		text = strings.TrimPrefix(text, " ")
+		lines = append(lines, text)
+	}
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// LeadingComment returns the comment block at the start of a file.
+func (s *Sources) LeadingComment(file string) string {
+	var lines []string
+	for k := 1; ; k++ {
+		line, ok := s.line(file, k)
+		trimmed := strings.TrimSpace(line)
+		if !ok || !strings.HasPrefix(trimmed, "--") {
+			break
+		}
+		lines = append(lines, strings.TrimPrefix(strings.TrimPrefix(trimmed, "--"), " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func indentOf(line string) int { return len(line) - len(strings.TrimLeft(line, " ")) }
+
+func isSignatureOf(line, name string) bool {
+	for _, head := range []string{name, "(" + name + ")"} {
+		if rest, ok := strings.CutPrefix(line, head); ok && strings.HasPrefix(strings.TrimLeft(rest, " "), ":") {
+			return true
+		}
+	}
+	return false
+}
+
 // Render formats an error with a source snippet.
 func (s *Sources) Render(err error, color bool) string {
 	var errs []*Error

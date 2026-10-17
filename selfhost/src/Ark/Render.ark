@@ -4,6 +4,7 @@ module Ark.Render
 import Ark.Util
 import Ark.Ast
 import Std.Map as Map
+import Std.Array as Arr
 
 -- ANSI styles: red, bold, blue, reset (all empty without color).
 type Style = Style String String String String
@@ -25,6 +26,73 @@ sourceLine srcs file n =
     Some s -> match n >= 1 with
       True -> nth (n - 1) (split "\n" s)
       False -> None
+
+-- The lines of a file, from the given sources or the file system.
+private fileLines : Map.Map String String -> String -> <IO> Arr.Array String
+fileLines srcs file = match Map.lookup file srcs with
+  Some s -> Arr.fromList (split "\n" s)
+  None -> match readFile file with
+    Ok s -> Arr.fromList (split "\n" s)
+    Err _ -> Arr.empty
+
+-- The comment lines directly above the declaration of name at pos (or
+-- above its type signature), without the comment markers.
+docComment : Map.Map String String -> Pos -> String -> <IO> String
+docComment srcs (Pos file line col) name =
+  let lines = fileLines srcs file
+  let lineAt k = Arr.get (k - 1) lines
+  let findStart k = match k >= 1 with
+    False -> Some line
+    True -> match lineAt k with
+      None -> None
+      Some l ->
+        let trimmed = trim l
+        match trimmed == "" || startsWith "--" trimmed with
+          True -> Some line
+          False
+            | indentOf l > col - 1 -> findStart (k - 1)
+            | isSignatureOf (withDefault trimmed (stripPrefixS "private " trimmed)) name -> Some k
+            | otherwise -> Some line
+  match findStart (line - 1) with
+    None -> ""
+    Some start ->
+      let collect k acc = match k >= 1 with
+        False -> acc
+        True -> match lineAt k with
+          None -> acc
+          Some l ->
+            let trimmed = trim l
+            match startsWith "--" trimmed && not (startsWith "---" trimmed) with
+              True -> collect (k - 1) (commentText trimmed :: acc)
+              False -> acc
+      joinWith "\n" (collect (start - 1) [])
+
+-- The comment block at the start of a file.
+leadingComment : Map.Map String String -> String -> <IO> String
+leadingComment srcs file =
+  let lines = Arr.toList (fileLines srcs file)
+  let collect ls acc = match ls with
+    l :: rest | startsWith "--" (trim l) -> collect rest (commentText (trim l) :: acc)
+    _ -> reverse acc
+  joinWith "\n" (collect lines [])
+
+private commentText : String -> String
+commentText s =
+  let t = withDefault s (stripPrefixS "--" s)
+  withDefault t (stripPrefixS " " t)
+
+private stripPrefixS : String -> String -> Option String
+stripPrefixS p s = match startsWith p s with
+  True -> Some (substring (stringLength p) (stringLength s) s)
+  False -> None
+
+private indentOf : String -> Int
+indentOf l = length (takeWhile (\c -> c == ' ') (chars l))
+
+private isSignatureOf : String -> String -> Bool
+isSignatureOf l name = anyOf (\head -> match stripPrefixS head l with
+  Some rest -> startsWith ":" (fromChars (dropWhile (\c -> c == ' ') (chars rest)))
+  None -> False) [name, "(" ++ name ++ ")"]
 
 comparePos : Diag -> Diag -> Ordering
 comparePos (Diag (Pos f1 l1 c1) _ _) (Diag (Pos f2 l2 c2) _ _) = compare (f1, l1, c1) (f2, l2, c2)

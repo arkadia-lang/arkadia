@@ -8,6 +8,7 @@ import Ark.Types
 import Ark.Loader
 import Ark.Project
 import Ark.Json
+import Ark.Render
 import Std.Map as Map
 
 foreign stdinLine : Unit -> <IO> Option String = "NativeStdinLine"
@@ -18,12 +19,13 @@ foreign uriToPath : String -> String = "NativeURIToPath"
 foreign pathToURI : String -> <IO> String = "NativePathToURI"
 
 -- standard library directory, version, open documents (absolute path ->
--- text), identifier information by file, files with published diagnostics
-type Server = Server String String (Ref (Map.Map String String)) (Ref (Map.Map String (List IdentInfo))) (Ref (Map.Map String Bool))
+-- text), identifier information by file, files with published
+-- diagnostics, sources of the last checked program (for doc comments)
+type Server = Server String String (Ref (Map.Map String String)) (Ref (Map.Map String (List IdentInfo))) (Ref (Map.Map String Bool)) (Ref (Map.Map String String))
 
 -- Serve on standard input and output until exit.
 serve : String -> String -> <IO> Int
-serve libDir ver = serveLoop (Server libDir ver (newRef Map.empty) (newRef Map.empty) (newRef Map.empty))
+serve libDir ver = serveLoop (Server libDir ver (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty))
 
 private serveLoop : Server -> <IO> Int
 serveLoop s = match readMessage () with
@@ -72,7 +74,7 @@ docPath : Json -> String
 docPath m = uriToPath (asString (jpath ["params", "textDocument", "uri"] m))
 
 handleMessage : Server -> Json -> <IO> Unit
-handleMessage (s@(Server _ ver docs _ _)) m =
+handleMessage (s@(Server _ ver docs _ _ srcs)) m =
   let id = field "id" m
   match asString (field "method" m) with
     "initialize" -> reply id (JObj
@@ -98,7 +100,7 @@ handleMessage (s@(Server _ ver docs _ _)) m =
     "textDocument/didClose" -> modifyRef docs (Map.delete (docPath m))
     "textDocument/hover" -> match find s m with
       Some (ident@(IdentInfo _ _ _ _ _ _ _)) -> reply id (JObj
-        [ ("contents", JObj [("kind", JStr "markdown"), ("value", JStr ("```arkadia\n" ++ describe ident ++ "\n```"))])
+        [ ("contents", JObj [("kind", JStr "markdown"), ("value", JStr ("```arkadia\n" ++ describe ident ++ "\n```" ++ identDoc (readRef srcs) ident))])
         , ("range", identRange ident)
         ])
       None -> reply id JNull
@@ -110,6 +112,19 @@ handleMessage (s@(Server _ ver docs _ _)) m =
     _ -> match id with
       JNull -> ()
       _ -> send (JObj [("error", JObj [("code", jint (-32601)), ("message", JStr "method not found")]), ("id", id), ("jsonrpc", JStr "2.0")])
+
+-- The documentation comment of the definition of an identifier, as a
+-- markdown paragraph.
+identDoc : Map.Map String String -> IdentInfo -> <IO> String
+identDoc srcs (IdentInfo _ _ name _ _ def kind) = match posLine def == 0 || kind == "local" with
+  True -> ""
+  False ->
+    let short = match split "." name with
+      parts@(_ :: _ :: _) | lastOf parts != "" -> lastOf parts
+      _ -> name
+    match docComment srcs def short with
+      "" -> ""
+      d -> "\n\n" ++ d
 
 -- The type information of an identifier.
 describe : IdentInfo -> <IO> String
@@ -124,7 +139,7 @@ identRange (IdentInfo (Pos _ line col) len _ _ _ _ _) =
 
 -- The innermost identifier at the requested position.
 find : Server -> Json -> <IO> Option IdentInfo
-find (Server _ _ _ info _) m =
+find (Server _ _ _ info _ _) m =
   let p = docPath m
   let line = asInt (jpath ["params", "position", "line"] m)
   let ch = asInt (jpath ["params", "position", "character"] m)
@@ -138,7 +153,7 @@ find (Server _ _ _ info _) m =
 
 -- Type check the program containing path and publish diagnostics.
 check : Server -> String -> <IO> Unit
-check (Server libDir _ docs info lastErr) p =
+check (Server libDir _ docs info lastErr srcs) p =
   let projectPaths = match findManifest (pathDir p) with
     Some mp -> match resolveProject mp with
       Ok (Project _ srcs _) -> srcs
@@ -148,6 +163,7 @@ check (Server libDir _ docs info lastErr) p =
   let errs = match loadFile l p with
     Ok _ -> []
     Err es -> es
+  writeRef srcs (loaderSources l)
   let diags = foldl (\acc (Diag (Pos file line col) msg notes) ->
     let f = pathAbs (match file with
       "" -> p

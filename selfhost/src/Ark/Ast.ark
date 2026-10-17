@@ -338,6 +338,9 @@ classMethods (ClassInfo _ _ _ ms _ _ _) = readRef ms
 classDefaults : ClassInfo -> <IO> Map.Map String String
 classDefaults (ClassInfo _ _ _ _ ds _ _) = readRef ds
 
+classPos : ClassInfo -> Pos
+classPos (ClassInfo _ _ _ _ _ _ p) = p
+
 classModule : ClassInfo -> String
 classModule (ClassInfo _ _ _ _ _ m _) = m
 
@@ -417,6 +420,9 @@ effectNParams (EffectInfo _ _ n _ _ _) = n
 
 effectOps : EffectInfo -> <IO> List OpInfo
 effectOps (EffectInfo _ _ _ ops _ _) = readRef ops
+
+effectPos : EffectInfo -> Pos
+effectPos (EffectInfo _ _ _ _ _ p) = p
 
 effectModule : EffectInfo -> String
 effectModule (EffectInfo _ _ _ _ m _) = m

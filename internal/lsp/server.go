@@ -64,6 +64,7 @@ type Server struct {
 	docs    map[string]string // abs path -> text
 	info    map[string][]*types.IdentInfo
 	lastErr map[string]bool // files with published diagnostics
+	sources *diag.Sources   // of the last checked program (for doc comments)
 }
 
 // Serve runs the server on stdin/stdout until exit.
@@ -200,8 +201,12 @@ func (s *Server) handle(m *message) {
 	case "textDocument/hover":
 		path, pos := s.params(m.Params)
 		if id := s.find(path, pos); id != nil {
+			text := "```arkadia\n" + id.Describe() + "\n```"
+			if doc := s.docComment(id); doc != "" {
+				text += "\n\n" + doc
+			}
 			s.reply(m.ID, map[string]any{
-				"contents": map[string]any{"kind": "markdown", "value": "```arkadia\n" + id.Describe() + "\n```"},
+				"contents": map[string]any{"kind": "markdown", "value": text},
 				"range":    identRange(id),
 			})
 			return
@@ -220,6 +225,19 @@ func (s *Server) handle(m *message) {
 			s.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": rpcError{Code: -32601, Message: "method not found"}})
 		}
 	}
+}
+
+// docComment returns the documentation comment of the definition of an
+// identifier.
+func (s *Server) docComment(id *types.IdentInfo) string {
+	if s.sources == nil || id.Def.Line == 0 || id.Kind == "local" {
+		return ""
+	}
+	name := id.Name
+	if i := strings.LastIndex(name, "."); i > 0 && i < len(name)-1 {
+		name = name[i+1:]
+	}
+	return s.sources.DocComment(id.Def, name)
 }
 
 func identRange(id *types.IdentInfo) rng {
@@ -268,6 +286,7 @@ func (s *Server) check(path string) {
 	l.Overlay = s.docs
 	l.CollectInfo = true
 	_, err := l.LoadFile(entry)
+	s.sources = l.Sources
 	diags := map[string][]diagnostic{}
 	if err != nil {
 		var errs []*diag.Error

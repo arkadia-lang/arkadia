@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/verniyyy/arkadia/internal/diag"
 	"github.com/verniyyy/arkadia/internal/types"
 )
 
@@ -337,12 +338,32 @@ func cmdDoc(args []string) int {
 	if err != nil {
 		return fail(err, l)
 	}
-	printDoc(os.Stdout, p.Global.Modules[args[0]])
+	file := ""
+	for _, m := range p.Modules {
+		if m.Name == args[0] {
+			file = m.File
+		}
+	}
+	printDoc(os.Stdout, p.Global.Modules[args[0]], p.Sources, file)
 	return 0
 }
 
-func printDoc(w io.Writer, ex *types.Exports) {
+// printDocText writes documentation lines indented below an entry.
+func printDocText(w io.Writer, doc string) {
+	if doc == "" {
+		return
+	}
+	for _, line := range strings.Split(doc, "\n") {
+		fmt.Fprintln(w, strings.TrimRight("    "+line, " "))
+	}
+}
+
+func printDoc(w io.Writer, ex *types.Exports, src *diag.Sources, file string) {
 	fmt.Fprintf(w, "module %s\n", ex.Module)
+	if doc := src.LeadingComment(file); doc != "" {
+		fmt.Fprintln(w)
+		printDocText(w, doc)
+	}
 	var tnames []string
 	for n := range ex.Types {
 		tnames = append(tnames, n)
@@ -363,11 +384,13 @@ func printDoc(w io.Writer, ex *types.Exports) {
 				fmt.Fprintf(w, " = %s", strings.Join(ctors, " | "))
 			}
 			fmt.Fprintln(w)
+			printDocText(w, src.DocComment(t.Pos, n))
 		case *types.ClassInfo:
 			if t.Module != ex.Module {
 				continue
 			}
 			fmt.Fprintf(w, "\nclass %s\n", n)
+			printDocText(w, src.DocComment(t.Pos, n))
 			for _, m := range t.Methods {
 				fmt.Fprintf(w, "  %s : %s\n", m.Name, types.SchemeString(m.Scheme))
 			}
@@ -376,6 +399,7 @@ func printDoc(w io.Writer, ex *types.Exports) {
 				continue
 			}
 			fmt.Fprintf(w, "\neffect %s\n", n)
+			printDocText(w, src.DocComment(t.Pos, n))
 			for _, o := range t.Ops {
 				fmt.Fprintf(w, "  %s : %s\n", o.Name, types.SchemeString(o.Scheme))
 			}
@@ -393,6 +417,7 @@ func printDoc(w io.Writer, ex *types.Exports) {
 		v := ex.Values[n]
 		if v.Scheme != nil {
 			fmt.Fprintf(w, "%s : %s\n", n, types.SchemeString(v.Scheme))
+			printDocText(w, src.DocComment(v.Pos, n))
 		}
 	}
 }
