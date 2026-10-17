@@ -1,0 +1,266 @@
+-- Package manifests (ark.toml) and source roots of a project.
+module Ark.Project
+
+import Ark.Util
+import Std.IO
+import Std.Map as Map
+
+manifestName : String
+manifestName = "ark.toml"
+
+-- name, path (relative to the manifest), git URL, revision
+type Dependency = Dependency String String String String
+
+-- directory, name, version, entry file (relative), dependencies
+type Manifest = Manifest String String String String (List Dependency)
+
+manifestDir : Manifest -> String
+manifestDir (Manifest d _ _ _ _) = d
+
+manifestPackage : Manifest -> String
+manifestPackage (Manifest _ n _ _ _) = n
+
+manifestEntry : Manifest -> String
+manifestEntry (Manifest _ _ _ e _) = e
+
+-- manifest, source roots (the package's src dir followed by the
+-- dependencies' src dirs), native Go files
+type Project = Project Manifest (List String) (List String)
+
+-- ================================================================ TOML subset
+
+type TomlValue = TStr String | TInt Int | TBool Bool | TTable (Map.Map String TomlValue) | TArray (List TomlValue)
+
+-- Parse tables, strings, integers, booleans, arrays and inline tables.
+parseToml : String -> Result String (Map.Map String (Map.Map String TomlValue))
+parseToml src = tomlLines (indexed (lines src)) "" (Map.singleton "" Map.empty)
+
+private tomlLines : List (Int, String) -> String -> Map.Map String (Map.Map String TomlValue) -> Result String (Map.Map String (Map.Map String TomlValue))
+tomlLines ls table acc = match ls with
+  [] -> Ok acc
+  (i, raw) :: rest ->
+    let n = i + 1
+    let l = trim (stripComment raw)
+    match l with
+      "" -> tomlLines rest table acc
+      _ | startsWith "[" l -> match endsWith "]" l with
+            False -> Err "line ${n}: malformed table header"
+            True ->
+              let t = trim (substring 1 (stringLength l - 1) l)
+              let acc2 = match Map.member t acc with
+                True -> acc
+                False -> Map.insert t Map.empty acc
+              tomlLines rest t acc2
+        | otherwise -> match splitOnce "=" l with
+            None -> Err "line ${n}: expected key = value"
+            Some (k, v) -> match tomlValue (trimStart (chars (trim v))) with
+              Err e -> Err "line ${n}: ${e}"
+              Ok (val, restChars) -> match trim (fromChars restChars) with
+                "" ->
+                  let key = unquoteKey (trim k)
+                  tomlLines rest table (Map.insert table (Map.insert key val (Map.findWithDefault Map.empty table acc)) acc)
+                junk -> Err "line ${n}: unexpected ${show junk}"
+
+private unquoteKey : String -> String
+unquoteKey k = match chars k with
+  '"' :: rest -> match tomlString rest [] with
+    Ok (s, _) -> s
+    Err _ -> k
+  _ -> k
+
+splitOnce : String -> String -> Option (String, String)
+splitOnce sep s = match split sep s with
+  first :: (rest@(_ :: _)) -> Some (first, joinWith sep rest)
+  _ -> None
+
+stripComment : String -> String
+stripComment s = fromChars (stripAcc (chars s) False [])
+
+private stripAcc : List Char -> Bool -> List Char -> List Char
+stripAcc cs inStr acc = match cs with
+  [] -> reverse acc
+  '\\' :: c :: rest | inStr -> stripAcc rest inStr (c :: '\\' :: acc)
+  '"' :: rest -> stripAcc rest (not inStr) ('"' :: acc)
+  '#' :: _ | not inStr -> reverse acc
+  c :: rest -> stripAcc rest inStr (c :: acc)
+
+trimStart : List Char -> List Char
+trimStart cs = match cs with
+  c :: rest | isSpace c -> trimStart rest
+  _ -> cs
+
+tomlValue : List Char -> Result String (TomlValue, List Char)
+tomlValue cs = match cs with
+  '"' :: rest -> match tomlString rest [] with
+    Ok (s, more) -> Ok (TStr s, more)
+    Err e -> Err e
+  '{' :: rest -> tomlInline (trimStart rest) Map.empty
+  '[' :: rest -> tomlArray (trimStart rest) []
+  't' :: 'r' :: 'u' :: 'e' :: rest -> Ok (TBool True, rest)
+  'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest -> Ok (TBool False, rest)
+  _ ->
+    let digits = takeWhile (\c -> c == '-' || isDigit c) cs
+    match parseInt (fromChars digits) with
+      Some n | not (isEmpty digits) -> Ok (TInt n, drop (length digits) cs)
+      _ -> Err "invalid value ${show (fromChars cs)}"
+
+private tomlString : List Char -> List Char -> Result String (String, List Char)
+tomlString cs acc = match cs with
+  [] -> Err "unterminated string"
+  '"' :: rest -> Ok (fromChars (reverse acc), rest)
+  '\\' :: c :: rest ->
+    let d = match c with
+      'n' -> '\n'
+      't' -> '\t'
+      _ -> c
+    tomlString rest (d :: acc)
+  c :: rest -> tomlString rest (c :: acc)
+
+private tomlInline : List Char -> Map.Map String TomlValue -> Result String (TomlValue, List Char)
+tomlInline cs acc = match cs with
+  '}' :: rest -> Ok (TTable acc, rest)
+  _ -> match splitOnce "=" (fromChars cs) with
+    None -> Err "malformed inline table"
+    Some (k, after) -> match tomlValue (trimStart (chars (trim after))) with
+      Err e -> Err e
+      Ok (v, r) ->
+        let r2 = trimStart r
+        let r3 = match r2 with
+          ',' :: more -> trimStart more
+          _ -> r2
+        match r3 with
+          [] -> Err "unterminated inline table"
+          _ -> tomlInline r3 (Map.insert (unquoteKey (trim k)) v acc)
+
+private tomlArray : List Char -> List TomlValue -> Result String (TomlValue, List Char)
+tomlArray cs acc = match cs with
+  ']' :: rest -> Ok (TArray (reverse acc), rest)
+  _ -> match tomlValue cs with
+    Err e -> Err e
+    Ok (v, r) ->
+      let r2 = trimStart r
+      let r3 = match r2 with
+        ',' :: more -> trimStart more
+        _ -> r2
+      match r3 with
+        [] -> Err "unterminated array"
+        _ -> tomlArray r3 (v :: acc)
+
+-- ================================================================ manifests
+
+-- Find ark.toml in a directory or its parents.
+findManifest : String -> <IO> Option String
+findManifest dir0 = findUp (pathAbs dir0)
+
+private findUp : String -> <IO> Option String
+findUp dir =
+  let p = pathJoin dir manifestName
+  match fileExists p with
+    True -> Some p
+    False ->
+      let parent = pathDir dir
+      match parent == dir with
+        True -> None
+        False -> findUp parent
+
+loadManifest : String -> <IO> Result String Manifest
+loadManifest path = match readFile path with
+  Err e -> Err e
+  Ok src -> match parseToml src with
+    Err e -> Err "${path}: ${e}"
+    Ok t -> match Map.lookup "package" t with
+      None -> Err "${path}: missing [package] table"
+      Some pkg ->
+        let str k = match Map.lookup k pkg with
+          Some (TStr s) -> s
+          _ -> ""
+        let entry = match str "entry" with
+          "" -> "src/Main.ark"
+          e -> e
+        match str "name" with
+          "" -> Err "${path}: package name is required"
+          name ->
+            let deps = Map.toList (Map.findWithDefault Map.empty "dependencies" t)
+            match collectDeps path deps [] with
+              Err e -> Err e
+              Ok ds -> Ok (Manifest (pathDir path) name (str "version") entry ds)
+
+private collectDeps : String -> List (String, TomlValue) -> List Dependency -> Result String (List Dependency)
+collectDeps path deps acc = match deps with
+  [] -> Ok (reverse acc)
+  (name, v) :: rest ->
+    let d = match v with
+      TStr p -> Dependency name p "" ""
+      TTable m ->
+        let get k = match Map.lookup k m with
+          Some (TStr s) -> s
+          _ -> ""
+        let rev = foldl (\r k -> match get k with
+          "" -> r
+          x -> x) "" ["tag", "branch", "rev"]
+        Dependency name (get "path") (get "git") rev
+      _ -> Dependency name "" "" ""
+    match d with
+      Dependency _ "" "" _ -> Err "${path}: dependency ${show name} needs a path or git source"
+      _ -> collectDeps path rest (d :: acc)
+
+-- Go files of a package's native/ directory (compiled into the program).
+nativeFiles : String -> <IO> List String
+nativeFiles dir =
+  let nd = pathJoin dir "native"
+  match listDir nd with
+    Ok names -> sortStrings (mapList (pathJoin nd) (filter (endsWith ".go") names))
+    Err _ -> []
+
+-- Load a manifest and resolve its (path) dependencies.
+resolveProject : String -> <IO> Result String Project
+resolveProject path = match loadManifest path with
+  Err e -> Err e
+  Ok m ->
+    let dir = manifestDir m
+    let srcs = newRef [pathJoin dir "src"]
+    let natives = newRef (nativeFiles dir)
+    let seen = newRef Map.empty
+    let visit from deps = match deps with
+      [] -> Ok ()
+      Dependency name p git _ :: rest -> match p with
+        "" -> Err "dependency ${name}: git dependencies (${git}) are not supported by the self-hosted compiler yet"
+        _ ->
+          let depDir = pathAbs (match pathIsAbs p with
+            True -> p
+            False -> pathJoin from p)
+          match Map.lookup name (readRef seen) with
+            Some prev
+              | prev != depDir -> Err "dependency ${name} is required from two different sources"
+              | otherwise -> visit from rest
+            None ->
+              modifyRef seen (Map.insert name depDir)
+              match loadManifest (pathJoin depDir manifestName) with
+                Err e -> Err "dependency ${name}: ${e}"
+                Ok dm ->
+                  modifyRef srcs (\s -> snoc s (pathJoin depDir "src"))
+                  let nf = nativeFiles depDir
+                  modifyRef natives (\n -> n ++ nf)
+                  let Manifest _ _ _ _ ddeps = dm
+                  match visit depDir ddeps with
+                    Err e -> Err e
+                    Ok _ -> visit from rest
+    let Manifest _ _ _ _ deps = m
+    match visit dir deps with
+      Err e -> Err e
+      Ok _ -> Ok (Project m (readRef srcs) (readRef natives))
+
+-- Module names defined under a source root.
+modulesIn : String -> <IO> List String
+modulesIn root = sortStrings (modulesAcc root "" [])
+
+private modulesAcc : String -> String -> List String -> <IO> List String
+modulesAcc dir prefix acc = match listDir dir with
+  Err _ -> acc
+  Ok names -> foldl (\a n ->
+    let p = pathJoin dir n
+    match isDir p with
+      True -> modulesAcc p (prefix ++ n ++ ".") a
+      False -> match endsWith ".ark" n with
+        True -> (prefix ++ substring 0 (stringLength n - 4) n) :: a
+        False -> a) acc names

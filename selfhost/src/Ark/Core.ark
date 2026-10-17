@@ -1,0 +1,237 @@
+-- The untyped intermediate language that checked programs are lowered to
+-- before code generation. Type classes are explicit dictionaries and
+-- syntactic sugar is gone.
+module Ark.Core
+
+import Ark.Util
+import Ark.Ast
+
+-- literal values
+type Val = VInt Int | VFloat Float | VString String | VChar Char | VBool Bool | VUnit
+
+-- A curried function of a fixed number of parameters.
+type Lam = Lam (List String) CExpr
+
+lamParams : Lam -> List String
+lamParams (Lam ps _) = ps
+
+lamBody : Lam -> CExpr
+lamBody (Lam _ b) = b
+
+type CExpr
+  = CVar String
+  | CGlobal String
+  | CLit Val
+  | CApp CExpr (List CExpr)
+  | CLam Lam
+  | CLet String CExpr CExpr
+  | CLetRec (List String) (List Lam) CExpr
+  | CCon CtorInfo (List CExpr)
+  | CMatch (List CExpr) (List Row) String
+  | CIf CExpr CExpr CExpr
+  | CSelect CExpr Int
+  | CHandle Handle
+  | CConcat (List CExpr)
+  | CMask (List String) CExpr
+
+-- One alternative: patterns plus either a body or guards (tried in order,
+-- falling through when all fail).
+type Row = Row (List CPat) (Option CExpr) (List (CExpr, CExpr))
+
+-- An effect handler: effect, body, return clause (None = identity),
+-- operation clauses, which clauses mention their continuation, all clauses
+-- tail-resumptive, direct (no goroutines), and the state-passing variant
+-- (return clause taking (x, s); operations taking (args.., s) and
+-- returning the pair (v, s')).
+type Handle = Handle String CExpr (Option Lam) (List Lam) (List Bool) Bool Bool (Option Lam) (List Lam)
+
+type CPat
+  = CPWild
+  | CPVar String
+  | CPAs String CPat
+  | CPLit Val
+  | CPCon CtorInfo (List CPat)
+
+-- ================================================================ program
+
+-- symbol, parameters (at least one), body
+type Func = Func String (List String) CExpr
+
+funcSym : Func -> String
+funcSym (Func s _ _) = s
+
+-- A top-level constant evaluated at program start.
+type Value = Value String CExpr
+
+-- An instance dictionary; with parameters it is a function from the
+-- context dictionaries to a fresh dictionary. Slots may refer to "self".
+type Dict = Dict String (List String) (List CExpr)
+
+dictSym : Dict -> String
+dictSym (Dict s _ _) = s
+
+-- symbol, Go target, arity
+type Foreign = Foreign String String Int
+
+-- symbol, effect, index, arity
+type Op = Op String String Int Int
+
+-- effect name and operation names
+type Effect = Effect String (List String)
+
+-- name, symbol
+type Test = Test String String
+
+-- functions, values (initialization order), dictionaries, foreigns,
+-- operations, effects, main symbol ("" for none), tests, Fail effect name
+type Program = Program (List Func) (List Value) (List Dict) (List Foreign) (List Op) (List Effect) String (List Test) String
+
+-- ================================================================ traversal
+
+-- Whether a local variable occurs in e (ignoring shadowing).
+mentions : CExpr -> String -> Bool
+mentions e name = match e with
+  CVar n -> n == name
+  CGlobal _ -> False
+  CLit _ -> False
+  CApp f args -> mentions f name || anyOf (\a -> mentions a name) args
+  CLam l -> lamMentions l name
+  CLet _ v b -> mentions v name || mentions b name
+  CLetRec _ lams b -> anyOf (\l -> lamMentions l name) lams || mentions b name
+  CCon _ args -> anyOf (\a -> mentions a name) args
+  CMatch scruts rows _ -> anyOf (\s -> mentions s name) scruts || anyOf (\r -> rowMentions r name) rows
+  CIf c t f -> mentions c name || mentions t name || mentions f name
+  CSelect d _ -> mentions d name
+  CHandle (Handle _ body ret ops _ _ _ sret sops) ->
+    mentions body name || optLamMentions ret name || anyOf (\l -> lamMentions l name) ops || optLamMentions sret name || anyOf (\l -> lamMentions l name) sops
+  CConcat ps -> anyOf (\p -> mentions p name) ps
+  CMask _ b -> mentions b name
+
+lamMentions : Lam -> String -> Bool
+lamMentions (Lam _ b) name = mentions b name
+
+private optLamMentions : Option Lam -> String -> Bool
+optLamMentions (Some l) name = lamMentions l name
+optLamMentions None _ = False
+
+private rowMentions : Row -> String -> Bool
+rowMentions (Row _ body guards) name =
+  let inBody = match body with
+    Some b -> mentions b name
+    None -> False
+  inBody || anyOf (\(c, b) -> mentions c name || mentions b name) guards
+
+-- Visit the nodes of e in pre-order, collecting results.
+collectNodes : (CExpr -> Option a) -> CExpr -> List a -> List a
+collectNodes f e acc =
+  let acc1 = match f e with
+    Some x -> x :: acc
+    None -> acc
+  let sub x a = collectNodes f x a
+  let lam (Lam _ b) a = collectNodes f b a
+  match e with
+    CApp fn args -> foldl (\a x -> sub x a) (sub fn acc1) args
+    CLam l -> lam l acc1
+    CLet _ v b -> sub b (sub v acc1)
+    CLetRec _ lams b -> sub b (foldl (\a l -> lam l a) acc1 lams)
+    CCon _ args -> foldl (\a x -> sub x a) acc1 args
+    CMatch scruts rows _ ->
+      let a1 = foldl (\a x -> sub x a) acc1 scruts
+      foldl (\a (Row _ body guards) ->
+        let a2 = match body with
+          Some b -> sub b a
+          None -> a
+        foldl (\a3 (c, b) -> sub b (sub c a3)) a2 guards) a1 rows
+    CIf c t f2 -> sub f2 (sub t (sub c acc1))
+    CSelect d _ -> sub d acc1
+    CHandle (Handle _ body ret ops _ _ _ sret sops) ->
+      let a1 = sub body acc1
+      let a2 = match ret with
+        Some l -> lam l a1
+        None -> a1
+      let a3 = foldl (\a l -> lam l a) a2 ops
+      let a4 = match sret with
+        Some l -> lam l a3
+        None -> a3
+      foldl (\a l -> lam l a) a4 sops
+    CConcat ps -> foldl (\a x -> sub x a) acc1 ps
+    CMask _ b -> sub b acc1
+    _ -> acc1
+
+-- All nodes satisfy p (pre-order, ignoring lambdas of let rec and
+-- handlers, which p never accepts).
+allNodes : (CExpr -> Bool) -> CExpr -> Bool
+allNodes p e = isEmpty (collectNodes (\x -> match p x with
+  True -> None
+  False -> Some ()) e [])
+
+countNodes : CExpr -> Int
+countNodes e = length (collectNodes (\_ -> Some ()) e [])
+
+-- Rebuild e bottom-up, applying f to every node after its children.
+mapExpr : (CExpr -> <IO> CExpr) -> CExpr -> <IO> CExpr
+mapExpr f e = match e with
+  CApp fn args ->
+    let fn2 = mapExpr f fn
+    let args2 = mapList (mapExpr f) args
+    f (CApp fn2 args2)
+  CLam (Lam ps b) -> f (CLam (Lam ps (mapExpr f b)))
+  CLet n v b ->
+    let v2 = mapExpr f v
+    let b2 = mapExpr f b
+    f (CLet n v2 b2)
+  CLetRec names lams b ->
+    let b2 = mapExpr f b
+    let lams2 = mapList (mapLam f) lams
+    f (CLetRec names lams2 b2)
+  CCon ci args -> f (CCon ci (mapList (mapExpr f) args))
+  CMatch scruts rows wh ->
+    let scruts2 = mapList (mapExpr f) scruts
+    let rows2 = mapList (\(Row pats body guards) ->
+      let body2 = match body with
+        Some b -> Some (mapExpr f b)
+        None -> None
+      let guards2 = mapList (\(c, b) ->
+        let c2 = mapExpr f c
+        (c2, mapExpr f b)) guards
+      Row pats body2 guards2) rows
+    f (CMatch scruts2 rows2 wh)
+  CIf c t el ->
+    let c2 = mapExpr f c
+    let t2 = mapExpr f t
+    let e2 = mapExpr f el
+    f (CIf c2 t2 e2)
+  CSelect d slot -> f (CSelect (mapExpr f d) slot)
+  CHandle (Handle eff body ret ops usesK tail direct sret sops) ->
+    let body2 = mapExpr f body
+    let ret2 = mapOptLam f ret
+    let ops2 = mapList (mapLam f) ops
+    let sret2 = mapOptLam f sret
+    let sops2 = mapList (mapLam f) sops
+    f (CHandle (Handle eff body2 ret2 ops2 usesK tail direct sret2 sops2))
+  CConcat ps -> f (CConcat (mapList (mapExpr f) ps))
+  CMask effs b -> f (CMask effs (mapExpr f b))
+  _ -> f e
+
+private mapLam : (CExpr -> <IO> CExpr) -> Lam -> <IO> Lam
+mapLam f (Lam ps b) = Lam ps (mapExpr f b)
+
+private mapOptLam : (CExpr -> <IO> CExpr) -> Option Lam -> <IO> Option Lam
+mapOptLam f ol = match ol with
+  Some l -> Some (mapLam f l)
+  None -> None
+
+isAtom : CExpr -> Bool
+isAtom e = match e with
+  CVar _ -> True
+  CGlobal _ -> True
+  CLit _ -> True
+  _ -> False
+
+-- Replace variables by expressions.
+subst : CExpr -> List (String, CExpr) -> <IO> CExpr
+subst e env = mapExpr (\x -> match x with
+  CVar n -> match lookup n env with
+    Some r -> r
+    None -> x
+  _ -> x) e

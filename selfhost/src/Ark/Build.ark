@@ -1,0 +1,151 @@
+-- Generating Go code for a checked program and building native
+-- executables with the Go toolchain.
+module Ark.Build
+
+import Ark.Util
+import Ark.Ast
+import Ark.Check
+import Ark.Loader
+import Ark.Lower
+import Ark.Codegen
+import Std.IO
+import Std.Bits
+import Std.Map as Map
+
+foreign runIn : String -> String -> List String -> List String -> <IO> Result String (Int, String) = "NativeRunIn"
+foreign execProgram : String -> List String -> List String -> <IO> Result String Int = "NativeExec"
+foreign lookPath : String -> <IO> Option String = "NativeLookPath"
+foreign stderrIsTerminal : Unit -> <IO> Bool = "NativeStderrIsTerminal"
+
+-- ================================================================ installation
+
+-- The directory containing lib/ (the standard library) and runtime/rt
+-- (the Go runtime): $ARKADIA_ROOT, or a parent of the executable.
+findRoot : Unit -> <IO> Result String String
+findRoot () = match getEnv "ARKADIA_ROOT" with
+  Some r -> Ok r
+  None -> match rootAbove (pathDir (executablePath ())) with
+    Some r -> Ok r
+    None -> match rootAbove (pathAbs ".") with
+      Some r -> Ok r
+      None -> Err "cannot find the Arkadia standard library; set ARKADIA_ROOT to the directory containing lib/ and runtime/"
+
+private rootAbove : String -> <IO> Option String
+rootAbove dir = match fileExists (pathJoin dir "lib/Prelude.ark") && fileExists (pathJoin dir "runtime/rt/value.go") with
+  True -> Some dir
+  False ->
+    let parent = pathDir dir
+    match parent == dir with
+      True -> None
+      False -> rootAbove parent
+
+-- The directory for build artifacts.
+cacheDir : Unit -> <IO> String
+cacheDir () = match getEnv "ARKADIA_CACHE" with
+  Some d -> d
+  None -> pathJoin (userCacheDir ()) "arkadia"
+
+-- ================================================================ hashing
+
+-- FNV-1a (32 bit) over the UTF-8 bytes of a string.
+hashString : String -> Int
+hashString s = foldl (\h b -> mod ((h .^. b) * 16777619) 4294967296) 2166136261 (concatMap utf8 (chars s))
+
+private utf8 : Char -> List Int
+utf8 c =
+  let n = charCode c
+  match n with
+    _ | n < 128 -> [n]
+      | n < 2048 -> [192 + n / 64, 128 + n % 64]
+      | n < 65536 -> [224 + n / 4096, 128 + (n / 64) % 64, 128 + n % 64]
+      | otherwise -> [240 + n / 262144, 128 + (n / 4096) % 64, 128 + (n / 64) % 64, 128 + n % 64]
+
+hexOf : Int -> String
+hexOf n = match n < 16 with
+  True -> charToString (at n (chars "0123456789abcdef"))
+  False -> hexOf (n / 16) ++ hexOf (n % 16)
+
+-- ================================================================ generating and building
+
+-- Lower a checked program to Go source.
+generateGo : Program -> Bool -> <IO> Result (List Diag) String
+generateGo (Program mods g main) tests =
+  let errs = match tests with
+    True -> []
+    False -> checkMain g main
+  match errs with
+    _ :: _ -> Err errs
+    [] ->
+      let mainMod = match tests with
+        True -> ""
+        False -> main
+      let prog = lower g mods mainMod
+      match generate prog tests with
+        Ok src -> Ok src
+        Err e -> Err [diagAt noPos e]
+
+-- output, work directory ("" = cache), tests, native files
+type BuildOptions = BuildOptions String String Bool (List String)
+
+-- Compile a checked program to a native executable.
+build : String -> Program -> BuildOptions -> <IO> Result (List Diag) Unit
+build root (prog@(Program _ _ main)) (BuildOptions output workDir tests natives) =
+  match generateGo prog tests with
+    Err e -> Err e
+    Ok src ->
+      let work = match workDir with
+        "" -> pathJoin (cacheDir ()) ("build/arkc-" ++ hexOf (hashString (main ++ "\0" ++ output)))
+        w -> w
+      match writeGoModule root work src natives with
+        Err e -> Err [diagAt noPos e]
+        Ok _ -> match lookPath "go" with
+          None -> Err [diagAt noPos "the Go toolchain is required to produce native executables (https://go.dev/dl/)"]
+          Some goBin ->
+            let out = pathAbs output
+            match runIn work goBin ["build", "-trimpath", "-ldflags=-s -w", "-o", out, "."] ["GOWORK=off", "GOFLAGS=-mod=mod", "CGO_ENABLED=0", "GOTOOLCHAIN=local"] with
+              Err e -> Err [diagAt noPos e]
+              Ok (0, _) -> Ok ()
+              Ok (_, log) -> Err [diagAt noPos "go build failed (generated code in ${work}):\n${log}"]
+
+writeGoModule : String -> String -> String -> List String -> <IO> Result String Unit
+writeGoModule root dir mainSrc natives = match makeDir (pathJoin dir "rt") with
+  Err e -> Err e
+  Ok _ ->
+    -- remove stale native files
+    match listDir dir with
+      Ok names -> forEach (filter (startsWith "native_") names) (\n ->
+        let _ = removeFile (pathJoin dir n)
+        ())
+      Err _ -> ()
+    let rtDir = pathJoin root "runtime/rt"
+    let rtFiles = match listDir rtDir with
+      Ok names -> filterMap (\n -> match endsWith ".go" n && not (endsWith "_test.go" n) with
+        True -> match readFile (pathJoin rtDir n) with
+          Ok src -> Some ("rt/" ++ n, src)
+          Err _ -> None
+        False -> None) (sortStrings names)
+      Err _ -> []
+    let nativeFilesData = filterMap (\(i, n) -> match readFile n with
+      Ok src -> Some ("native_${i}_${pathBase n}", src)
+      Err _ -> None) (indexed natives)
+    let files = [("go.mod", "module arkprog\n\ngo 1.22\n"), ("main.go", mainSrc)] ++ rtFiles ++ nativeFilesData
+    writeAll dir files
+
+private writeAll : String -> List (String, String) -> <IO> Result String Unit
+writeAll dir files = match files with
+  [] -> Ok ()
+  (name, content) :: rest ->
+    let p = pathJoin dir name
+    let same = match readFile p with
+      Ok old -> old == content
+      Err _ -> False
+    match same with
+      True -> writeAll dir rest
+      False -> match writeFile p content with
+        Err e -> Err e
+        Ok _ -> writeAll dir rest
+
+useColor : Unit -> <IO> Bool
+useColor () = match getEnv "NO_COLOR" with
+  Some v | v != "" -> False
+  _ -> stderrIsTerminal ()

@@ -1,0 +1,140 @@
+-- Whole-program simplifications on Core: dictionary method selection on
+-- statically known instances, alias chasing, inlining of tiny wrapper
+-- functions and substitution of trivially bound variables.
+module Ark.Opt
+
+import Ark.Util
+import Ark.Ast
+import Ark.Core
+import Std.Map as Map
+
+-- aliases (value symbol -> global), dictionaries (current slots), small
+-- functions (unoptimized), counter for inlined bindings
+type O = O (Map.Map String String) (Ref (Map.Map String Dict)) (Map.Map String Func) (Ref Int)
+
+optimize : Program -> <IO> Program
+optimize (Program funcs values dicts foreigns ops effects main tests failEff) =
+  let aliases = Map.fromList (filterMap (\(Value s b) -> match b with
+    CGlobal g -> Some (s, g)
+    _ -> None) values)
+  let dictMap = newRef (Map.fromList (mapList (\d -> (dictSym d, d)) dicts))
+  let small = Map.fromList (filterMap (\f -> match isSmall f with
+    True -> Some (funcSym f, f)
+    False -> None) funcs)
+  let o = O aliases dictMap small (newRef 0)
+  let round (fs, vs, ds) _ =
+    let fs2 = mapList (\(Func s ps b) -> Func s ps (optExpr o b)) fs
+    let vs2 = mapList (\(Value s b) -> Value s (optExpr o b)) vs
+    let ds2 = mapList (\(Dict s ps slots) ->
+      let slots2 = optSlots o s ps [] slots
+      Dict s ps slots2) ds
+    (fs2, vs2, ds2)
+  let (fs3, vs3, ds3) = foldl round (funcs, values, dicts) (range 0 3)
+  Program fs3 vs3 ds3 foreigns ops effects main tests failEff
+
+-- Optimize the slots of a dictionary one by one, keeping the dictionary
+-- table up to date (later slots see the optimized earlier ones).
+private optSlots : O -> String -> List String -> List CExpr -> List CExpr -> <IO> List CExpr
+optSlots o s ps done todo = match todo with
+  [] -> done
+  x :: rest ->
+    let x2 = optExpr o x
+    let done2 = snoc done x2
+    let O _ dicts _ _ = o
+    modifyRef dicts (Map.insert s (Dict s ps (done2 ++ rest)))
+    optSlots o s ps done2 rest
+
+resolveAlias : O -> String -> String
+resolveAlias (O aliases _ _ _) s = resolveN aliases s 20
+
+private resolveN : Map.Map String String -> String -> Int -> String
+resolveN aliases s n = match n == 0 with
+  True -> s
+  False -> match Map.lookup s aliases with
+    Some t -> resolveN aliases t (n - 1)
+    None -> s
+
+-- Whether a function body is a tiny expression worth inlining (wrappers
+-- produced by dictionary passing).
+isSmall : Func -> Bool
+isSmall (Func s _ body) =
+  let ok x = match x with
+    CApp _ _ -> True
+    CSelect _ _ -> True
+    CVar _ -> True
+    CLit _ -> True
+    CGlobal g -> g != s
+    _ -> False
+  allNodes ok body && countNodes body <= 8
+
+optExpr : O -> CExpr -> <IO> CExpr
+optExpr o e = mapExpr (optNode o) e
+
+optNode : O -> CExpr -> <IO> CExpr
+optNode o e =
+  let O _ _ small _ = o
+  match e with
+    CGlobal s ->
+      let t = resolveAlias o s
+      match t != s with
+        True -> CGlobal t
+        False -> e
+    CApp (CApp f inner) args -> optNode o (CApp f (inner ++ args))
+    CApp (CGlobal g) args -> match Map.lookup g small with
+      Some (f@(Func _ ps _)) | length args >= length ps -> inline o f args
+      _ -> e
+    CSelect _ _ -> match knownSlot o e with
+      Some x -> x
+      None -> e
+    CLet name v body
+      | isAtom v && name != "_" -> optExpr o (subst body [(name, v)])
+      | otherwise -> match (v, body) with
+          -- let run = handle ... in run s  ==>  (handle ...) s
+          (CHandle (Handle _ _ _ _ _ _ _ (Some _) _), CApp (CVar fv) args) | fv == name && not (anyOf (\a -> mentions a name) args) -> CApp v args
+          _ -> e
+    _ -> e
+
+inline : O -> Func -> List CExpr -> <IO> CExpr
+inline o (Func _ ps body) args =
+  let O _ _ _ counter = o
+  let bound = mapList (\(p, a) -> match isAtom a with
+    True -> ((p, a), None)
+    False ->
+      let name = p ++ "$i" ++ show (nextId counter)
+      ((p, CVar name), Some (name, a))) (zip ps args)
+  let env = map fst bound
+  let body1 = subst body env
+  let body2 = match drop (length ps) args with
+    [] -> body1
+    extra -> CApp body1 extra
+  let body3 = optExpr o body2
+  foldr (\(_, lt) acc -> match lt with
+    Some (name, a) -> CLet name a acc
+    None -> acc) body3 bound
+
+-- Resolve a dictionary selection when the dictionary is known.
+knownSlot : O -> CExpr -> <IO> Option CExpr
+knownSlot o e =
+  let O _ dictsRef _ _ = o
+  let dicts = readRef dictsRef
+  match e with
+    CSelect (CGlobal d) slot -> match Map.lookup d dicts with
+      Some (Dict _ [] slots) | slot < length slots -> match at slot slots with
+        CGlobal g -> Some (CGlobal (resolveAlias o g))
+        _ -> None
+      _ -> None
+    CSelect (CApp (CGlobal d) args) slot -> match Map.lookup d dicts with
+      Some (Dict _ ps slots) | length ps == length args && slot < length slots && allOf isAtom args ->
+        let x = at slot slots
+        let simple y = match y with
+          CApp _ _ -> True
+          CGlobal _ -> True
+          CVar _ -> True
+          CSelect _ _ -> True
+          CLit _ -> True
+          _ -> False
+        match not (mentions x "self") && allNodes simple x with
+          True -> Some (subst x (zip ps args))
+          False -> None
+      _ -> None
+    _ -> None
