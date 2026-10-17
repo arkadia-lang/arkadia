@@ -16,7 +16,8 @@ test:
 ARK_SOURCES = lib examples selfhost/src tests/run tests/unit
 
 check:
-	gofmt -l . && CGO_ENABLED=0 go vet ./...
+	@files=$$(gofmt -l .); if [ -n "$$files" ]; then echo "not gofmt'ed:"; echo "$$files"; exit 1; fi
+	CGO_ENABLED=0 go vet ./...
 	CGO_ENABLED=0 go run ./cmd/ark fmt -check $(ARK_SOURCES)
 
 # The self-hosted compiler (selfhost/), built by the Go implementation.
