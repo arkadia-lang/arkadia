@@ -358,9 +358,9 @@ func printDoc(w io.Writer, ex *types.Exports) {
 			for _, c := range t.Ctors {
 				ctors = append(ctors, c.Short)
 			}
-			fmt.Fprintf(w, "\ntype %s %s", n, strings.Join(t.Params, " "))
+			fmt.Fprintf(w, "\ntype %s", strings.Join(append([]string{n}, t.Params...), " "))
 			if len(ctors) > 0 {
-				fmt.Fprintf(w, "= %s", strings.Join(ctors, " | "))
+				fmt.Fprintf(w, " = %s", strings.Join(ctors, " | "))
 			}
 			fmt.Fprintln(w)
 		case *types.ClassInfo:
