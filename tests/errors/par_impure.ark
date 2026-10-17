@@ -1,0 +1,8 @@
+-- Std.Par runs pure functions only.
+import Std.Par as Par
+
+main () =
+  let squares = Par.map (\x ->
+    println (show x)
+    x * x) [1, 2, 3]
+  println (show squares)

@@ -1,0 +1,8 @@
+-- A transaction may run more than once, so it cannot perform IO.
+import Std.Stm
+
+main () =
+  let tv = newTVarIO 0
+  atomically (\_ ->
+    println "updating"
+    writeTVar tv 1)

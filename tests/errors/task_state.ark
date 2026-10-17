@@ -1,0 +1,9 @@
+-- A task does not share the handlers of the code that forked it.
+import Std.Task as Task
+import Std.State
+
+main () =
+  let (_, n) = runState 0 (\_ -> Task.scoped (\s ->
+    let _ = Task.fork s (\_ -> put 1)
+    ()))
+  println (show n)

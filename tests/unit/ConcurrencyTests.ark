@@ -1,0 +1,333 @@
+-- Unit tests for Std.Task, Std.Par, Std.Channel, Std.Stm and the atomic
+-- operations of Std.Ref.
+module ConcurrencyTests
+
+import Std.Task as Task
+import Std.Par as Par
+import Std.Channel as Chan
+import Std.Stm
+import Std.Ref
+import Std.State
+import Std.Gen
+import Std.Exn
+import Std.Array as Arr
+
+fib : Int -> Int
+fib n
+  | n < 2 = n
+  | otherwise = fib (n - 1) + fib (n - 2)
+
+-- A pure loop that never ends: it can only be stopped by cancellation.
+forever : Int -> Int
+forever n = forever (n + 1)
+
+-- ===================================================================
+-- Std.Task
+-- ===================================================================
+
+test "both, concurrently and mapConcurrently" =
+  assertEq (Task.both (\_ -> fib 20) (\_ -> fib 21)) (6765, 10946)
+  assertEq (Task.concurrently [\_ -> 1, \_ -> 2, \_ -> 3]) [1, 2, 3]
+  assertEq (Task.mapConcurrently (\x -> x * x) [1 .. 20]) (map (\x -> x * x) [1 .. 20])
+  assertEq (Task.mapPooled 3 (\x -> x + 1) [1 .. 50]) [2 .. 51]
+  assertEq (Task.mapPooled 8 (\x -> x) []) []
+
+test "scoped waits for its tasks" =
+  let r = newRef 0
+  Task.scoped (\s -> forEach [1 .. 50] (\i ->
+    let _ = Task.fork s (\_ ->
+      Task.sleep 0.001
+      atomicModifyRef r (+ i))
+    ()))
+  assertEq (readRef r) 1275
+
+test "tasks may fork more tasks in a scope passed to them" =
+  let r = newRef 0
+  Task.scoped (\s ->
+    let _ = Task.fork s (\_ -> forEach [1 .. 10] (\_ ->
+      let _ = Task.fork s (\_ -> atomicModifyRef r (+ 1))
+      ()))
+    ())
+  assertEq (readRef r) 10
+
+test "a failing task cancels the others and the scope raises its error" =
+  let result = Task.awaitResult (Task.spawn (\_ -> Task.scoped (\s ->
+    let _ = Task.fork s (\_ -> forever 0)
+    let _ = Task.fork s (\_ -> Task.sleep 1000.0)
+    let _ = Task.fork s (\_ ->
+      Task.sleep 0.01
+      error "boom")
+    Task.sleep 1000.0
+    "unreachable")))
+  assertEq result (Err "boom")
+
+test "an error of the scope body cancels its tasks" =
+  let result = Task.awaitResult (Task.spawn (\_ -> Task.scoped (\s ->
+    let t = Task.fork s (\_ -> forever 0)
+    error "body failed"
+    Task.await t)))
+  assertEq result (Err "body failed")
+
+test "effects of the scope body are handled outside" =
+  let (n, final) = runState 0 (\_ -> Task.scoped (\s ->
+    let t = Task.fork s (\_ -> fib 15)
+    put (get () + 1)
+    put (get () + Task.await t)
+    get ()))
+  assertEq (n, final) (611, 611)
+  let caught = try (\_ -> Task.scoped (\s ->
+    let _ = Task.fork s (\_ -> Task.sleep 1000.0)
+    throw "thrown"))
+  assertEq caught (Err "thrown")
+
+test "await, awaitResult and isDone" =
+  let t = Task.spawn (\_ -> fib 10)
+  assertEq (Task.await t) 55
+  assert (Task.isDone t) "the task should be done"
+  let bad = Task.spawn (\_ -> 1 / 0)
+  assertEq (Task.awaitResult bad) (Err "division by zero")
+
+test "cancel stops a busy task" =
+  let t = Task.spawn (\_ -> forever 0)
+  Task.cancel t
+  assert (Task.isDone t) "a cancelled task has stopped"
+  assertEq (Task.awaitResult t) (Err "the task was cancelled")
+
+test "a busy task does not starve the others" =
+  let busy = Task.spawn (\_ -> Task.scoped (\s -> forEach [1 .. 8] (\_ ->
+    let _ = Task.fork s (\_ -> forever 0)
+    ())))
+  let ticks = newRef 0
+  forEach [1 .. 3] (\_ ->
+    Task.sleep 0.005
+    atomicModifyRef ticks (+ 1))
+  -- cancelling the task cancels the tasks of its scope, and waits for them
+  Task.cancel busy
+  assertEq (readRef ticks) 3
+
+test "race returns the first result and cancels the rest" =
+  let slow () =
+    Task.sleep 0.01
+    "slow"
+  assertEq (Task.race [\_ -> show (forever 0), slow, \_ -> "fast"]) "fast"
+  assertEq (Task.awaitResult (Task.spawn (\_ -> Task.race [\_ -> forever 0, \_ -> error "lost"]))) (Err "lost")
+
+test "timeout" =
+  assertEq (Task.timeout 0.01 (\_ -> forever 0)) None
+  assertEq (Task.timeout 0.01 (\_ -> Task.sleep 1000.0)) None
+  assertEq (Task.timeout 10.0 (\_ -> 42)) (Some 42)
+  -- the computation may use the effects of the caller
+  assertEq (runState 1 (\_ -> Task.timeout 10.0 (\_ -> put (get () * 5)))) (Some (), 5)
+  -- nested timeouts: the inner one fires first
+  assertEq (Task.timeout 10.0 (\_ -> Task.timeout 0.01 (\_ -> forever 0))) (Some None)
+  -- a timeout cancels the tasks forked inside it
+  let r = newRef 0
+  let _ = Task.timeout 0.02 (\_ -> Task.scoped (\s ->
+    let _ = Task.fork s (\_ ->
+      Task.sleep 1000.0
+      writeRef r 1)
+    forever 0))
+  assertEq (readRef r) 0
+
+test "handlers run inside tasks" =
+  let counter () =
+    forEach [1 .. 100] (\_ -> put (get () + 1))
+    get ()
+  assertEq (Task.mapConcurrently (\i -> fst (runState i counter)) [0 .. 7]) (map (+ 100) [0 .. 7])
+  assertEq (Task.mapConcurrently (\i -> takeGen 3 (\_ -> iterateGen (+ i) 0)) [1, 2]) [[0, 1, 2], [0, 2, 4]]
+
+test "a generator consumer can be cancelled" =
+  let r = Task.timeout 0.01 (\_ -> forEachGen (\_ -> iterateGen (+ 1) 0) (\_ -> Task.sleep 0.001))
+  assertEq r None
+
+test "checkCancelled, yield and processors" =
+  Task.checkCancelled ()
+  Task.yield ()
+  assert (Task.processors () >= 1) "at least one processor"
+
+-- ===================================================================
+-- Std.Par
+-- ===================================================================
+
+test "Par functions agree with their sequential versions" =
+  let xs = map (\i -> (i * 7919) % 10007) [1 .. 5000]
+  assertEq (Par.map (\x -> x * 2) xs) (map (\x -> x * 2) xs)
+  assertEq (Par.filter even xs) (filter even xs)
+  assertEq (Par.sort xs) (sort xs)
+  assertEq (Par.sortBy (\a b -> compare b a) xs) (sortBy (\a b -> compare b a) xs)
+  assertEq (Par.sum xs) (sum xs)
+  assertEq (Par.reduce (\a b -> a ++ b) "" (map show [1 .. 500])) (concatStrings (map show [1 .. 500]))
+  assertEq (Par.generate 5 (\i -> i * i)) [0, 1, 4, 9, 16]
+  assertEq (Arr.toList (Par.mapArray (+ 1) (Arr.fromList [1, 2, 3]))) [2, 3, 4]
+  assertEq (Par.both (\_ -> fib 15) (\_ -> "b")) (610, "b")
+  assertEq (Par.sequence [\_ -> 1, \_ -> 2]) [1, 2]
+  assertEq (Par.mapReduce stringLength (+) 0 ["ab", "cde"]) 5
+  assertEq (Par.foldMap (\x -> [x, x]) [1, 2]) [1, 1, 2, 2]
+  assert (Par.any (\x -> x > 4999) [1 .. 5000]) "any"
+  assert (Par.all (\x -> x > 0) [1 .. 5000]) "all"
+  assertEq (Par.map id []) []
+  assertEq (Par.sort [3, 1, 2]) [1, 2, 3]
+
+test "Par.sortBy is stable" =
+  let xs = map (\i -> (i % 7, i)) [1 .. 3000]
+  assertEq (Par.sortBy (\a b -> compare (fst a) (fst b)) xs) (sortBy (\a b -> compare (fst a) (fst b)) xs)
+
+test "Par.map raises the error of the first failing element" =
+  let r = Task.awaitResult (Task.spawn (\_ -> Par.map (\i -> match i % 100 == 37 with
+    True -> error "bad ${i}"
+    False -> i) [0 .. 10000]))
+  assertEq r (Err "bad 37")
+
+test "pure functions may handle effects themselves" =
+  let count n = snd (runState 0 (\_ -> forEach [1 .. n] (\_ -> put (get () + 1))))
+  assertEq (Par.map count [1 .. 100]) [1 .. 100]
+
+test "nested parallelism" =
+  assertEq (Par.map (\n -> Par.sum (Par.map (\x -> x * n) [1 .. 100])) [1 .. 20]) (map (\n -> 5050 * n) [1 .. 20])
+
+-- ===================================================================
+-- Std.Channel
+-- ===================================================================
+
+test "producer and consumer" =
+  let ch = Chan.new 4
+  let got = Task.scoped (\s ->
+    let _ = Task.fork s (\_ ->
+      Chan.sendAll ch [1 .. 100]
+      Chan.close ch)
+    Chan.toList ch)
+  assertEq got [1 .. 100]
+
+test "unbuffered channels synchronize" =
+  let ch = Chan.new 0
+  let (_, got) = Task.both (\_ -> forEach [1 .. 10] (Chan.send ch)) (\_ -> mapList (\_ -> Chan.receive ch) [1 .. 10])
+  assertEq got (map Some [1 .. 10])
+
+test "several producers" =
+  let ch = Chan.new 0
+  let total = Task.scoped (\s ->
+    let producers = mapList (\p -> Task.fork s (\_ -> forEach [1 .. 100] (\i -> Chan.send ch (p * i)))) [1 .. 4]
+    let _ = Task.fork s (\_ ->
+      forEach producers Task.await
+      Chan.close ch)
+    let sum = newRef 0
+    Chan.forEach ch (\x -> modifyRef sum (+ x))
+    readRef sum)
+  assertEq total (5050 * 10)
+
+test "try operations, length and close" =
+  let ch = Chan.new 2
+  assert (Chan.trySend ch 'a') "room for a"
+  assert (Chan.trySend ch 'b') "room for b"
+  assert (not (Chan.trySend ch 'c')) "full"
+  assertEq (Chan.length ch) 2
+  assertEq (Chan.tryReceive ch) (Some 'a')
+  Chan.close ch
+  assertEq (Chan.receive ch) (Some 'b')
+  assertEq (Chan.receive ch) None
+  assertEq (Chan.tryReceive ch) None
+  assertEq (Task.awaitResult (Task.spawn (\_ -> Chan.send ch 'x'))) (Err "send on a closed channel")
+  assertEq (Task.awaitResult (Task.spawn (\_ -> Chan.close ch))) (Err "close of a closed channel")
+
+test "select" =
+  let a = Chan.new 1
+  let b = Chan.new 1
+  Chan.send b "hello"
+  assertEq (Chan.select [Chan.onReceive a (\x -> ("a", x)), Chan.onReceive b (\x -> ("b", x))]) ("b", Some "hello")
+  assertEq (Chan.select [Chan.onReceive a (\_ -> "received"), Chan.after 0.01 "timed out"]) "timed out"
+  assertEq (Chan.select [Chan.onSend a "x" "sent", Chan.after 10.0 "timed out"]) "sent"
+  assertEq (Chan.receive a) (Some "x")
+  Chan.close a
+  assertEq (Chan.select [Chan.onReceive a (\x -> x)]) None
+
+test "a task blocked on a channel can be cancelled" =
+  let ch = Chan.new 0
+  assertEq (Task.timeout 0.01 (\_ -> Chan.receive ch)) None
+  assertEq (Task.timeout 0.01 (\_ -> Chan.send ch 1)) None
+  assertEq (Task.timeout 0.01 (\_ -> Chan.select [Chan.onReceive ch id])) None
+
+-- ===================================================================
+-- Std.Stm
+-- ===================================================================
+
+test "transactions are atomic" =
+  let tv = newTVarIO 0
+  Task.forEachConcurrently [1 .. 50] (\_ -> forEach [1 .. 20] (\_ -> atomically (\_ -> modifyTVar tv (+ 1))))
+  assertEq (readTVarIO tv) 1000
+
+test "transfers keep the total" =
+  let accounts = Arr.fromList (mapList (\_ -> newTVarIO 100) [1 .. 8])
+  Task.forEachConcurrently [0 .. 31] (\i -> forEach [1 .. 50] (\j ->
+    let from = Arr.at ((i + j) % 8) accounts
+    let to = Arr.at ((i * 3 + j + 1) % 8) accounts
+    atomically (\_ ->
+      let x = readTVar from
+      match x > 0 with
+        True ->
+          writeTVar from (x - 1)
+          modifyTVar to (+ 1)
+        False -> ())))
+  assertEq (atomically (\_ -> foldl (\acc tv -> acc + readTVar tv) 0 (Arr.toList accounts))) 800
+
+test "retry blocks until a TVar changes" =
+  let queue = newTVarIO []
+  let push x = atomically (\_ ->
+    let q = readTVar queue
+    check (length q < 3)
+    writeTVar queue (q ++ [x]))
+  let pop () = atomically (\_ -> match readTVar queue with
+    [] -> retry ()
+    x :: rest ->
+      writeTVar queue rest
+      x)
+  let (_, got) = Task.both (\_ -> forEach [1 .. 100] push) (\_ -> mapList (\_ -> pop ()) [1 .. 100])
+  assertEq got [1 .. 100]
+
+test "orElse" =
+  let a = newTVarIO 0
+  let b = newTVarIO 5
+  let take tv () =
+    let v = readTVar tv
+    check (v > 0)
+    writeTVar tv (v - 1)
+    v
+  assertEq (atomically (\_ -> orElse (take a) (take b))) 5
+  assertEq (readTVarIO b) 4
+  -- the writes of a branch that retries are undone
+  let which = atomically (\_ -> orElse (\_ ->
+    writeTVar b 100
+    take a ()) (\_ -> 0))
+  assertEq (which, readTVarIO b) (0, 4)
+
+test "swapTVar, stateTVar and newTVar" =
+  let tv = newTVarIO "a"
+  assertEq (atomically (\_ -> swapTVar tv "b")) "a"
+  assertEq (atomically (\_ -> stateTVar tv (\s -> (s ++ "c", stringLength s)))) 1
+  assertEq (readTVarIO tv) "bc"
+  let inner = atomically (\_ -> newTVar 7)
+  assertEq (readTVarIO inner) 7
+
+test "a transaction waiting in retry can be cancelled" =
+  let tv = newTVarIO 0
+  assertEq (Task.timeout 0.01 (\_ -> atomically (\_ -> check (readTVar tv > 0)))) None
+  assertEq (Task.awaitResult (Task.spawn (\_ -> atomically (\_ -> retry ())))) (Err "retry: the transaction read no TVar, so it would wait forever")
+
+test "errors abort a transaction" =
+  let tv = newTVarIO 1
+  let r = Task.awaitResult (Task.spawn (\_ -> atomically (\_ ->
+    writeTVar tv 2
+    error "abort")))
+  assertEq (r, readTVarIO tv) (Err "abort", 1)
+
+-- ===================================================================
+-- Std.Ref
+-- ===================================================================
+
+test "atomic updates of references" =
+  let r = newRef 0
+  Task.forEachConcurrently [1 .. 100] (\i -> atomicModifyRef r (+ i))
+  assertEq (readRef r) 5050
+  let ids = Task.mapConcurrently (\_ -> atomicUpdateRef r (\n -> (n + 1, n))) [1 .. 50]
+  assertEq (sort ids) [5050 .. 5099]
+  assertEq (swapRef r 0) 5100
+  assertEq (readRef r) 0
