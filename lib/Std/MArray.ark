@@ -67,12 +67,24 @@ modify i f a = set i (f (at i a)) a
 
 -- Set every element to a value.
 fill : a -> MArray a -> <IO> Unit
-fill v a = forEach (Prelude.range 0 (length a)) (\i -> set i v a)
+fill v a = forIndices 0 (length a) (\i -> set i v a)
 
 -- Call a function with each index and element.
 forEachIndexed : (Int -> a -> <IO | e> Unit) -> MArray a -> <IO | e> Unit
-forEachIndexed f a = forEach (Prelude.range 0 (length a)) (\i -> f i (at i a))
+forEachIndexed f a = forIndices 0 (length a) (\i -> f i (at i a))
 
 -- Fold over the elements from the first.
 foldl : (b -> a -> <IO | e> b) -> b -> MArray a -> <IO | e> b
-foldl f z a = Prelude.foldl (\acc i -> f acc (at i a)) z (Prelude.range 0 (length a))
+foldl f z a = foldLoop f z a 0 (length a)
+
+private foldLoop : (b -> a -> <IO | e> b) -> b -> MArray a -> Int -> Int -> <IO | e> b
+foldLoop f acc a i n = match i < n with
+  True -> foldLoop f (f acc (at i a)) a (i + 1) n
+  False -> acc
+
+private forIndices : Int -> Int -> (Int -> <IO | e> Unit) -> <IO | e> Unit
+forIndices i n f = match i < n with
+  True ->
+    f i
+    forIndices (i + 1) n f
+  False -> ()
