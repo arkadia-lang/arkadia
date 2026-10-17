@@ -81,11 +81,11 @@ handleMessage (s@(Server _ ver docs _ _ srcs)) m =
   match asString (field "method" m) with
     "initialize" -> reply id (JObj
       [ ("capabilities", JObj
-          [ ("definitionProvider", JBool True)
-          , ("documentFormattingProvider", JBool True)
-          , ("hoverProvider", JBool True)
-          , ("textDocumentSync", JObj [("change", jint 1), ("openClose", JBool True), ("save", JBool True)])
-          ])
+        [ ("definitionProvider", JBool True)
+        , ("documentFormattingProvider", JBool True)
+        , ("hoverProvider", JBool True)
+        , ("textDocumentSync", JObj [("change", jint 1), ("openClose", JBool True), ("save", JBool True)])
+        ])
       , ("serverInfo", JObj [("name", JStr "ark-lsp"), ("version", JStr ver)])
       ])
     "shutdown" -> reply id JNull

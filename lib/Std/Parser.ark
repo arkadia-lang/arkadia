@@ -24,9 +24,9 @@ runParser : (Unit -> <ParseInput, Fail | e> a) -> String -> <e> Result String a
 runParser p text =
   let input = chars text
   match parsePrefix (\_ ->
-    let x = p ()
-    eof ()
-    x) input with
+      let x = p ()
+      eof ()
+      x) input with
     (Ok x, _) -> Ok x
     (Err msg, rest) -> Err "${position input rest}: ${msg}"
 

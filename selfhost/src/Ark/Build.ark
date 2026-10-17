@@ -12,7 +12,6 @@ import Ark.Project
 import Std.IO
 import Std.Map as Map
 
-
 -- ================================================================ installation
 
 -- The directory containing lib/ (the standard library) and runtime/rt

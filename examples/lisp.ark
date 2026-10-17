@@ -103,11 +103,11 @@ globals = Env (Map.fromList
   , ("<", compareB "<" (<)), ("=", compareB "=" (==))
   , ("list", Builtin "list" (\args -> List args))
   , ("car", Builtin "car" (\args -> match args with
-      [List (x :: _)] -> x
-      _ -> throw "car: expected a non-empty list"))
+    [List (x :: _)] -> x
+    _ -> throw "car: expected a non-empty list"))
   , ("cdr", Builtin "cdr" (\args -> match args with
-      [List (_ :: xs)] -> List xs
-      _ -> throw "cdr: expected a non-empty list"))
+    [List (_ :: xs)] -> List xs
+    _ -> throw "cdr: expected a non-empty list"))
   ])
 
 -- `define`-free recursion through a Y-like fixpoint: (fix f) passes itself

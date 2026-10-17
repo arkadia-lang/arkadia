@@ -50,6 +50,6 @@ test "result combinators" =
 test "result instances" =
   assert ((Err 5 : Result Int Int) < Ok 0) "Err sorts before Ok"
   assertEq (traverse (\x -> match x > 0 with
-      True -> Some x
-      False -> None) (Ok 3 : Result String Int)) (Some (Ok 3))
+    True -> Some x
+    False -> None) (Ok 3 : Result String Int)) (Some (Ok 3))
   assertEq "${(Ok 1 : Result String Int)}" "Ok 1"

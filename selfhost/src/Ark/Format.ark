@@ -70,10 +70,10 @@ mergeItems s i n cs acc = match cs with
     let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = -1, lineCmt = Arr.at off s.chs == '-', first = False }
     mergeItems s i n rest (it :: acc)
   _ | i < n ->
-      let (off, end) = Arr.at i s.spans
-      let Pos _ line col = tokPos (tokAt s i)
-      let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = i, lineCmt = False, first = False }
-      mergeItems s (i + 1) n cs (it :: acc)
+        let (off, end) = Arr.at i s.spans
+        let Pos _ line col = tokPos (tokAt s i)
+        let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = i, lineCmt = False, first = False }
+        mergeItems s (i + 1) n cs (it :: acc)
     | otherwise -> reverse acc
 
 private finishItems : Arr.Array Char -> Int -> List Item -> List Item -> List Item
@@ -286,21 +286,21 @@ layoutColumns s lineOff =
             let tp = top ()
             let (nc, newItem) = match () with
               _ | c > tp.ccol || tp.bracket -> match isOpener prev && c > enc.ccol with
-                  True ->
-                    let base0 = match (readRef guard).guard with
-                      True -> readRef guard
-                      False -> readRef cur
-                    let base = match prev == KwWith with
-                      True -> readRef withLine
-                      False -> base0
-                    let step = match base.guard || tp.bracket && any (sameLine base) (readRef matches) with
-                      True -> 2 * indentStep
-                      False -> indentStep
-                    let nc = base.lnew + step
-                    let ctx = newCtx False c nc noLine False
-                    modifyRef stack (\st -> ctx :: st)
-                    (nc, True)
-                  False -> (continuation enc i, False)
+                    True ->
+                      let base0 = match (readRef guard).guard with
+                        True -> readRef guard
+                        False -> readRef cur
+                      let base = match prev == KwWith with
+                        True -> readRef withLine
+                        False -> base0
+                      let step = match base.guard || tp.bracket && any (sameLine base) (readRef matches) with
+                        True -> 2 * indentStep
+                        False -> indentStep
+                      let nc = base.lnew + step
+                      let ctx = newCtx False c nc noLine False
+                      modifyRef stack (\st -> ctx :: st)
+                      (nc, True)
+                    False -> (continuation enc i, False)
                 | c == tp.ccol -> (tp.cnew, True)
                 | otherwise ->
                     let popped = popBlocks stack c 0
@@ -342,9 +342,9 @@ layoutColumns s lineOff =
             writeRef matches rest
           [] -> ()
       k | isOpenBracket k ->
-          let ctx = newCtx True 0 0 noLine False
-          modifyRef stack (\st -> ctx :: st)
-          writeRef depth (readRef depth + 1)
+            let ctx = newCtx True 0 0 noLine False
+            modifyRef stack (\st -> ctx :: st)
+            writeRef depth (readRef depth + 1)
         | isCloseBracket k ->
             writeRef depth (readRef depth - 1)
             writeRef stack (closeCtx (readRef stack))

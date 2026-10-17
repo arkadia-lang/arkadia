@@ -10,10 +10,10 @@ type Pet = Pet { name : String, owner : User }
 type Shape
   = Circle { x, y : Float, r : Float }
   | Rect
-      { x, y : Float
-      , w : Float
-      , h : Float
-      }
+    { x, y : Float
+    , w : Float
+    , h : Float
+    }
   deriving Show
 
 type Box a = Box { value : a, label : String }

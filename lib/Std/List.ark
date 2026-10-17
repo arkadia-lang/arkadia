@@ -159,8 +159,8 @@ or bs = any id bs
 -- Number of elements satisfying p.
 countBy : (a -> Bool) -> List a -> Int
 countBy p xs = foldl (\n x -> match p x with
-    True -> n + 1
-    False -> n) 0 xs
+  True -> n + 1
+  False -> n) 0 xs
 
 -- ===================================================================
 -- Searching and indexing
@@ -177,8 +177,8 @@ findIndexFrom p (x :: xs) i
 
 findIndices : (a -> Bool) -> List a -> List Int
 findIndices p xs = filterMap (\(i, x) -> match p x with
-    True -> Some i
-    False -> None) (enumerate xs)
+  True -> Some i
+  False -> None) (enumerate xs)
 
 elemIndex : Eq a => a -> List a -> Option Int
 elemIndex x xs = findIndex (\y -> y == x) xs
@@ -193,14 +193,14 @@ findMap f (x :: xs) = match f x with
 maximumBy : (a -> a -> Ordering) -> List a -> Option a
 maximumBy _ [] = None
 maximumBy cmp (x :: xs) = Some (foldl (\m y -> match cmp y m with
-    GT -> y
-    _ -> m) x xs)
+  GT -> y
+  _ -> m) x xs)
 
 minimumBy : (a -> a -> Ordering) -> List a -> Option a
 minimumBy _ [] = None
 minimumBy cmp (x :: xs) = Some (foldl (\m y -> match cmp y m with
-    LT -> y
-    _ -> m) x xs)
+  LT -> y
+  _ -> m) x xs)
 
 -- The element with the largest key (the first one on ties).
 maximumOn : Ord b => (a -> b) -> List a -> Option a
@@ -216,8 +216,8 @@ minimumOn f xs = minimumBy (\x y -> compare (f x) (f y)) xs
 -- Positions outside the list leave it unchanged.
 updateAt : Int -> (a -> a) -> List a -> List a
 updateAt i f xs = mapIndexed (\j x -> match i == j with
-    True -> f x
-    False -> x) xs
+  True -> f x
+  False -> x) xs
 
 setAt : Int -> a -> List a -> List a
 setAt i v xs = updateAt i (const v) xs
@@ -268,8 +268,8 @@ scanlAcc f z (x :: xs) acc =
 -- scanr (+) 0 [1, 2, 3] == [6, 5, 3, 0]
 scanr : (a -> b -> b) -> b -> List a -> List b
 scanr f z xs = foldr (\x acc -> match acc with
-    b :: _ -> f x b :: acc
-    [] -> [f x z]) [z] xs
+  b :: _ -> f x b :: acc
+  [] -> [f x z]) [z] xs
 
 -- Fold without an initial value; None for the empty list.
 reduce : (a -> a -> a) -> List a -> Option a
@@ -296,8 +296,8 @@ mapAccumAcc f s (x :: xs) acc =
 -- Split a list of results into the Ok values and the errors.
 partitionResults : List (Result e a) -> (List e, List a)
 partitionResults rs = foldr (\r (es, as) -> match r with
-    Ok a -> (es, a :: as)
-    Err e -> (e :: es, as)) ([], []) rs
+  Ok a -> (es, a :: as)
+  Err e -> (e :: es, as)) ([], []) rs
 
 -- Keep the Some values.
 catOptions : List (Option a) -> List a
@@ -348,8 +348,8 @@ group xs = groupBy (==) xs
 -- Group adjacent elements with the same key.
 groupOn : Eq b => (a -> b) -> List a -> List (b, List a)
 groupOn f xs = filterMap (\g -> match g with
-    x :: _ -> Some (f x, g)
-    [] -> None) (groupBy (\a b -> f a == f b) xs)
+  x :: _ -> Some (f x, g)
+  [] -> None) (groupBy (\a b -> f a == f b) xs)
 
 -- Remove duplicates by a key, keeping the first occurrence.
 nubBy : (a -> a -> Bool) -> List a -> List a
@@ -367,8 +367,8 @@ nubOn f xs = nubBy (\a b -> f a == f b) xs
 -- Remove duplicates of a sortable list in O(n log n); the result is sorted.
 nubSorted : Ord a => List a -> List a
 nubSorted xs = map (\g -> match g with
-    x :: _ -> x
-    [] -> error "unreachable") (group (sort xs))
+  x :: _ -> x
+  [] -> error "unreachable") (group (sort xs))
 
 -- Number of occurrences of each element, in order of first appearance.
 frequencies : Eq a => List a -> List (a, Int)

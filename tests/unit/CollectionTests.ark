@@ -26,8 +26,8 @@ test "map ordered queries" =
 test "map transformations" =
   let m = Map.fromList [(1, 10), (2, 20), (3, 30)]
   assertEq (Map.toList (Map.filterMap (\v -> match v > 10 with
-      True -> Some (v / 10)
-      False -> None) m)) [(2, 2), (3, 3)]
+    True -> Some (v / 10)
+    False -> None) m)) [(2, 2), (3, 3)]
   let (big, small) = Map.partition (\v -> v > 15) m
   assertEq (Map.keys big, Map.keys small) ([2, 3], [1])
   assertEq (Map.toList (Map.mapKeys negate m)) [(-3, 30), (-2, 20), (-1, 10)]

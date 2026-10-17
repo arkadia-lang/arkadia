@@ -648,8 +648,8 @@ filterAcc p (x :: xs) acc
 
 filterMap : (a -> Option b) -> List a -> List b
 filterMap f xs = foldr (\x acc -> match f x with
-    Some y -> y :: acc
-    None -> acc) [] xs
+  Some y -> y :: acc
+  None -> acc) [] xs
 
 partition : (a -> Bool) -> List a -> (List a, List a)
 partition p xs = (filter p xs, filter (\x -> not (p x)) xs)

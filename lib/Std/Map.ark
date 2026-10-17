@@ -126,8 +126,8 @@ filter p m = filterWithKey (\_ v -> p v) m
 
 filterWithKey : Ord k => (k -> v -> Bool) -> Map k v -> Map k v
 filterWithKey p m = foldlWithKey (\acc k v -> match p k v with
-    True -> insert k v acc
-    False -> acc) Tip m
+  True -> insert k v acc
+  False -> acc) Tip m
 
 -- Left-biased union.
 union : Ord k => Map k v -> Map k v -> Map k v
@@ -199,8 +199,8 @@ lookupAbove ok k (Bin _ k2 v l r) best
 -- Keep the values mapped to Some.
 filterMap : Ord k => (a -> Option b) -> Map k a -> Map k b
 filterMap f m = foldlWithKey (\acc k v -> match f v with
-    Some w -> insert k w acc
-    None -> acc) Tip m
+  Some w -> insert k w acc
+  None -> acc) Tip m
 
 partition : Ord k => (v -> Bool) -> Map k v -> (Map k v, Map k v)
 partition p m = (filter p m, filter (\v -> not (p v)) m)
@@ -218,8 +218,8 @@ intersection a b = filterWithKey (\k _ -> member k b) a
 
 intersectionWith : Ord k => (a -> b -> c) -> Map k a -> Map k b -> Map k c
 intersectionWith f a b = foldlWithKey (\acc k x -> match lookup k b with
-    Some y -> insert k (f x y) acc
-    None -> acc) Tip a
+  Some y -> insert k (f x y) acc
+  None -> acc) Tip a
 
 -- Bindings of the first map whose keys are not in the second.
 difference : Ord k => Map k a -> Map k b -> Map k a

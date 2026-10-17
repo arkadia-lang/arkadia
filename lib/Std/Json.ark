@@ -254,8 +254,8 @@ keys _ = []
 setField : String -> Json -> Json -> Json
 setField k v (JObject kvs) = match lookup k kvs with
   Some _ -> JObject (mapList (\(k2, v2) -> match k2 == k with
-      True -> (k2, v)
-      False -> (k2, v2)) kvs)
+    True -> (k2, v)
+    False -> (k2, v2)) kvs)
   None -> JObject (kvs ++ [(k, v)])
 setField _ _ other = other
 
