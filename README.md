@@ -190,10 +190,21 @@ bin/arkc run examples/lisp.ark
 | `Prelude` | 基本型（`Option`, `Result`, `List` …）、型クラス（`Eq`, `Ord`, `Show`, `Num`, `Semigroup`, `Monoid`, `Functor`, `Applicative`, `Monad`, `Foldable`, `Traversable`）、リスト・文字列関数、入出力、`Fail` エフェクト |
 | `Std.State` / `Std.Reader` / `Std.Writer` | 状態・環境・出力のエフェクト |
 | `Std.Exn` | 型付き例外 `Exn e` |
+| `Std.Gen` | `Yield` エフェクトによるジェネレータ（無限列の `takeGen`、`mapGen` / `filterGen` などの合成） |
+| `Std.Parser` | バックトラックするパーサコンビネータ（`alt`, `many`, `sepBy`, `chainl1` …、行・列付きのエラー） |
 | `Std.Random` | 乱数エフェクト（決定的シード / 時刻シード） |
-| `Std.Map` / `Std.Set` | 永続的な順序付きマップ・集合（AVL 木） |
-| `Std.Array` | 定数時間でインデックスできる不変配列 |
-| `Std.String` / `Std.Bits` / `Std.IO` | 文字列、ビット演算、ファイル・プロセス操作 |
+| `Std.List` | Prelude にないリスト関数（`span`, `groupBy`, `chunksOf`, `scanl`, `transpose`, `permutations` …）。非修飾 import 可 |
+| `Std.Option` / `Std.Result` | `Option` / `Result` の補助関数（`orElse`, `map2`, `fold`, `combineAll` …） |
+| `Std.Ord` | `Down`（逆順）、`comparing`, `thenComparing` |
+| `Std.Map` / `Std.Set` | 永続的な順序付きマップ・集合（AVL 木）。`lookupLT` などの順序クエリ、集合演算 |
+| `Std.Array` | 定数時間でインデックスできる不変配列（`binarySearch`, `mapWithIndex` …） |
+| `Std.Queue` / `Std.Heap` | 永続的な両端キュー、優先度付きキュー（leftist heap） |
+| `Std.String` / `Std.Char` | 文字列（`splitOnce`, `stripPrefix`, `wrap` …）、文字の分類と変換 |
+| `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
+| `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照 |
+| `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻と計測、可変参照 |
+
+モジュールの公開インターフェースは `ark doc Std.Map` のように表示できます。
 
 ## サンプル
 

@@ -281,7 +281,7 @@ Arkadia の型検査器はこのような箇所を検出し、呼び出しの周
 | `IO` | 外界との入出力。ハンドラを書くことはできない |
 | `Fail` | `fail : String -> a`。`runFail` で `Result String a` に変換。テストの失敗にも使われる |
 
-`Std.State`, `Std.Reader`, `Std.Writer`, `Std.Exn`, `Std.Random` も参照してください。
+`Std.State`, `Std.Reader`, `Std.Writer`, `Std.Exn`, `Std.Random`, `Std.Gen`（ジェネレータ）, `Std.Parser`（パーサコンビネータ）も参照してください。
 
 ### 実装
 
