@@ -183,7 +183,7 @@ func (g *gen) program(opts Options) {
 		g.printf("func %s(%s) rt.Value {\n%s}\n\n", info.name, params(len(d.Params), "a"), c.body.String())
 	}
 	// closure values and constants
-	var syms []string
+	var syms, values []string
 	for sym, info := range g.globals {
 		switch info.kind {
 		case gFunc, gDictFn, gOp:
@@ -193,8 +193,12 @@ func (g *gen) program(opts Options) {
 				syms = append(syms, sym)
 			}
 		case gValue:
-			g.printf("var %s rt.Value\n", info.name)
+			values = append(values, sym)
 		}
+	}
+	sort.Strings(values)
+	for _, sym := range values {
+		g.printf("var %s rt.Value\n", g.globals[sym].name)
 	}
 	sort.Strings(syms)
 	for _, sym := range syms {

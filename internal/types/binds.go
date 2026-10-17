@@ -726,7 +726,12 @@ func (c *Checker) checkInstanceBodies() {
 }
 
 func (c *Checker) checkClassDefaults() {
-	for d, ci := range c.classes {
+	for _, decl := range c.mod.Decls {
+		d, ok := decl.(*syntax.DClass)
+		if !ok {
+			continue
+		}
+		ci := c.classes[d]
 		for _, b := range d.Defaults {
 			mi := ci.Method(b.Name)
 			if mi == nil {
