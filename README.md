@@ -176,7 +176,7 @@ effect Yield a where
 | `ark doc <Module>` | モジュールの公開 API を、宣言直前の `--` コメント（ドキュメント）付きで表示 |
 | `ark repl` | 対話環境（式の評価、定義の追加、`:t` で型表示） |
 | `ark emit [file]` | 生成された Go コードを表示 |
-| `ark lsp` | Language Server（診断・ホバーで型とドキュメントを表示・定義ジャンプ）。VS Code 拡張は [`editors/vscode`](editors/vscode) |
+| `ark lsp` | Language Server（診断・ホバーで型とドキュメントを表示・定義ジャンプ・フォーマット）。VS Code 拡張は [`editors/vscode`](editors/vscode) |
 
 `ark.toml`:
 

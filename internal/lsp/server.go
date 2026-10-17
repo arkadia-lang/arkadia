@@ -1,5 +1,5 @@
 // Package lsp implements a Language Server Protocol server for Arkadia:
-// diagnostics, hover (types) and go to definition.
+// diagnostics, hover (types), go to definition and formatting.
 package lsp
 
 import (
@@ -14,9 +14,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf16"
 
 	"github.com/verniyyy/arkadia/internal/diag"
 	"github.com/verniyyy/arkadia/internal/driver"
+	"github.com/verniyyy/arkadia/internal/syntax"
 	"github.com/verniyyy/arkadia/internal/types"
 )
 
@@ -47,6 +49,11 @@ type rng struct {
 type location struct {
 	URI   string `json:"uri"`
 	Range rng    `json:"range"`
+}
+
+type textEdit struct {
+	Range   rng    `json:"range"`
+	NewText string `json:"newText"`
 }
 
 type diagnostic struct {
@@ -148,9 +155,10 @@ func (s *Server) handle(m *message) {
 	case "initialize":
 		s.reply(m.ID, map[string]any{
 			"capabilities": map[string]any{
-				"textDocumentSync":   map[string]any{"openClose": true, "change": 1, "save": true},
-				"hoverProvider":      true,
-				"definitionProvider": true,
+				"textDocumentSync":           map[string]any{"openClose": true, "change": 1, "save": true},
+				"hoverProvider":              true,
+				"definitionProvider":         true,
+				"documentFormattingProvider": true,
 			},
 			"serverInfo": map[string]any{"name": "ark-lsp", "version": driver.Version},
 		})
@@ -220,11 +228,36 @@ func (s *Server) handle(m *message) {
 			return
 		}
 		s.reply(m.ID, nil)
+	case "textDocument/formatting":
+		path, _ := s.params(m.Params)
+		s.reply(m.ID, s.format(path))
 	default:
 		if m.ID != nil {
 			s.send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": rpcError{Code: -32601, Message: "method not found"}})
 		}
 	}
+}
+
+// format returns the edits that format a document: none when it is
+// formatted or has syntax errors (which the diagnostics already report).
+func (s *Server) format(path string) []textEdit {
+	text, ok := s.docs[path]
+	if !ok {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		text = string(data)
+	}
+	out, err := syntax.Format(path, text)
+	if err != nil || out == text {
+		return []textEdit{}
+	}
+	// replace the whole document; the end is counted in UTF-16 code units
+	lines := strings.Split(text, "\n")
+	last := lines[len(lines)-1]
+	end := position{Line: len(lines) - 1, Character: len(utf16.Encode([]rune(last)))}
+	return []textEdit{{Range: rng{End: end}, NewText: out}}
 }
 
 // docComment returns the documentation comment of the definition of an
