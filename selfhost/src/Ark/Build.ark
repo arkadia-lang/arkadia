@@ -8,14 +8,10 @@ import Ark.Check
 import Ark.Loader
 import Ark.Lower
 import Ark.Codegen
+import Ark.Project
 import Std.IO
-import Std.Bits
 import Std.Map as Map
 
-foreign runIn : String -> String -> List String -> List String -> <IO> Result String (Int, String) = "NativeRunIn"
-foreign execProgram : String -> List String -> List String -> <IO> Result String Int = "NativeExec"
-foreign lookPath : String -> <IO> Option String = "NativeLookPath"
-foreign stderrIsTerminal : Unit -> <IO> Bool = "NativeStderrIsTerminal"
 
 -- ================================================================ installation
 
@@ -39,31 +35,9 @@ rootAbove dir = match fileExists (pathJoin dir "lib/Prelude.ark") && fileExists 
       True -> None
       False -> rootAbove parent
 
--- The directory for build artifacts.
-cacheDir : Unit -> <IO> String
-cacheDir () = match getEnv "ARKADIA_CACHE" with
-  Some d -> d
-  None -> pathJoin (userCacheDir ()) "arkadia"
-
--- ================================================================ hashing
-
--- FNV-1a (32 bit) over the UTF-8 bytes of a string.
+-- FNV-1a hash of a string (see Ark.Project).
 hashString : String -> Int
-hashString s = foldl (\h b -> mod ((h .^. b) * 16777619) 4294967296) 2166136261 (concatMap utf8 (chars s))
-
-private utf8 : Char -> List Int
-utf8 c =
-  let n = charCode c
-  match n with
-    _ | n < 128 -> [n]
-      | n < 2048 -> [192 + n / 64, 128 + n % 64]
-      | n < 65536 -> [224 + n / 4096, 128 + (n / 64) % 64, 128 + n % 64]
-      | otherwise -> [240 + n / 262144, 128 + (n / 4096) % 64, 128 + (n / 64) % 64, 128 + n % 64]
-
-hexOf : Int -> String
-hexOf n = match n < 16 with
-  True -> charToString (at n (chars "0123456789abcdef"))
-  False -> hexOf (n / 16) ++ hexOf (n % 16)
+hashString s = fnv32 s
 
 -- ================================================================ generating and building
 

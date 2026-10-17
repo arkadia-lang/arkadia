@@ -41,6 +41,18 @@ foreign isDir : String -> <IO> Bool = "NativeIsDir"
 foreign executablePath : Unit -> <IO> String = "NativeExecutable"
 foreign userCacheDir : Unit -> <IO> String = "NativeUserCacheDir"
 
+-- ------------------------------------------------------------ processes
+
+-- Run a program in a directory with extra environment variables:
+-- (exit code, combined output).
+foreign runIn : String -> String -> List String -> List String -> <IO> Result String (Int, String) = "NativeRunIn"
+
+-- Run a program with this process's standard streams: its exit code.
+foreign execProgram : String -> List String -> List String -> <IO> Result String Int = "NativeExec"
+
+foreign lookPath : String -> <IO> Option String = "NativeLookPath"
+foreign stderrIsTerminal : Unit -> <IO> Bool = "NativeStderrIsTerminal"
+
 -- ------------------------------------------------------------ strings
 
 -- Text after the last '.' (or the whole string).
