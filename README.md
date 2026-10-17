@@ -33,6 +33,7 @@ main () =
 | 高カインド | `Functor f`, `Monad m`, `Foldable t` など、型構築子を抽象化できる。カインドは推論される |
 | レコード | 名前付きフィールド、`u.name` / `.name` / `{ u \| age = 1 }` / `User { name, age }` パターン。フィールドは型主導で解決 |
 | 代数的エフェクト | `effect` 宣言・`handle ... with` によるディープハンドラ。エフェクトは行多相の型で追跡され、未処理のエフェクトはコンパイルエラー |
+| 並列実行・プリエンプション | タスクは全コアで並列に動き、ランタイムがプリエンプションする。純粋関数の決定的な並列化（`Std.Par`）、構造化された並行性（`Std.Task`）、STM（`Std.Stm`）、チャネル（`Std.Channel`）。エフェクト型が「並列にしても安全」なことを保証する |
 | GC | Go ランタイムの並行 GC を利用 |
 | ネイティブバイナリ | Arkadia → Go → `go build` で単一の静的バイナリを生成 |
 | 現代的なエコシステム | `ark` コマンド（new / build / run / check / test / fmt / doc / repl）、Language Server（VS Code 拡張付き）、`ark.toml` による依存管理（path / git）とロックファイル、テストランナー、Go への FFI |
@@ -169,6 +170,49 @@ effect Yield a where
 
 詳しくは [言語ガイド](docs/guide.md) を参照してください。
 
+### 並行・並列実行
+
+タスクは全てのコアで並列に動き、ランタイムがプリエンプションします（長い計算をするタスクが他を止めることはありません）。
+エフェクト型によって、並列化して安全なものだけが並列化されます。
+
+```haskell
+import Std.Par as Par
+import Std.Task as Task
+import Std.Stm
+
+-- 純粋な関数を全コアで。結果は map と常に同じ（型 a -> <> b が純粋性を保証）
+scores = Par.map expensive inputs
+
+-- 構造化された並行性: scoped は全タスクの終了を待ち、一つが失敗すると残りをキャンセルしてエラーを伝える
+fetchBoth () = Task.scoped (\s ->
+  let a = Task.fork s (\_ -> httpGet urlA)
+  let b = Task.fork s (\_ -> httpGet urlB)
+  (Task.await a, Task.await b))
+
+-- STM: 残高が足りるまで待つ（retry）原子的な送金。トランザクションは <STM> しか持てない
+transfer from to n = atomically (\_ ->
+  let balance = readTVar from
+  check (balance >= n)
+  writeTVar from (balance - n)
+  modifyTVar to (+ n))
+
+-- 時間制限: ループもエフェクトもない純粋な再帰でも止まる
+Task.timeout 1.0 (\_ -> search problem)
+```
+
+| | 型が保証すること |
+|---|---|
+| `Std.Par`（`map`, `filter`, `reduce`, `sortBy` …） | 関数は純粋（`<>`）なので、並列でもデータ競合は起こらず、結果は逐次版と同じ。エラーも逐次版と同じ（最初に失敗する要素のもの） |
+| `Std.Task`（`scoped`, `fork`, `await`, `race`, `timeout` …） | タスクは `Unit -> <IO> a`。親のハンドラ（`State` など）を共有しないので、エフェクトの状態が競合しない |
+| `Std.Stm`（`atomically`, `TVar`, `retry`, `orElse`） | トランザクションは `<STM>` 以外のエフェクトを持てないので、衝突時の再実行や `retry` での待機が安全 |
+| `Std.Channel`（`send`, `receive`, `select`） | タスク間でメッセージを受け渡す |
+
+- キャンセルは協調的です。関数呼び出し・ループの反復・エフェクト操作・待機（`await`, `sleep`, チャネル, `retry`）がキャンセルポイントで、キャンセルは捕捉できません。
+- `Std.Ref` の読み書きは不可分で、`atomicModifyRef` / `atomicUpdateRef` で更新を失わずに共有できます。`Std.MArray` / `Std.HashMap` の各操作もタスク間で安全です。
+- `Std.Http.serveParallel` は各リクエストを独立したタスクで並列に処理します。
+
+詳しくは [言語ガイド](docs/guide.md#10-並行並列実行) を参照してください。
+
 ## ツールチェーン
 
 | コマンド | 説明 |
@@ -225,6 +269,10 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 | `Prelude` | 基本型（`Option`, `Result`, `List` …）、型クラス（`Eq`, `Ord`, `Show`, `Num`, `Semigroup`, `Monoid`, `Functor`, `Applicative`, `Monad`, `Foldable`, `Traversable`）、リスト・文字列関数、入出力、`Fail` エフェクト |
 | `Std.State` / `Std.Reader` / `Std.Writer` | 状態・環境・出力のエフェクト |
 | `Std.Exn` | 型付き例外 `Exn e` |
+| `Std.Task` | 並列に動くタスク。スコープによる構造化された並行性（`scoped` / `fork` / `await`）、キャンセル、`race`, `timeout`, `both`, `mapConcurrently`, `mapPooled` |
+| `Std.Par` | 純粋関数の決定的な並列化（`map`, `filter`, `reduce`, `sortBy`, `foldMap`, `generate` …） |
+| `Std.Stm` | ソフトウェアトランザクショナルメモリ（`TVar`, `atomically`, `retry`, `orElse`, `check`） |
+| `Std.Channel` | タスク間のチャネル（バッファ付き / なし、`close`、タイムアウト付きの `select`） |
 | `Std.Gen` | `Yield` エフェクトによるジェネレータ（無限列の `takeGen`、`mapGen` / `filterGen` などの合成） |
 | `Std.Parser` | バックトラックするパーサコンビネータ（`alt`, `many`, `sepBy`, `chainl1` …、行・列付きのエラー） |
 | `Std.Random` | 乱数エフェクト（決定的シード / 時刻シード） |
@@ -237,8 +285,8 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 | `Std.String` / `Std.Char` | 文字列（`splitOnce`, `stripPrefix`, `wrap` …）、文字の分類と変換 |
 | `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
 | `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照。`ToJson` / `FromJson` クラスと `deriving (ToJson, FromJson)` によるレコード等との自動変換（失敗箇所付きのエラー） |
-| `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻（RFC 3339 などの書式化と解析、日付の構築、曜日、日・月の加算）と計測、可変参照 |
-| `Std.Http` | HTTP サーバ（ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie）と HTTP クライアント |
+| `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻（RFC 3339 などの書式化と解析、日付の構築、曜日、日・月の加算）と計測、可変参照（不可分な更新付き） |
+| `Std.Http` | HTTP サーバ（ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie、リクエストの並列処理）と HTTP クライアント |
 | `Std.Net` / `Std.Url` | TCP ソケット・名前解決、URL のパース・パーセントエンコード・クエリ文字列 |
 | `Std.Regex` | 正規表現（RE2 構文）。一致・キャプチャ・名前付きグループ・置換（関数による置換も可）・分割 |
 | `Std.MArray` / `Std.HashMap` | 可変配列（push/pop・その場ソート・freeze/thaw）、挿入順を保つ可変ハッシュマップ（構造的なキー比較） |
@@ -273,7 +321,8 @@ main () = serve ":8080" (logRequests (router
 
 - ハンドラ `Handler e` は `Request -> <IO, Fail, Halt | e> Response`。`halt resp`（`orHalt` / `orHaltWith`）で任意のレスポンスを返して早期終了でき、`fail` や実行時エラーは 500 になります（サーバは止まりません）。
 - ルートのパターンは固定文字列・`:name`（1 セグメント）・末尾の `*name`（残り全部）。`scope "/api" [...]` でまとめて前置でき、パスは合うがメソッドが違う場合は 405 を返します。
-- リクエストの受信は Go のゴルーチンで並行に行い、ハンドラは一度に一つずつ実行します。そのため `State` などのエフェクトをサーバ全体の周りで処理して、ハンドラ間でロックなしに共有できます（[`examples/http/server.ark`](examples/http/server.ark)）。
+- リクエストの受信は Go のゴルーチンで並行に行います。`serve` はハンドラを一度に一つずつ実行するので、`State` などのエフェクトをサーバ全体の周りで処理して、ハンドラ間でロックなしに共有できます（[`examples/http/server.ark`](examples/http/server.ark)）。
+- `serveParallel` は各リクエストを独立したタスク（`Std.Task`）で並列に処理します。ハンドラは `Handler` 以外のエフェクトを持たず、リクエスト間の共有状態には `Std.Stm` や `Std.Ref` を使います。
 - `request "GET" "/users/1" ""` でリクエストを作り `runHandler` に渡せば、サーバを立てずにハンドラやルータをテストできます。
 - `bodyAs req` は JSON の本文を `FromJson` の型に変換し、`jsonOf x` は `ToJson` の値を JSON で返します。
 - クライアントは `httpGet` / `httpPost` / `postJson` / `getJson` / `getAs` / `fetch`。
@@ -281,6 +330,9 @@ main () = serve ":8080" (logRequests (router
 
 ## サンプル
 
+- [`examples/parallel.ark`](examples/parallel.ark) — `Std.Par` による並列のマンデルブロ集合と素数の map-reduce、プリエンプションとタイムアウト
+- [`examples/philosophers.ark`](examples/philosophers.ark) — STM による食事する哲学者（デッドロックしない）
+- [`examples/pipeline.ark`](examples/pipeline.ark) — チャネルでつないだタスクのパイプライン（ワーカープール、`select`）
 - [`examples/scheduler.ark`](examples/scheduler.ark) — エフェクトで実装した協調スレッド
 - [`examples/json.ark`](examples/json.ark) — State と Fail エフェクトによる JSON パーサ
 - [`examples/calculator.ark`](examples/calculator.ark) — モナディックなパーサコンビネータ（高カインド）
@@ -292,7 +344,7 @@ main () = serve ":8080" (logRequests (router
 ```
 compiler           コンパイラ ark（Arkadia で記述。モジュール構成は compiler/README.md）
 lib                標準ライブラリ（Arkadia で記述）
-runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エフェクト）
+runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エフェクト・タスク・STM）
 bootstrap          ブートストラップ用コンパイラ（Go で記述、凍結）
 tests              テストスイート（compiler_test.go が bin/ark 相当のコンパイラで実行する）
 editors/vscode     VS Code 拡張（シンタックスハイライト + LSP クライアント）
@@ -303,7 +355,9 @@ editors/vscode     VS Code 拡張（シンタックスハイライト + LSP ク�
 - 継続はワンショット（同じ継続を二度再開すると実行時エラー）。非決定性のような多重再開は未対応です。
 - 型クラスは単一パラメータのみ。
 - レコードの更新 `{ r | f = v }` は値の型を変えられません（型パラメータを変える更新は構築し直します）。
-- 並列実行は未対応です。`Std.Http` のサーバは接続の受け付けを並行に行いますが、ハンドラは一つずつ実行します。
+- キャンセルは協調的です。キャンセルポイントを通らない処理（ファイルやネットワークの読み書き、FFI の呼び出し）の途中では止まらず、それが終わってから止まります。
+- `spawn` で起動した（スコープに属さない）タスクのエラーは、`await` したときにだけ報告されます。
+- ハンドラが継続を再開せずに捨てた場合、中断された計算（ジェネレータなど）のゴルーチンは GC のときに回収されます。
 
 ## ライセンス
 

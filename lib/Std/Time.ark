@@ -10,7 +10,8 @@ module Std.Time
 foreign now : Unit -> <IO> Float = "rt.UnixTime"
 -- Milliseconds since the Unix epoch.
 foreign nowMillis : Unit -> <IO> Int = "rt.UnixMillis"
--- Pause for a number of seconds.
+-- Pause the current task for a number of seconds (a cancellation point,
+-- see Std.Task).
 foreign sleep : Float -> <IO> Unit = "rt.Sleep"
 -- Format with a Go layout string, e.g. "2006-01-02 15:04:05".
 foreign formatUtc : String -> Float -> String = "rt.FormatTimeUTC"
