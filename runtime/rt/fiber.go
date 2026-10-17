@@ -48,7 +48,9 @@ func newFiberTable(bits uint) *fiberTable {
 	return &fiberTable{slots: make([]atomic.Pointer[fiber], 1<<bits), shift: 64 - bits}
 }
 
-func (t *fiberTable) home(g uintptr) uintptr { return uintptr(uint64(g)*0x9E3779B97F4A7C15>>t.shift) }
+func (t *fiberTable) home(g uintptr) uintptr {
+	return uintptr(uint64(g) * 0x9E3779B97F4A7C15 >> t.shift)
+}
 
 // Only the goroutine of a fiber looks it up, and only it removes it, so a
 // lookup finds the fiber in whichever table it loads.

@@ -312,8 +312,8 @@ func RefNew(v Value) Value {
 	return r
 }
 
-func RefGet(r Value) Value    { return *ref(r).p.Load() }
-func RefSet(r, v Value) Value { ref(r).p.Store(&v); return Unit }
+func RefGet(r Value) Value     { return *ref(r).p.Load() }
+func RefSet(r, v Value) Value  { ref(r).p.Store(&v); return Unit }
 func RefSwap(r, v Value) Value { return *ref(r).p.Swap(&v) }
 
 // RefAtomicUpdate applies f to the value of r: f returns (new value,
