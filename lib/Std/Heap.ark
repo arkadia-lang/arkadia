@@ -1,0 +1,80 @@
+-- Persistent priority queues (leftist min-heaps).
+--
+--   import Std.Heap as Heap
+--   let h = Heap.fromList [5, 1, 4]
+--   Heap.pop h   -- Some (1, <heap of 4, 5>)
+--
+-- For a max-heap, store `Std.Ord.Down` values.
+module Std.Heap
+
+type Heap a = Leaf | Node Int Int a (Heap a) (Heap a)
+
+empty : Heap a
+empty = Leaf
+
+singleton : a -> Heap a
+singleton x = Node 1 1 x Leaf Leaf
+
+isEmpty : Heap a -> Bool
+isEmpty Leaf = True
+isEmpty _ = False
+
+size : Heap a -> Int
+size Leaf = 0
+size (Node _ n _ _ _) = n
+
+private rank : Heap a -> Int
+rank Leaf = 0
+rank (Node r _ _ _ _) = r
+
+private make : a -> Heap a -> Heap a -> Heap a
+make x a b
+  | rank a >= rank b = Node (rank b + 1) (size a + size b + 1) x a b
+  | otherwise = Node (rank a + 1) (size a + size b + 1) x b a
+
+merge : Ord a => Heap a -> Heap a -> Heap a
+merge Leaf h = h
+merge h Leaf = h
+merge (Node r1 n1 x l1 r1h) (Node r2 n2 y l2 r2h)
+  | x <= y = make x l1 (merge r1h (Node r2 n2 y l2 r2h))
+  | otherwise = make y l2 (merge (Node r1 n1 x l1 r1h) r2h)
+
+insert : Ord a => a -> Heap a -> Heap a
+insert x h = merge (singleton x) h
+
+-- The smallest element.
+peek : Heap a -> Option a
+peek Leaf = None
+peek (Node _ _ x _ _) = Some x
+
+-- Remove the smallest element.
+pop : Ord a => Heap a -> Option (a, Heap a)
+pop Leaf = None
+pop (Node _ _ x l r) = Some (x, merge l r)
+
+-- Remove the smallest element, if any.
+deleteMin : Ord a => Heap a -> Heap a
+deleteMin Leaf = Leaf
+deleteMin (Node _ _ _ l r) = merge l r
+
+fromList : Ord a => List a -> Heap a
+fromList xs = Prelude.foldl (\h x -> insert x h) Leaf xs
+
+-- All elements in ascending order.
+toSortedList : Ord a => Heap a -> List a
+toSortedList h = Prelude.reverse (drain h [])
+
+private drain : Ord a => Heap a -> List a -> List a
+drain h acc = match pop h with
+  None -> acc
+  Some (x, rest) -> drain rest (x :: acc)
+
+-- The n smallest elements in ascending order.
+take : Ord a => Int -> Heap a -> List a
+take n h = Prelude.take n (toSortedList h)
+
+instance (Ord a, Show a) => Show (Heap a) where
+  show h = "Heap.fromList " ++ show (toSortedList h)
+
+instance Ord a => Eq (Heap a) where
+  a == b = toSortedList a == toSortedList b

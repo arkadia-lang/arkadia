@@ -1,0 +1,78 @@
+-- Persistent double-ended queues with amortized O(1) operations.
+--
+--   import Std.Queue as Queue
+--   let q = Queue.push 3 (Queue.fromList [1, 2])
+--   Queue.pop q   -- Some (1, <queue of 2, 3>)
+module Std.Queue
+
+-- Front list, back list (reversed), and the total size.
+type Queue a = Queue (List a) (List a) Int
+
+empty : Queue a
+empty = Queue [] [] 0
+
+singleton : a -> Queue a
+singleton x = Queue [x] [] 1
+
+isEmpty : Queue a -> Bool
+isEmpty (Queue _ _ n) = n == 0
+
+size : Queue a -> Int
+size (Queue _ _ n) = n
+
+fromList : List a -> Queue a
+fromList xs = Queue xs [] (length xs)
+
+-- Elements from front to back.
+toList : Queue a -> List a
+toList (Queue f b _) = f ++ Prelude.reverse b
+
+-- Add to the back.
+push : a -> Queue a -> Queue a
+push x (Queue f b n) = Queue f (x :: b) (n + 1)
+
+-- Add to the front.
+pushFront : a -> Queue a -> Queue a
+pushFront x (Queue f b n) = Queue (x :: f) b (n + 1)
+
+-- Remove from the front.
+pop : Queue a -> Option (a, Queue a)
+pop (Queue (x :: f) b n) = Some (x, Queue f b (n - 1))
+pop (Queue [] [] _) = None
+pop (Queue [] b n) =
+  -- move half of the back list to the front, so popping from either end stays cheap
+  let (keep, move) = splitAt (n / 2) b
+  pop (Queue (Prelude.reverse move) keep n)
+
+-- Remove from the back.
+popBack : Queue a -> Option (a, Queue a)
+popBack (Queue f (x :: b) n) = Some (x, Queue f b (n - 1))
+popBack (Queue [] [] _) = None
+popBack (Queue f [] n) =
+  let (keep, move) = splitAt (n / 2) f
+  popBack (Queue keep (Prelude.reverse move) n)
+
+peek : Queue a -> Option a
+peek q = Prelude.map fst (pop q)
+
+peekBack : Queue a -> Option a
+peekBack q = Prelude.map fst (popBack q)
+
+append : Queue a -> Queue a -> Queue a
+append a b = Prelude.foldl (\q x -> push x q) a (toList b)
+
+reverse : Queue a -> Queue a
+reverse (Queue f b n) = Queue b f n
+
+instance Functor Queue where
+  map f (Queue fr b n) = Queue (Prelude.map f fr) (Prelude.map f b) n
+
+instance Foldable Queue where
+  foldr f z q = Prelude.foldr f z (toList q)
+  foldl f z q = Prelude.foldl f z (toList q)
+
+instance Eq a => Eq (Queue a) where
+  a == b = toList a == toList b
+
+instance Show a => Show (Queue a) where
+  show q = "Queue.fromList " ++ show (toList q)

@@ -1,0 +1,35 @@
+-- Helpers for orderings.
+--
+--   import Std.Ord
+--   sortBy (comparing snd) pairs
+--   sortOn (\p -> Down (snd p)) pairs   -- descending
+module Std.Ord
+
+-- Reverses the ordering of the wrapped value.
+type Down a = Down a
+  deriving (Eq, Show)
+
+instance Ord a => Ord (Down a) where
+  compare (Down x) (Down y) = compare y x
+
+getDown : Down a -> a
+getDown (Down x) = x
+
+-- Compare by a key: sortBy (comparing length) lists
+comparing : Ord b => (a -> b) -> a -> a -> Ordering
+comparing f x y = compare (f x) (f y)
+
+-- Flip a comparison function.
+reverseOrder : (a -> a -> Ordering) -> a -> a -> Ordering
+reverseOrder cmp x y = cmp y x
+
+-- Compare with the first function, breaking ties with the second:
+-- sortBy (thenComparing (comparing fst) (comparing snd)) xs
+thenComparing : (a -> a -> Ordering) -> (a -> a -> Ordering) -> a -> a -> Ordering
+thenComparing c1 c2 x y = match c1 x y with
+  EQ -> c2 x y
+  o -> o
+
+-- Is x within [lo, hi]?
+between : Ord a => a -> a -> a -> Bool
+between lo hi x = lo <= x && x <= hi
