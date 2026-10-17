@@ -1,0 +1,67 @@
+-- Software transactional memory: tasks (Std.Task) share TVars and update
+-- them in transactions that run atomically and in isolation.
+--
+--   import Std.Stm
+--
+--   transfer : TVar Int -> TVar Int -> Int -> <STM> Unit
+--   transfer from to amount =
+--     let balance = readTVar from
+--     check (balance >= amount)   -- wait until there is enough money
+--     writeTVar from (balance - amount)
+--     modifyTVar to (+ amount)
+--
+--   atomically (\_ -> transfer a b 10)
+--
+-- A transaction has the effect STM, which can only be run by atomically:
+-- it cannot perform IO or any effect it does not handle itself. That is
+-- what makes it safe for the runtime to run it again when it conflicts
+-- with another transaction, and to block it in `retry` until a TVar it
+-- read changes.
+module Std.Stm
+
+-- The effect of transactions. It has no operations and cannot be handled.
+effect STM
+
+type TVar a
+
+-- Run a transaction atomically: its writes become visible all at once, and
+-- it only sees the writes of transactions committed before it.
+foreign atomically : (Unit -> <STM> a) -> <IO> a = "rt.STMAtomically"
+
+foreign newTVar : a -> <STM> TVar a = "rt.TVarNew"
+foreign newTVarIO : a -> <IO> TVar a = "rt.TVarNew"
+foreign readTVar : TVar a -> <STM> a = "rt.TVarRead"
+foreign writeTVar : TVar a -> a -> <STM> Unit = "rt.TVarWrite"
+
+-- Read the current value outside a transaction.
+foreign readTVarIO : TVar a -> <IO> a = "rt.TVarReadIO"
+
+-- Abandon the transaction and run it again once one of the TVars it has
+-- read changes.
+foreign retry : Unit -> <STM> a = "rt.STMRetry"
+
+-- Run the first transaction; if it retries, undo its writes and run the
+-- second one instead.
+foreign orElse : (Unit -> <STM> a) -> (Unit -> <STM> a) -> <STM> a = "rt.STMOrElse"
+
+-- Wait (retry) until a condition holds.
+check : Bool -> <STM> Unit
+check True = ()
+check False = retry ()
+
+modifyTVar : TVar a -> (a -> <STM | e> a) -> <STM | e> Unit
+modifyTVar tv f = writeTVar tv (f (readTVar tv))
+
+-- Replace the value and return the old one.
+swapTVar : TVar a -> a -> <STM> a
+swapTVar tv v =
+  let old = readTVar tv
+  writeTVar tv v
+  old
+
+-- Update the value and return a result computed from the old value.
+stateTVar : TVar a -> (a -> <STM | e> (a, b)) -> <STM | e> b
+stateTVar tv f =
+  let (v, result) = f (readTVar tv)
+  writeTVar tv v
+  result
