@@ -9,11 +9,13 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      # `nix develop`: the tools to build and test the compiler (make check,
-      # make test, make bootstrap)
+      # `nix develop`: everything needed to develop Arkadia. Go builds the
+      # compiler and the generated programs, git fetches git dependencies of
+      # projects, just runs the tasks (justfile) and Node.js builds the VS Code
+      # extension (editors/vscode).
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          packages = [ pkgs.go pkgs.gnumake pkgs.git ];
+          packages = [ pkgs.go pkgs.git pkgs.just pkgs.nodejs ];
           # generated programs are built without cgo
           CGO_ENABLED = "0";
         };

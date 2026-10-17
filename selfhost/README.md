@@ -13,8 +13,8 @@ ark (Go 実装)  ──build──▶  arkc (stage 1)  ──build──▶  ark
 ## ビルドとブートストラップ
 
 ```sh
-make selfhost     # Go 実装で selfhost/ をビルド → bin/arkc
-make bootstrap    # arkc で自分自身を 2 回ビルドし、各世代の生成コードとバイナリが一致することを確認
+just selfhost     # Go 実装で selfhost/ をビルド → bin/arkc
+just bootstrap    # arkc で自分自身を 2 回ビルドし、各世代の生成コードとバイナリが一致することを確認
 ```
 
 `go test ./...` に含まれる `TestSelfHost`（`internal/driver/selfhost_test.go`）は次を検査します。

@@ -54,7 +54,7 @@ git clone <this repository> arkadia && cd arkadia
 go build -o ~/.local/bin/ark ./cmd/ark
 ```
 
-Nix を使う場合は `nix develop` で Go と make の入った開発環境に入れます（`make check` / `make test` / `make bootstrap`）。
+開発に必要なツール（Go・git・[just](https://github.com/casey/just)・Node.js）は Nix flake で管理しています。`nix develop` で開発環境に入り、タスクは `just` で実行します（`just check` / `just test` / `just fmt` / `just bootstrap`、一覧は `just`）。
 
 ## クイックスタート
 
@@ -201,8 +201,8 @@ git 依存は解決したコミットが `ark.lock` に記録されます。パ�
 Go 実装を忠実に移植したもので、同じ入力に対してバイト単位で同一の Go コードを生成します。
 
 ```sh
-make selfhost     # Go 実装で arkc をビルド → bin/arkc
-make bootstrap    # arkc で arkc を 2 世代ビルドし、生成コードとバイナリが一致する（固定点）ことを確認
+just selfhost     # Go 実装で arkc をビルド → bin/arkc
+just bootstrap    # arkc で arkc を 2 世代ビルドし、生成コードとバイナリが一致する（固定点）ことを確認
 bin/arkc run examples/lisp.ark
 ```
 
