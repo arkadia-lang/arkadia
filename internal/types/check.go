@@ -424,11 +424,16 @@ func (c *Checker) processImports() {
 
 // qualified resolves a module qualifier to its export tables.
 func (c *Checker) qualified(pos diag.Pos, qual string) []*Exports {
-	if qual == "#Prelude" {
-		if c.modName == PreludeMod {
+	// "#M" names module M directly (used by generated code)
+	if mod, ok := strings.CutPrefix(qual, "#"); ok {
+		if c.modName == mod {
 			return []*Exports{c.exports}
 		}
-		return []*Exports{c.g.Modules[PreludeMod]}
+		if ex := c.g.Modules[mod]; ex != nil {
+			return []*Exports{ex}
+		}
+		c.errorf(pos, "module %s is not loaded", mod)
+		return nil
 	}
 	exs, ok := c.scope.Quals[qual]
 	if !ok {

@@ -85,6 +85,10 @@ param name req = withDefault "" (lookup name (params req))
 jsonBody : Request -> Result String Json.Json
 jsonBody req = Json.parse (body req)
 
+-- The body decoded as JSON into a value (see FromJson in Std.Json).
+bodyAs : Json.FromJson a => Request -> Result String a
+bodyAs req = Json.decode (body req)
+
 -- The fields of a form body (application/x-www-form-urlencoded).
 formParams : Request -> List (String, String)
 formParams req = Url.parseQuery (body req)
@@ -162,6 +166,10 @@ html s = Response 200 [("Content-Type", "text/html; charset=utf-8")] s
 -- 200 with a JSON body.
 json : Json.Json -> Response
 json v = Response 200 [("Content-Type", "application/json")] (Json.render v)
+
+-- 200 with a value encoded as JSON (see ToJson in Std.Json).
+jsonOf : Json.ToJson a => a -> Response
+jsonOf x = json (Json.toJson x)
 
 withStatus : Int -> Response -> Response
 withStatus s (Response _ hs b) = Response s hs b
@@ -537,6 +545,13 @@ httpPost url ct b = fetch "POST" url [("Content-Type", ct)] b
 
 postJson : String -> Json.Json -> <IO> Result String Response
 postJson url v = httpPost url "application/json" (Json.render v)
+
+-- GET a URL and decode the JSON body into a value; a non-2xx status is an
+-- error.
+getAs : Json.FromJson a => String -> <IO> Result String a
+getAs url = match getJson url with
+  Ok v -> Json.fromJson v
+  Err e -> Err e
 
 -- GET a URL and parse the body as JSON; a non-2xx status is an error.
 getJson : String -> <IO> Result String Json.Json

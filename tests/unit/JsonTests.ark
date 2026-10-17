@@ -63,3 +63,16 @@ test "editing objects" =
   assertEq (Json.render (Json.setField "b" (JBool True) v)) "{\"a\":1,\"b\":true}"
   assertEq (Json.render (Json.setField "a" JNull v)) "{\"a\":null}"
   assertEq (Json.render (Json.removeField "a" v)) "{}"
+
+type Point = Point { x : Int, y : Int }
+  deriving (Show, Eq, Json.ToJson, Json.FromJson)
+
+test "conversion classes" =
+  assertEq (Json.encode (Some [1, 2], 'c', ())) "[[1,2],\"c\",null]"
+  assertEq (Json.decode "[1.5, true, \"s\"]" : Result String (Float, Bool, String)) (Ok (1.5, True, "s"))
+  assertEq (Json.decode "[1, 2.5]" : Result String (List Int)) (Err "element 1: expected an integer, got a number")
+  assertEq (Json.decode "null" : Result String (Option Int)) (Ok None)
+  assertEq (Json.encode (Point { x = 1, y = 2 })) "{\"x\":1,\"y\":2}"
+  assertEq (Json.decode "{\"y\": 2, \"x\": 1, \"z\": 0}") (Ok (Point { x = 1, y = 2 }))
+  assertEq (Json.decode "{\"x\": 1}" : Result String Point) (Err "field 'y': missing")
+  assertEq (Json.decode "[]" : Result String Point) (Err "expected an object, got an array")

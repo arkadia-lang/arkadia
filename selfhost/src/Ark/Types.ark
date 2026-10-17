@@ -964,13 +964,18 @@ processImport c (Import ipos path ialias names all) =
 
 -- Resolve a module qualifier to its export tables.
 qualified : Checker -> Pos -> String -> <IO> Option (List Exports)
-qualified c p qual = match qual with
-  "#Prelude" -> match cMod c == preludeMod with
-    True -> Some [cExports c]
-    False -> match Map.lookup preludeMod (readRef (gModules (cG c))) with
-      Some ex -> Some [ex]
-      None -> Some []
-  _ -> match Map.lookup qual (readRef (scopeQuals (cScope c))) with
+qualified c p qual = match startsWith "#" qual with
+  -- "#M" names module M directly (used by generated code)
+  True ->
+    let mod = substring 1 (stringLength qual) qual
+    match cMod c == mod with
+      True -> Some [cExports c]
+      False -> match Map.lookup mod (readRef (gModules (cG c))) with
+        Some ex -> Some [ex]
+        None ->
+          errorf c p "module ${mod} is not loaded"
+          None
+  False -> match Map.lookup qual (readRef (scopeQuals (cScope c))) with
     Some exs -> Some exs
     None
       | qual == cMod c -> Some [cExports c]

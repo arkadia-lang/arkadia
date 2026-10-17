@@ -189,7 +189,27 @@ type Handle
 alias Point = (Float, Float)
 ```
 
-`deriving` できるのは `Eq`, `Ord`, `Show` です。
+`deriving` できるのは `Eq`, `Ord`, `Show`、および `Std.Json` をインポートしたモジュールでは `ToJson`, `FromJson` です（`deriving (Json.ToJson)` のように修飾しても書けます）。
+
+`ToJson` / `FromJson` の導出は次の形の JSON と相互に変換します。
+
+| 構築子 | JSON |
+|---|---|
+| レコード | `{"name": "ann", "age": 30}`（`Option` 型のフィールドは省略・`null` 可） |
+| それ以外（構築子が一つの型） | 引数が一つならその値、複数なら配列、無ければ構築子名の文字列 |
+| 構築子が複数の型 | 引数の無い構築子は `"Admin"`、レコードは `{"tag": "Circle", "radius": 1}`、それ以外は `{"tag": "Polygon", "values": [...]}` |
+
+```haskell
+import Std.Json as Json
+
+type User = User { name : String, age : Int, email : Option String }
+  deriving (Show, Json.ToJson, Json.FromJson)
+
+Json.encode (User { name = "ann", age = 30, email = None })
+-- {"name":"ann","age":30,"email":null}
+(Json.decode "{\"name\": \"bob\", \"age\": \"x\"}" : Result String User)
+-- Err "field 'age': expected an integer, got a string"
+```
 
 ### レコード
 

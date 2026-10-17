@@ -1,0 +1,49 @@
+-- deriving (ToJson, FromJson)
+
+import Std.Json as Json
+import Std.Map as Map
+
+type Role = Admin | Member | Guest
+  deriving (Show, Eq, Json.ToJson, Json.FromJson)
+
+type User = User { name : String, age : Int, role : Role, email : Option String, tags : List String }
+  deriving (Show, Eq, ToJson, FromJson)
+
+type Shape
+  = Circle { radius : Float }
+  | Rect { w, h : Float }
+  | Polygon (List (Float, Float))
+  | Dot
+  deriving (Show, ToJson, FromJson)
+
+-- a single positional constructor is its argument (or an array of them)
+type UserId = UserId Int
+  deriving (Show, ToJson, FromJson)
+
+type Pair a = Pair a a
+  deriving (Show, ToJson, FromJson)
+
+type Team = Team { members : List User, scores : Map.Map String Int, lead : Option UserId }
+  deriving (Show, ToJson, FromJson)
+
+roundTrip : (Json.ToJson a, Json.FromJson a) => a -> Result String a
+roundTrip x = Json.decode (Json.encode x)
+
+main () =
+  let ann = User { name = "ann", age = 30, role = Admin, email = None, tags = ["x"] }
+  println (Json.encode ann)
+  println (show (roundTrip ann == Ok ann))
+  -- missing Option fields are None
+  println (show (Json.decode "{\"name\": \"bob\", \"age\": 4, \"role\": \"Guest\", \"tags\": []}" : Result String User))
+  println (Json.encode [Circle { radius = 1.0 }, Rect { w = 2.0, h = 3.0 }, Polygon [(0.0, 0.0), (1.0, 1.0)], Dot])
+  println (show (roundTrip [Circle { radius = 1.0 }, Polygon [(0.0, 1.0)], Dot]))
+  println (Json.encode (UserId 7, Pair "a" "b"))
+  println (show (Json.decode "[7, [\"a\", \"b\"]]" : Result String (UserId, Pair String)))
+  let team = Team { members = [ann], scores = Map.fromList [("ann", 3)], lead = Some (UserId 1) }
+  println (Json.encodePretty 2 team)
+  println (show (map .lead (roundTrip team)))
+  -- errors say where the problem is
+  println (show (Json.decode "{\"name\": \"bob\", \"age\": \"old\", \"role\": \"Guest\", \"tags\": []}" : Result String User))
+  println (show (Json.decode "{\"name\": \"bob\", \"age\": 1, \"role\": \"Boss\", \"tags\": []}" : Result String User))
+  println (show (Json.decode "{\"members\": [{\"name\": 1}], \"scores\": {}}" : Result String Team))
+  println (show (Json.decode "{\"tag\": \"Rect\", \"w\": 1}" : Result String Shape))

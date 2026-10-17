@@ -223,7 +223,7 @@ bin/arkc run examples/lisp.ark
 | `Std.Queue` / `Std.Heap` | 永続的な両端キュー、優先度付きキュー（leftist heap） |
 | `Std.String` / `Std.Char` | 文字列（`splitOnce`, `stripPrefix`, `wrap` …）、文字の分類と変換 |
 | `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
-| `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照 |
+| `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照。`ToJson` / `FromJson` クラスと `deriving (ToJson, FromJson)` によるレコード等との自動変換（失敗箇所付きのエラー） |
 | `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻と計測、可変参照 |
 | `Std.Http` | HTTP サーバ（ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie）と HTTP クライアント |
 | `Std.Net` / `Std.Url` | TCP ソケット・名前解決、URL のパース・パーセントエンコード・クエリ文字列 |
@@ -261,7 +261,8 @@ main () = serve ":8080" (logRequests (router
 - ルートのパターンは固定文字列・`:name`（1 セグメント）・末尾の `*name`（残り全部）。`scope "/api" [...]` でまとめて前置でき、パスは合うがメソッドが違う場合は 405 を返します。
 - リクエストの受信は Go のゴルーチンで並行に行い、ハンドラは一度に一つずつ実行します。そのため `State` などのエフェクトをサーバ全体の周りで処理して、ハンドラ間でロックなしに共有できます（[`examples/http/server.ark`](examples/http/server.ark)）。
 - `request "GET" "/users/1" ""` でリクエストを作り `runHandler` に渡せば、サーバを立てずにハンドラやルータをテストできます。
-- クライアントは `httpGet` / `httpPost` / `postJson` / `getJson` / `fetch`。
+- `bodyAs req` は JSON の本文を `FromJson` の型に変換し、`jsonOf x` は `ToJson` の値を JSON で返します。
+- クライアントは `httpGet` / `httpPost` / `postJson` / `getJson` / `getAs` / `fetch`。
 - `Std.State` の `get` / `put` と名前が重なるので、両方使うときは片方を `import Std.State as St` のように修飾付きで import してください。
 
 ## サンプル

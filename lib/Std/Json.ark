@@ -7,6 +7,7 @@
 module Std.Json
 
 import Std.Char as Char
+import Std.Map as Map
 
 type Json
   = JNull
@@ -261,3 +262,236 @@ setField _ _ other = other
 removeField : String -> Json -> Json
 removeField k (JObject kvs) = JObject (filter (\(k2, _) -> k2 != k) kvs)
 removeField _ other = other
+
+-- ===================================================================
+-- Conversion from and to Arkadia values
+-- ===================================================================
+--
+-- `deriving (ToJson, FromJson)` (with Std.Json imported) writes these
+-- instances for data types:
+--
+--   record constructor    {"name": "ann", "age": 30}   (fields of type
+--                         Option may be missing or null)
+--   other constructor     its argument, or an array of its arguments
+--   several constructors  "Tag" when nullary, otherwise an object with a
+--                         "tag" field plus the record fields, or plus
+--                         "values": [arguments]
+
+class ToJson a where
+  toJson : a -> Json
+
+class FromJson a where
+  fromJson : Json -> Result String a
+  -- The value of a missing object field: an error, except for Option.
+  fromMissing : Unit -> Result String a
+  fromMissing _ = Err "missing"
+
+-- Keys of JSON objects for maps.
+class JsonKey k where
+  keyToString : k -> String
+  keyFromString : String -> Option k
+
+-- JSON text of a value.
+encode : ToJson a => a -> String
+encode x = render (toJson x)
+
+-- Indented JSON text of a value.
+encodePretty : ToJson a => Int -> a -> String
+encodePretty indent x = renderPretty indent (toJson x)
+
+-- Parse JSON text and convert it.
+decode : FromJson a => String -> Result String a
+decode s = match parse s with
+  Ok v -> fromJson v
+  Err e -> Err e
+
+-- The kind of a value for error messages.
+kindOf : Json -> String
+kindOf v = match v with
+  JNull -> "null"
+  JBool _ -> "a boolean"
+  JNumber _ -> "a number"
+  JString _ -> "a string"
+  JArray _ -> "an array"
+  JObject _ -> "an object"
+
+-- An error for a value that is not of the expected kind.
+expected : String -> Json -> Result String a
+expected what v = Err "expected ${what}, got ${kindOf v}"
+
+private context : String -> Result String a -> Result String a
+context label r = match r with
+  Err e -> Err (label ++ ": " ++ e)
+  ok -> ok
+
+-- A field of an object, converted. A missing field is converted by
+-- fromMissing (so it is None for an Option field).
+fieldOf : FromJson a => String -> Json -> Result String a
+fieldOf name v = match v with
+  JObject kvs -> context "field '${name}'" (match lookup name kvs with
+    Some x -> fromJson x
+    None -> fromMissing ())
+  _ -> expected "an object" v
+
+-- The constructor tag of a value of a type with several constructors: the
+-- string itself, or the "tag" field of an object.
+tagOf : Json -> Result String String
+tagOf v = match v with
+  JString s -> Ok s
+  JObject kvs -> match lookup "tag" kvs with
+    Some (JString s) -> Ok s
+    _ -> Err "expected a \"tag\" field"
+  _ -> expected "a string or an object with a \"tag\" field" v
+
+-- The arguments of a constructor: exactly n elements of an array (or of
+-- the "values" field of an object).
+valuesOf : Int -> Json -> Result String (List Json)
+valuesOf n v = match v with
+  JArray xs | length xs == n -> Ok xs
+            | otherwise -> Err "expected ${n} elements, got ${length xs}"
+  JObject kvs -> match lookup "values" kvs with
+    Some x -> context "field 'values'" (valuesOf n x)
+    None -> Err "expected a \"values\" field"
+  _ -> expected "an array" v
+
+-- Element i of the arguments of a constructor, converted.
+elemOf : FromJson a => Int -> List Json -> Result String a
+elemOf i xs = match nth i xs with
+  Some x -> context "element ${i}" (fromJson x)
+  None -> Err "missing element ${i}"
+
+-- The error for an unknown constructor tag.
+unknownTag : String -> String -> Result String a
+unknownTag typeName tag = Err "unknown ${typeName} constructor ${show tag}"
+
+instance ToJson Json where
+  toJson v = v
+
+instance FromJson Json where
+  fromJson v = Ok v
+
+instance ToJson Int where
+  toJson n = JNumber (toFloat n)
+
+instance FromJson Int where
+  fromJson v = match asInt v with
+    Some n -> Ok n
+    None -> expected "an integer" v
+
+instance ToJson Float where
+  toJson x = JNumber x
+
+instance FromJson Float where
+  fromJson v = match v with
+    JNumber x -> Ok x
+    _ -> expected "a number" v
+
+instance ToJson String where
+  toJson s = JString s
+
+instance FromJson String where
+  fromJson v = match v with
+    JString s -> Ok s
+    _ -> expected "a string" v
+
+instance ToJson Bool where
+  toJson b = JBool b
+
+instance FromJson Bool where
+  fromJson v = match v with
+    JBool b -> Ok b
+    _ -> expected "a boolean" v
+
+instance ToJson Char where
+  toJson c = JString (charToString c)
+
+instance FromJson Char where
+  fromJson v = match v with
+    JString s -> match chars s with
+      [c] -> Ok c
+      _ -> Err "expected a single character"
+    _ -> expected "a string" v
+
+instance ToJson Unit where
+  toJson _ = JNull
+
+instance FromJson Unit where
+  fromJson v = match v with
+    JNull -> Ok ()
+    _ -> expected "null" v
+
+instance ToJson a => ToJson (List a) where
+  toJson xs = JArray (mapList toJson xs)
+
+instance FromJson a => FromJson (List a) where
+  fromJson v = match v with
+    JArray xs -> elems 0 xs []
+    _ -> expected "an array" v
+
+private elems : FromJson a => Int -> List Json -> List a -> Result String (List a)
+elems i xs acc = match xs with
+  [] -> Ok (reverse acc)
+  x :: rest -> match fromJson x with
+    Ok y -> elems (i + 1) rest (y :: acc)
+    Err e -> Err "element ${i}: ${e}"
+
+instance ToJson a => ToJson (Option a) where
+  toJson o = match o with
+    Some x -> toJson x
+    None -> JNull
+
+instance FromJson a => FromJson (Option a) where
+  fromJson v = match v with
+    JNull -> Ok None
+    _ -> match fromJson v with
+      Ok x -> Ok (Some x)
+      Err e -> Err e
+  fromMissing _ = Ok None
+
+instance (ToJson a, ToJson b) => ToJson (a, b) where
+  toJson (a, b) = JArray [toJson a, toJson b]
+
+instance (FromJson a, FromJson b) => FromJson (a, b) where
+  fromJson v = match valuesOf 2 v with
+    Err e -> Err e
+    Ok xs -> match (elemOf 0 xs, elemOf 1 xs) with
+      (Ok a, Ok b) -> Ok (a, b)
+      (Err e, _) -> Err e
+      (_, Err e) -> Err e
+
+instance (ToJson a, ToJson b, ToJson c) => ToJson (a, b, c) where
+  toJson (a, b, c) = JArray [toJson a, toJson b, toJson c]
+
+instance (FromJson a, FromJson b, FromJson c) => FromJson (a, b, c) where
+  fromJson v = match valuesOf 3 v with
+    Err e -> Err e
+    Ok xs -> match (elemOf 0 xs, elemOf 1 xs, elemOf 2 xs) with
+      (Ok a, Ok b, Ok c) -> Ok (a, b, c)
+      (Err e, _, _) -> Err e
+      (_, Err e, _) -> Err e
+      (_, _, Err e) -> Err e
+
+instance JsonKey String where
+  keyToString s = s
+  keyFromString s = Some s
+
+instance JsonKey Int where
+  keyToString n = show n
+  keyFromString s = parseInt s
+
+instance (JsonKey k, ToJson v) => ToJson (Map.Map k v) where
+  toJson m = JObject (mapList (\(k, v) -> (keyToString k, toJson v)) (Map.toList m))
+
+instance (Ord k, JsonKey k, FromJson v) => FromJson (Map.Map k v) where
+  fromJson v = match v with
+    JObject kvs -> mapEntries kvs Map.empty
+    _ -> expected "an object" v
+
+private mapEntries : (Ord k, JsonKey k, FromJson v) => List (String, Json) -> Map.Map k v -> Result String (Map.Map k v)
+mapEntries kvs acc = match kvs with
+  [] -> Ok acc
+  (k, x) :: rest -> match keyFromString k with
+    None -> Err "invalid key ${show k}"
+    Some key -> match fromJson x with
+      Ok y -> mapEntries rest (Map.insert key y acc)
+      Err e -> Err "field '${k}': ${e}"

@@ -277,14 +277,26 @@ func (c *Checker) deriveInstances() {
 		ti := c.scope.Types[dt.Name].(*TypeInfo)
 		pks := paramKinds(ti.Kind, len(dt.Params))
 		for _, cls := range dt.Deriving {
-			inst := &syntax.DInstance{P: dt.P, Qual: "#Prelude", Class: cls, Derived: true}
+			qual := "#Prelude"
+			if cls == "ToJson" || cls == "FromJson" {
+				qual = "#" + jsonMod
+				if c.g.Modules[jsonMod] == nil {
+					c.errorf(dt.P, "deriving %s requires importing %s", cls, jsonMod)
+					continue
+				}
+				if len(dt.Ctors) == 0 {
+					c.errorf(dt.P, "cannot derive %s for a type without constructors", cls)
+					continue
+				}
+			}
+			inst := &syntax.DInstance{P: dt.P, Qual: qual, Class: cls, Derived: true}
 			var head syntax.TypeExpr = &syntax.TConE{P: dt.P, Name: dt.Name}
 			if len(dt.Params) > 0 {
 				var args []syntax.TypeExpr
 				for i, p := range dt.Params {
 					args = append(args, &syntax.TVarE{P: dt.P, Name: p})
 					if _, ok := pruneKind(pks[i]).(KStar); ok {
-						inst.Context = append(inst.Context, &syntax.PredE{P: dt.P, Qual: "#Prelude", Class: cls, Type: &syntax.TVarE{P: dt.P, Name: p}})
+						inst.Context = append(inst.Context, &syntax.PredE{P: dt.P, Qual: qual, Class: cls, Type: &syntax.TVarE{P: dt.P, Name: p}})
 					}
 				}
 				head = &syntax.TAppE{P: dt.P, Fun: head, Args: args}
@@ -298,8 +310,12 @@ func (c *Checker) deriveInstances() {
 				b = deriveOrd(dt)
 			case "Show":
 				b = deriveShow(dt)
+			case "ToJson":
+				b = deriveToJson(dt)
+			case "FromJson":
+				b = deriveFromJson(dt)
 			default:
-				c.errorf(dt.P, "cannot derive class '%s' (only Eq, Ord and Show can be derived)", cls)
+				c.errorf(dt.P, "cannot derive class '%s' (only Eq, Ord, Show, ToJson and FromJson can be derived)", cls)
 				continue
 			}
 			inst.Binds = []*syntax.Bind{b}
@@ -413,6 +429,137 @@ func deriveShow(dt *syntax.DType) *syntax.Bind {
 		m.Arms = append(m.Arms, &syntax.Arm{P: p, Pat: pa, Body: &syntax.Rhs{Body: body}})
 	}
 	return simpleBind(p, "show", []string{"x$"}, m)
+}
+
+const jsonMod = "Std.Json"
+
+func jv(p diag.Pos, name string) syntax.Expr {
+	return &syntax.EVar{P: p, Qual: "#" + jsonMod, Name: name}
+}
+func jc(p diag.Pos, name string) syntax.Expr {
+	return &syntax.ECon{P: p, Qual: "#" + jsonMod, Name: name}
+}
+func strLit(p diag.Pos, s string) syntax.Expr {
+	return &syntax.ELit{P: p, Kind: syntax.LitString, Str: s}
+}
+func pair(p diag.Pos, a, b syntax.Expr) syntax.Expr {
+	return &syntax.ETuple{P: p, Elems: []syntax.Expr{a, b}}
+}
+
+// deriveToJson writes the conversion described in Std.Json.
+func deriveToJson(dt *syntax.DType) *syntax.Bind {
+	p := dt.P
+	multi := len(dt.Ctors) > 1
+	m := &syntax.EMatch{P: p, Scrut: ev(p, "x$")}
+	for _, cd := range dt.Ctors {
+		pa, va := ctorPat(p, cd, "a$")
+		var conv []syntax.Expr
+		for _, v := range va {
+			conv = append(conv, app(jv(p, "toJson"), v))
+		}
+		tag := pair(p, strLit(p, "tag"), app(jc(p, "JString"), strLit(p, cd.Name)))
+		var body syntax.Expr
+		switch {
+		case cd.Named != nil:
+			l := &syntax.EList{P: p}
+			if multi {
+				l.Elems = append(l.Elems, tag)
+			}
+			for i, x := range conv {
+				l.Elems = append(l.Elems, pair(p, strLit(p, cd.Named[i]), x))
+			}
+			body = app(jc(p, "JObject"), l)
+		case len(va) == 0:
+			body = app(jc(p, "JString"), strLit(p, cd.Name))
+		case !multi && len(va) == 1:
+			body = conv[0]
+		case !multi:
+			body = app(jc(p, "JArray"), &syntax.EList{P: p, Elems: conv})
+		default:
+			values := pair(p, strLit(p, "values"), app(jc(p, "JArray"), &syntax.EList{P: p, Elems: conv}))
+			body = app(jc(p, "JObject"), &syntax.EList{P: p, Elems: []syntax.Expr{tag, values}})
+		}
+		m.Arms = append(m.Arms, &syntax.Arm{P: p, Pat: pa, Body: &syntax.Rhs{Body: body}})
+	}
+	return simpleBind(p, "toJson", []string{"x$"}, m)
+}
+
+func okPat(p diag.Pos, x syntax.Pattern) syntax.Pattern {
+	return &syntax.PCon{P: p, Qual: "#Prelude", Name: "Ok", Args: []syntax.Pattern{x}}
+}
+
+// resultChain matches each of the results in turn, passing errors on, and
+// finally returns Ok (con b$0 .. b$n).
+func resultChain(p diag.Pos, results []syntax.Expr, con string) syntax.Expr {
+	var final syntax.Expr = &syntax.ECon{P: p, Name: con}
+	if len(results) > 0 {
+		var args []syntax.Expr
+		for i := range results {
+			args = append(args, ev(p, "b$"+itoa(i)))
+		}
+		final = app(final, args...)
+	}
+	var e syntax.Expr = app(&syntax.ECon{P: p, Qual: "#Prelude", Name: "Ok"}, final)
+	for i := len(results) - 1; i >= 0; i-- {
+		e = &syntax.EMatch{P: p, Scrut: results[i], Arms: []*syntax.Arm{
+			{P: p, Pat: &syntax.PCon{P: p, Qual: "#Prelude", Name: "Err", Args: []syntax.Pattern{&syntax.PVar{P: p, Name: "e$"}}}, Body: &syntax.Rhs{Body: app(&syntax.ECon{P: p, Qual: "#Prelude", Name: "Err"}, ev(p, "e$"))}},
+			{P: p, Pat: okPat(p, &syntax.PVar{P: p, Name: "b$" + itoa(i)}), Body: &syntax.Rhs{Body: e}},
+		}}
+	}
+	return e
+}
+
+// tagMatch dispatches on the constructor tag of j$.
+func tagMatch(p diag.Pos, typeName string, arms []*syntax.Arm) syntax.Expr {
+	m := &syntax.EMatch{P: p, Scrut: app(jv(p, "tagOf"), ev(p, "j$"))}
+	m.Arms = append(m.Arms, &syntax.Arm{P: p, Pat: &syntax.PCon{P: p, Qual: "#Prelude", Name: "Err", Args: []syntax.Pattern{&syntax.PVar{P: p, Name: "e$"}}}, Body: &syntax.Rhs{Body: app(&syntax.ECon{P: p, Qual: "#Prelude", Name: "Err"}, ev(p, "e$"))}})
+	m.Arms = append(m.Arms, arms...)
+	m.Arms = append(m.Arms, &syntax.Arm{P: p, Pat: okPat(p, &syntax.PVar{P: p, Name: "t$"}), Body: &syntax.Rhs{Body: app(jv(p, "unknownTag"), strLit(p, typeName), ev(p, "t$"))}})
+	return m
+}
+
+func tagArm(p diag.Pos, name string, body syntax.Expr) *syntax.Arm {
+	return &syntax.Arm{P: p, Pat: okPat(p, &syntax.PLit{P: p, Lit: &syntax.ELit{P: p, Kind: syntax.LitString, Str: name}}), Body: &syntax.Rhs{Body: body}}
+}
+
+// deriveFromJson writes the inverse of deriveToJson.
+func deriveFromJson(dt *syntax.DType) *syntax.Bind {
+	p := dt.P
+	multi := len(dt.Ctors) > 1
+	decode := func(cd *syntax.CtorDecl) syntax.Expr {
+		var results []syntax.Expr
+		switch {
+		case cd.Named != nil:
+			for _, f := range cd.Named {
+				results = append(results, app(jv(p, "fieldOf"), strLit(p, f), ev(p, "j$")))
+			}
+		case len(cd.Fields) == 0:
+		case !multi && len(cd.Fields) == 1:
+			results = append(results, app(jv(p, "fromJson"), ev(p, "j$")))
+		default:
+			for i := range cd.Fields {
+				results = append(results, app(jv(p, "elemOf"), &syntax.ELit{P: p, Kind: syntax.LitInt, Int: int64(i)}, ev(p, "vs$")))
+			}
+			return &syntax.EMatch{P: p, Scrut: app(jv(p, "valuesOf"), &syntax.ELit{P: p, Kind: syntax.LitInt, Int: int64(len(cd.Fields))}, ev(p, "j$")), Arms: []*syntax.Arm{
+				{P: p, Pat: &syntax.PCon{P: p, Qual: "#Prelude", Name: "Err", Args: []syntax.Pattern{&syntax.PVar{P: p, Name: "e$"}}}, Body: &syntax.Rhs{Body: app(&syntax.ECon{P: p, Qual: "#Prelude", Name: "Err"}, ev(p, "e$"))}},
+				{P: p, Pat: okPat(p, &syntax.PVar{P: p, Name: "vs$"}), Body: &syntax.Rhs{Body: resultChain(p, results, cd.Name)}},
+			}}
+		}
+		return resultChain(p, results, cd.Name)
+	}
+	var body syntax.Expr
+	if multi {
+		var arms []*syntax.Arm
+		for _, cd := range dt.Ctors {
+			arms = append(arms, tagArm(p, cd.Name, decode(cd)))
+		}
+		body = tagMatch(p, dt.Name, arms)
+	} else if cd := dt.Ctors[0]; cd.Named == nil && len(cd.Fields) == 0 {
+		body = tagMatch(p, dt.Name, []*syntax.Arm{tagArm(p, cd.Name, decode(cd))})
+	} else {
+		body = decode(dt.Ctors[0])
+	}
+	return simpleBind(p, "fromJson", []string{"j$"}, body)
 }
 
 // ------------------------------------------------------------------ instances

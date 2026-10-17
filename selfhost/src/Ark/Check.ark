@@ -313,22 +313,41 @@ deriveInstances c decls = concat (mapList (\d -> match d with
     Some ti ->
       let pks = paramKinds (typeInfoKind ti) (length params)
       filterMap (\cls ->
-        let ctx = filterMap id (mapList (\(pn, k) -> match isStarKind k with
-          True -> Some (PredE p "#Prelude" cls (TVarE p pn))
-          False -> None) (zip params pks))
-        let head = match params with
-          [] -> TConE p "" name
-          _ -> TAppE p (TConE p "" name) (mapList (TVarE p) params)
-        let bind = match cls with
-          "Eq" -> Some (deriveEq p ctors)
-          "Ord" -> Some (deriveOrd p ctors)
-          "Show" -> Some (deriveShow p ctors)
-          _ ->
-            errorf c p "cannot derive class '${cls}' (only Eq, Ord and Show can be derived)"
-            None
-        match bind with
-          Some b -> Some (DInstance p ctx "#Prelude" cls head [b] True)
-          None -> None) deriv
+        let isJson = cls == "ToJson" || cls == "FromJson"
+        let qual = match isJson with
+          True -> "#" ++ jsonMod
+          False -> "#Prelude"
+        let ok = match isJson with
+          False -> True
+          True
+            | not (Map.member jsonMod (readRef (gModules (cG c)))) ->
+                errorf c p "deriving ${cls} requires importing ${jsonMod}"
+                False
+            | isEmpty ctors ->
+                errorf c p "cannot derive ${cls} for a type without constructors"
+                False
+            | otherwise -> True
+        match ok with
+          False -> None
+          True ->
+            let ctx = filterMap id (mapList (\(pn, k) -> match isStarKind k with
+              True -> Some (PredE p qual cls (TVarE p pn))
+              False -> None) (zip params pks))
+            let head = match params with
+              [] -> TConE p "" name
+              _ -> TAppE p (TConE p "" name) (mapList (TVarE p) params)
+            let bind = match cls with
+              "Eq" -> Some (deriveEq p ctors)
+              "Ord" -> Some (deriveOrd p ctors)
+              "Show" -> Some (deriveShow p ctors)
+              "ToJson" -> Some (deriveToJson p ctors)
+              "FromJson" -> Some (deriveFromJson p name ctors)
+              _ ->
+                errorf c p "cannot derive class '${cls}' (only Eq, Ord, Show, ToJson and FromJson can be derived)"
+                None
+            match bind with
+              Some b -> Some (DInstance p ctx qual cls head [b] True)
+              None -> None) deriv
   _ -> []) decls)
 
 private ctorPat : Pos -> CtorDecl -> String -> <IO> (Pattern, List Expr)
@@ -390,6 +409,97 @@ deriveShow p ctors =
         let shown = mapList (\v -> appE (pv "showArg") [appE (pv "show") [v]]) va
         Arm p pa (RBody (appE (pv "showCon") [ELit p (LString name), EList p shown]))
   simpleBind p "show" ["x$"] (EMatch p (ev p "x$") (mapList arm ctors))
+
+jsonMod : String
+jsonMod = "Std.Json"
+
+private jv : Pos -> String -> <IO> Expr
+jv p name = mkVar p ("#" ++ jsonMod) name
+
+private jc : Pos -> String -> <IO> Expr
+jc p name = mkCon p ("#" ++ jsonMod) name
+
+private strLit : Pos -> String -> Expr
+strLit p s = ELit p (LString s)
+
+-- The conversion described in Std.Json.
+private deriveToJson : Pos -> List CtorDecl -> <IO> Bind
+deriveToJson p ctors =
+  let multi = length ctors > 1
+  let arm (cd@(CtorDecl _ name fields named)) =
+    let (pa, va) = ctorPat p cd "a$"
+    let conv = mapList (\v -> appE (jv p "toJson") [v]) va
+    let tag = ETuple p [strLit p "tag", appE (jc p "JString") [strLit p name]]
+    let body = match named with
+      Some fs ->
+        let entries = mapList (\(f, x) -> ETuple p [strLit p f, x]) (zip fs conv)
+        let elems = match multi with
+          True -> tag :: entries
+          False -> entries
+        appE (jc p "JObject") [EList p elems]
+      None
+        | isEmpty va -> appE (jc p "JString") [strLit p name]
+        | not multi && length va == 1 -> at 0 conv
+        | not multi -> appE (jc p "JArray") [EList p conv]
+        | otherwise ->
+            let values = ETuple p [strLit p "values", appE (jc p "JArray") [EList p conv]]
+            appE (jc p "JObject") [EList p [tag, values]]
+    Arm p pa (RBody body)
+  simpleBind p "toJson" ["x$"] (EMatch p (ev p "x$") (mapList arm ctors))
+
+private okPat : Pos -> Pattern -> <IO> Pattern
+okPat p x = mkPCon p "#Prelude" "Ok" [x]
+
+private errArm : Pos -> <IO> Arm
+errArm p =
+  let pat = mkPCon p "#Prelude" "Err" [mkPVar p "e$"]
+  Arm p pat (RBody (appE (mkCon p "#Prelude" "Err") [ev p "e$"]))
+
+-- Match each of the results in turn, passing errors on, and finally
+-- return Ok (con b$0 .. b$n).
+private resultChain : Pos -> List Expr -> String -> <IO> Expr
+resultChain p results con =
+  let c0 = mkCon p "" con
+  let final = match results with
+    [] -> c0
+    _ -> appE c0 (mapList (\i -> ev p ("b$" ++ show i)) (range 0 (length results)))
+  let okE = appE (mkCon p "#Prelude" "Ok") [final]
+  foldr (\(i, r) acc ->
+    let err = errArm p
+    let okArm = Arm p (okPat p (mkPVar p ("b$" ++ show i))) (RBody acc)
+    EMatch p r [err, okArm]) okE (indexed results)
+
+-- Dispatch on the constructor tag of j$.
+private tagMatch : Pos -> String -> List Arm -> <IO> Expr
+tagMatch p typeName arms =
+  let scrut = appE (jv p "tagOf") [ev p "j$"]
+  let err = errArm p
+  let unknown = Arm p (okPat p (mkPVar p "t$")) (RBody (appE (jv p "unknownTag") [strLit p typeName, ev p "t$"]))
+  EMatch p scrut (err :: arms ++ [unknown])
+
+private tagArm : Pos -> String -> Expr -> <IO> Arm
+tagArm p name body = Arm p (okPat p (PLit p (LString name))) (RBody body)
+
+-- The inverse of deriveToJson.
+private deriveFromJson : Pos -> String -> List CtorDecl -> <IO> Bind
+deriveFromJson p typeName ctors =
+  let multi = length ctors > 1
+  let decode (CtorDecl _ name fields named) = match named with
+    Some fs -> resultChain p (mapList (\f -> appE (jv p "fieldOf") [strLit p f, ev p "j$"]) fs) name
+    None
+      | isEmpty fields -> resultChain p [] name
+      | not multi && length fields == 1 -> resultChain p [appE (jv p "fromJson") [ev p "j$"]] name
+      | otherwise ->
+          let results = mapList (\i -> appE (jv p "elemOf") [ELit p (LInt i), ev p "vs$"]) (range 0 (length fields))
+          let scrut = appE (jv p "valuesOf") [ELit p (LInt (length fields)), ev p "j$"]
+          let err = errArm p
+          let okArm = Arm p (okPat p (mkPVar p "vs$")) (RBody (resultChain p results name))
+          EMatch p scrut [err, okArm]
+  let body = match ctors with
+    [cd@(CtorDecl _ name fields None)] | isEmpty fields -> tagMatch p typeName [tagArm p name (decode cd)]
+    [cd] -> decode cd
+    _ -> tagMatch p typeName (mapList (\(cd@(CtorDecl _ name _ _)) -> tagArm p name (decode cd)) ctors)
+  simpleBind p "fromJson" ["j$"] body
 
 -- ================================================================ instances
 

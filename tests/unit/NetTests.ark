@@ -169,3 +169,15 @@ test "http client errors" =
 isErr : Result e a -> Bool
 isErr (Err _) = True
 isErr (Ok _) = False
+
+type Greeting = Greeting { name : String, times : Int }
+  deriving (Json.ToJson, Json.FromJson)
+
+test "json bodies with conversion classes" =
+  let handler req = match Http.bodyAs req with
+    Ok g -> Http.jsonOf (Greeting { name = toUpper g.name, times = g.times * 2 })
+    Err e -> Http.withStatus 400 (text e)
+  let Response status _ b = Http.runHandler handler (Http.request "POST" "/" "{\"name\": \"ann\", \"times\": 2}")
+  assertEq (status, b) (200, "{\"name\":\"ANN\",\"times\":4}")
+  let Response status2 _ b2 = Http.runHandler handler (Http.request "POST" "/" "{}")
+  assertEq (status2, b2) (400, "field 'name': missing")

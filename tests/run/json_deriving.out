@@ -1,0 +1,29 @@
+{"name":"ann","age":30,"role":"Admin","email":null,"tags":["x"]}
+True
+Ok (User { name = "bob", age = 4, role = Guest, email = None, tags = [] })
+[{"tag":"Circle","radius":1},{"tag":"Rect","w":2,"h":3},{"tag":"Polygon","values":[[[0,0],[1,1]]]},"Dot"]
+Ok [Circle { radius = 1.0 }, Polygon [(0.0, 1.0)], Dot]
+[7,["a","b"]]
+Ok (UserId 7, Pair "a" "b")
+{
+  "members": [
+    {
+      "name": "ann",
+      "age": 30,
+      "role": "Admin",
+      "email": null,
+      "tags": [
+        "x"
+      ]
+    }
+  ],
+  "scores": {
+    "ann": 3
+  },
+  "lead": 1
+}
+Ok (Some (UserId 1))
+Err "field 'age': expected an integer, got a string"
+Err "field 'role': unknown Role constructor \"Boss\""
+Err "field 'members': element 0: field 'name': expected a string, got a number"
+Err "field 'h': missing"
