@@ -35,7 +35,7 @@ main () =
 | 代数的エフェクト | `effect` 宣言・`handle ... with` によるディープハンドラ。エフェクトは行多相の型で追跡され、未処理のエフェクトはコンパイルエラー |
 | GC | Go ランタイムの並行 GC を利用 |
 | ネイティブバイナリ | Arkadia → Go → `go build` で単一の静的バイナリを生成 |
-| 現代的なエコシステム | `ark` コマンド（new / build / run / check / test / doc / repl）、Language Server（VS Code 拡張付き）、`ark.toml` による依存管理（path / git）とロックファイル、テストランナー、Go への FFI |
+| 現代的なエコシステム | `ark` コマンド（new / build / run / check / test / fmt / doc / repl）、Language Server（VS Code 拡張付き）、`ark.toml` による依存管理（path / git）とロックファイル、テストランナー、Go への FFI |
 | 再帰とパターンマッチだけの制御 | `if` もループも無い。`match`・ガード・再帰（自己末尾呼び出しはループに最適化）だけ |
 | 空白区切りの関数適用 | `f x y` |
 | 数値リテラル | 整数リテラルは `Float` の文脈では `Float` になる（`3 * r` で `r : Float`）。それ以外は `Int` |
@@ -172,6 +172,7 @@ effect Yield a where
 | `ark run [file] [-- args]` | ビルドして実行 |
 | `ark check [file]` | 型検査のみ |
 | `ark test [file]` | `test "名前" = ...` 宣言を実行（`Fail` エフェクトで失敗を報告）。`-run 文字列` で名前による絞り込み |
+| `ark fmt [path...]` | `.ark` ファイルを整形して上書き（既定はカレントディレクトリ以下）。`-check` は未整形のファイルを列挙して終了コード 1、`ark fmt -` は標準入力を整形して標準出力へ |
 | `ark doc <Module>` | モジュールの公開 API を、宣言直前の `--` コメント（ドキュメント）付きで表示 |
 | `ark repl` | 対話環境（式の評価、定義の追加、`:t` で型表示） |
 | `ark emit [file]` | 生成された Go コードを表示 |
@@ -203,7 +204,7 @@ make bootstrap    # arkc で arkc を 2 世代ビルドし、生成コードと�
 bin/arkc run examples/lisp.ark
 ```
 
-`bin/arkc` は `ark` と同じコマンド（`new` / `build` / `run` / `check` / `test` / `doc` / `repl` / `emit` / `lsp`）を備えています。
+`bin/arkc` は `ark` と同じコマンド（`new` / `build` / `run` / `check` / `test` / `doc` / `repl` / `emit` / `lsp`）を備えています（`fmt` は Go 実装のみ）。
 詳しくは [selfhost/README.md](selfhost/README.md) を参照してください。
 
 ## 標準ライブラリ

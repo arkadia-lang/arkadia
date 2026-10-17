@@ -29,6 +29,17 @@ type lexer struct {
 	errs   diag.List
 	sawNL  bool
 	sawSpc bool
+	start  int // byte offset where the current token starts
+	// comments are recorded only when keepComments is set (for the
+	// formatter)
+	keepComments bool
+	comments     []comment
+}
+
+// comment is the position of a line or block comment.
+type comment struct {
+	off, end  int
+	line, col int
 }
 
 // Lex tokenizes a source file and applies the layout algorithm.
@@ -97,6 +108,8 @@ func (lx *lexer) next() rune {
 func (lx *lexer) emit(t Token) {
 	t.first = lx.sawNL
 	t.space = lx.sawSpc
+	t.off = lx.start
+	t.end = lx.off
 	lx.sawNL = false
 	lx.sawSpc = false
 	lx.toks = append(lx.toks, t)
@@ -116,6 +129,7 @@ func (lx *lexer) prevEndsExpr() bool {
 func (lx *lexer) run() {
 	for lx.off < len(lx.src) {
 		r := lx.peek()
+		lx.start = lx.off
 		switch {
 		case r == '\n':
 			lx.next()
@@ -128,12 +142,16 @@ func (lx *lexer) run() {
 			lx.errorf(lx.pos(), "tab characters are not allowed; use spaces for indentation")
 			lx.next()
 		case r == '-' && lx.peekAt(1) == '-' && !isOpChar(lx.peekAt(2)) || r == '-' && lx.peekAt(1) == '-' && lx.peekAt(2) == '-':
+			p := lx.pos()
 			for lx.off < len(lx.src) && lx.peek() != '\n' {
 				lx.next()
 			}
+			lx.comment(p)
 			lx.sawSpc = true
 		case r == '{' && lx.peekAt(1) == '-':
+			p := lx.pos()
 			lx.blockComment()
+			lx.comment(p)
 			lx.sawSpc = true
 		case unicode.IsDigit(r):
 			lx.number(false)
@@ -149,7 +167,16 @@ func (lx *lexer) run() {
 			lx.punct()
 		}
 	}
+	lx.start = lx.off
 	lx.emit(Token{Kind: EOF, Pos: lx.pos()})
+}
+
+// comment records the comment that started at p and ends at the current
+// position.
+func (lx *lexer) comment(p diag.Pos) {
+	if lx.keepComments {
+		lx.comments = append(lx.comments, comment{off: lx.start, end: lx.off, line: p.Line, col: p.Col})
+	}
 }
 
 // prevEndsExprTight reports whether the previous token ends an expression and

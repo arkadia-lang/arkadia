@@ -29,6 +29,7 @@ Commands:
   check [file.ark]   type check without building
   test [file.ark]    run the project's tests (declarations ` + "`test \"name\" = ...`" + `);
                      -run <text> runs only those whose "Module › name" contains <text>
+  fmt [path...]      format .ark files in place (-check only lists unformatted ones)
   doc <Module>       show the public interface of a module
   repl               start an interactive session
   emit [file.ark]    print the generated Go code
@@ -56,6 +57,8 @@ func CLI(args []string) int {
 		return cmdCheck(rest)
 	case "test":
 		return cmdTest(rest)
+	case "fmt":
+		return cmdFmt(rest)
 	case "doc":
 		return cmdDoc(rest)
 	case "emit":

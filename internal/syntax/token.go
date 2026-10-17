@@ -131,6 +131,8 @@ type Token struct {
 
 	first bool // first token on its line
 	space bool // preceded by whitespace
+	off   int  // byte offsets of the token's source text
+	end   int
 }
 
 func (t Token) String() string {
