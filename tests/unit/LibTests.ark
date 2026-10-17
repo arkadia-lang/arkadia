@@ -13,6 +13,7 @@ import Std.Crypto
 import Std.Args
 import Std.Result (isErr)
 import Std.Format
+import Std.Csv as Csv
 
 test "regex matching and captures" =
   let date = Re.regex "(\\d{4})-(\\d{2})-(\\d{2})"
@@ -111,3 +112,14 @@ test "number formatting" =
   assertEq (padInt 3 7, padInt 2 123, padInt 4 (-5)) ("007", "123", "-005")
   assertEq (percent 1 0.256) "25.6%"
   assertEq (map byteSize [512, 1536, 1048576, 5000000000]) ["512 B", "1.5 KiB", "1 MiB", "4.7 GiB"]
+
+test "csv" =
+  let text = "name,note\nann,\"likes, commas\"\nbob,\"say \"\"hi\"\"\"\n"
+  match Csv.parse text with
+    Ok rows ->
+      assertEq rows [["name", "note"], ["ann", "likes, commas"], ["bob", "say \"hi\""]]
+      assertEq (Csv.render rows) text
+      assertEq (map (Csv.column "note") (Csv.records rows)) [Some "likes, commas", Some "say \"hi\""]
+    Err e -> fail e
+  assertEq (Csv.parseWith ';' "a;b\n1;2") (Ok [["a", "b"], ["1", "2"]])
+  assert (isErr (Csv.parse "a,\"b\n")) "unterminated quote"

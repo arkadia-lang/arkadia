@@ -1,0 +1,29 @@
+-- CSV (RFC 4180): quoted fields may contain separators, quotes ("") and
+-- line breaks.
+--
+--   import Std.Csv as Csv
+--   match Csv.parse "name,age\nann,30\n" with
+--     Ok rows -> Csv.records rows   -- [[("name", "ann"), ("age", "30")]]
+--     Err e -> ...
+module Std.Csv
+
+foreign parseWith : Char -> String -> Result String (List (List String)) = "rt.CsvParse"
+foreign renderWith : Char -> List (List String) -> String = "rt.CsvRender"
+
+-- The rows of comma-separated text.
+parse : String -> Result String (List (List String))
+parse s = parseWith ',' s
+
+-- Comma-separated text of rows (quoting fields when needed).
+render : List (List String) -> String
+render rows = renderWith ',' rows
+
+-- The rows after a header row, as (column, value) pairs.
+records : List (List String) -> List (List (String, String))
+records rows = match rows with
+  header :: body -> mapList (\row -> zip header row) body
+  [] -> []
+
+-- The value of a column in a record from `records`.
+column : String -> List (String, String) -> Option String
+column name record = lookup name record

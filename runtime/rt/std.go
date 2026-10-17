@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/hex"
 	"fmt"
 	"hash"
@@ -654,4 +655,37 @@ func TimeLocalOffset(secs Value) Value {
 
 func TimeAddMonths(n, secs Value) Value {
 	return unixOf(timeOf(secs).UTC().AddDate(0, int(n.(int64)), 0))
+}
+
+// ---------------------------------------------------------------- CSV
+
+func CsvParse(sep, s Value) Value {
+	r := csv.NewReader(strings.NewReader(s.(string)))
+	r.Comma = sep.(rune)
+	r.FieldsPerRecord = -1
+	rows, err := r.ReadAll()
+	if err != nil {
+		return Err(err.Error())
+	}
+	out := make([]Value, len(rows))
+	for i, row := range rows {
+		out[i] = stringList(row)
+	}
+	return Ok(SliceToList(out))
+}
+
+func CsvRender(sep, rows Value) Value {
+	var sb strings.Builder
+	w := csv.NewWriter(&sb)
+	w.Comma = sep.(rune)
+	for _, row := range ListToSlice(rows) {
+		fields := ListToSlice(row)
+		rec := make([]string, len(fields))
+		for i, f := range fields {
+			rec[i] = f.(string)
+		}
+		w.Write(rec)
+	}
+	w.Flush()
+	return sb.String()
 }
