@@ -10,13 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.24"
-          cache: false
+      # the tools come from the flake's devShell, as in development
+      - uses: cachix/install-nix-action@v31
       - name: Check (gofmt, go vet, ark fmt)
-        run: make check
-      - name: Test (compiler, golden programs, examples, Arkadia unit tests)
-        run: go test ./...
+        run: nix develop --command just check
+      - name: Test (compiler, golden programs, examples, Arkadia unit tests, self-hosted compiler)
+        run: nix develop --command just test
       - name: Build the ark command
-        run: go build -o ark ./cmd/ark && ./ark version
+        run: nix develop --command just build && bin/ark version
