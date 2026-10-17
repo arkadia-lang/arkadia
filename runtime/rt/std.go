@@ -582,3 +582,33 @@ func UUID4(_ Value) Value {
 	h := hex.EncodeToString(b)
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
+
+// ---------------------------------------------------------------- number formatting
+
+func FormatFixed(digits, x Value) Value {
+	return strconv.FormatFloat(x.(float64), 'f', int(max(digits.(int64), 0)), 64)
+}
+
+func FormatScientific(digits, x Value) Value {
+	return strconv.FormatFloat(x.(float64), 'e', int(max(digits.(int64), 0)), 64)
+}
+
+func FormatIntBase(base, n Value) Value {
+	b := base.(int64)
+	if b < 2 || b > 36 {
+		panic(&ArkError{Msg: "base must be between 2 and 36"})
+	}
+	return strconv.FormatInt(n.(int64), int(b))
+}
+
+func ParseIntBase(base, s Value) Value {
+	b := base.(int64)
+	if b < 2 || b > 36 {
+		panic(&ArkError{Msg: "base must be between 2 and 36"})
+	}
+	n, err := strconv.ParseInt(strings.ReplaceAll(s.(string), "_", ""), int(b), 64)
+	if err != nil {
+		return None
+	}
+	return Some(n)
+}

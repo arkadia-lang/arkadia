@@ -12,6 +12,7 @@ import Std.Encoding
 import Std.Crypto
 import Std.Args
 import Std.Result (isErr)
+import Std.Format
 
 test "regex matching and captures" =
   let date = Re.regex "(\\d{4})-(\\d{2})-(\\d{2})"
@@ -98,3 +99,14 @@ test "command-line arguments" =
     Err e -> fail e
   assertEq (parseArgs ["n"] ["-n"]) (Err "option -n needs a value")
   assertEq (map (optionInt "n") (parseArgs ["n"] ["-n42", "-5"])) (Ok (Ok (Some 42)))
+
+test "number formatting" =
+  assertEq (fixed 2 3.14159, fixed 0 2.5, fixed 3 (-1.0)) ("3.14", "2", "-1.000")
+  assertEq (scientific 2 1234.5) "1.23e+03"
+  assertEq (hex 255, binary 5, intBase 36 35) ("ff", "101", "z")
+  assertEq (parseIntBase 16 "ff", parseIntBase 2 "12") (Some 255, None)
+  assertEq (map grouped [0, 999, 1000, 1234567, -1234567]) ["0", "999", "1,000", "1,234,567", "-1,234,567"]
+  assertEq (groupedWith "_" 1000000) "1_000_000"
+  assertEq (padInt 3 7, padInt 2 123, padInt 4 (-5)) ("007", "123", "-005")
+  assertEq (percent 1 0.256) "25.6%"
+  assertEq (map byteSize [512, 1536, 1048576, 5000000000]) ["512 B", "1.5 KiB", "1 MiB", "4.7 GiB"]

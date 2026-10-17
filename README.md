@@ -232,6 +232,7 @@ bin/arkc run examples/lisp.ark
 | `Std.BigInt` | 多倍長整数（`Num`/`Ord`/`Show` のインスタンス、`pow`, `powMod`, `gcd`, `isqrt`, 基数変換） |
 | `Std.Encoding` / `Std.Crypto` | Base64（URL セーフ版を含む）・16 進、MD5/SHA-1/SHA-256/SHA-512・HMAC-SHA256、安全な乱数・UUID |
 | `Std.Args` | コマンドライン引数の解析（`--name=value`, `-n value`, `-abc`, `--`） |
+| `Std.Format` | 数値の書式化（小数点以下の桁数 `fixed 2 x`、指数表記、基数変換、桁区切り、ゼロ埋め、パーセント、バイト数） |
 
 モジュールの公開インターフェースは `ark doc Std.Map` のように表示できます。
 
