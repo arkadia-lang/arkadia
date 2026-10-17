@@ -1,0 +1,228 @@
+-- The interactive read-eval-print loop. Definitions are accumulated in a
+-- Main module; expressions are evaluated by building and running it.
+module Ark.Repl
+
+import Ark.Util
+import Ark.Ast
+import Ark.Types
+import Ark.Check
+import Ark.Loader
+import Ark.Render
+import Ark.Project
+import Ark.Build
+import Std.IO
+import Std.Map as Map
+
+replHelp : String
+replHelp = """
+Commands:
+  <expression>      evaluate and print (Show) or run (Unit with IO)
+  <definition>      add a definition (functions, types, classes, effects, imports)
+  :t <expression>   show the type of an expression
+  :defs             list the current definitions
+  :reset            forget all definitions
+  :load <file>      add the definitions of a file
+  :q                quit
+Lines ending with =, ->, with or where continue on the next lines until an
+empty line."""
+
+-- root, imports, definitions, working directory, search paths, counter
+type Repl = Repl String (Ref (List String)) (Ref (List String)) String (List String) (Ref Int)
+
+repl : String -> String -> <IO> Int
+repl root ver =
+  let dir = pathJoin (cacheDir ()) "repl-arkc"
+  let _ = makeDir dir
+  let paths = match findManifest "." with
+    Some mp -> match resolveProject mp with
+      Ok (Project _ srcs _) -> srcs
+      Err _ -> []
+    None -> []
+  let r = Repl root (newRef []) (newRef []) dir paths (newRef 0)
+  println "Arkadia ${ver} REPL (self-hosted) — :help for commands"
+  replLoop r
+
+private replLoop : Repl -> <IO> Int
+replLoop r =
+  print "ark> "
+  match readLine () with
+    None ->
+      println ""
+      0
+    Some first ->
+      let input = readMore first
+      match trim input with
+        "" -> replLoop r
+        cmd -> match command r cmd with
+          True -> 0
+          False -> replLoop r
+
+-- Read continuation lines.
+private readMore : String -> <IO> String
+readMore input = match continues input with
+  False -> input
+  True ->
+    print "...  "
+    match readLine () with
+      None -> input
+      Some l -> match trim l with
+        "" -> input
+        _ -> readMore (input ++ "\n" ++ l)
+
+continues : String -> Bool
+continues s =
+  let ls = lines s
+  let last = trim (lastOf ls)
+  match words (at 0 ls) with
+    w :: _ | elem w ["type", "class", "instance", "effect"] ->
+      -- block declarations end with an empty line
+      last != "" || length ls == 1
+    _ -> length ls > 1 && last != "" || anyOf (\suf -> endsWith suf last) ["=", "->", "with", "where"]
+
+-- Run a command; True means quit.
+command : Repl -> String -> <IO> Bool
+command (r@(Repl _ imports defs _ _ _)) input
+  | input == ":q" || input == ":quit" = True
+  | input == ":help" || input == ":h" =
+      println replHelp
+      False
+  | input == ":reset" =
+      writeRef defs []
+      writeRef imports []
+      False
+  | input == ":defs" =
+      forEach (readRef imports ++ readRef defs) println
+      False
+  | startsWith ":load " input =
+      match readFile (trim (substring 6 (stringLength input) input)) with
+        Err e -> println ("error: " ++ e)
+        Ok src ->
+          let ls = filter (\l -> not (startsWith "module " l)) (lines src)
+          forEach (filter (startsWith "import ") ls) (\l -> modifyRef imports (\is -> snoc is l))
+          addDef r (unlines (filter (\l -> not (startsWith "import " l)) ls))
+      False
+  | startsWith ":t " input =
+      showType r (trim (substring 3 (stringLength input) input))
+      False
+  | startsWith ":" input =
+      println "unknown command; try :help"
+      False
+  | startsWith "import " input =
+      modifyRef imports (\is -> snoc is input)
+      match check r [] with
+        Some _ -> ()
+        None -> modifyRef imports initList
+      False
+  | isDefinition input =
+      addDef r input
+      False
+  | otherwise =
+      eval r input
+      False
+
+-- Guess whether the input is a declaration.
+isDefinition : String -> Bool
+isDefinition s = match words s with
+  first :: _ | elem first ["type", "alias", "class", "instance", "effect", "foreign", "infixl", "infixr", "infix", "private"] -> True
+  _ ->
+    -- `name args = ...` or `name : type` at top level (not `==`)
+    let line = at 0 (lines s)
+    defScan (chars line) '\0' 0
+
+private defScan : List Char -> Char -> Int -> Bool
+defScan cs prev depth = match cs with
+  [] -> False
+  c :: rest
+    | c == '(' || c == '[' -> defScan rest c (depth + 1)
+    | c == ')' || c == ']' -> defScan rest c (depth - 1)
+    | c == '"' -> False
+    | c == '=' && depth == 0 && not (nextIn rest "=>") && not (elem prev (chars "=!<>")) -> True
+    | c == ':' && depth == 0 && not (nextIn rest ":") && prev != ':' -> True
+    | otherwise -> defScan rest c depth
+
+private nextIn : List Char -> String -> Bool
+nextIn rest set = match rest with
+  n :: _ -> elem n (chars set)
+  [] -> False
+
+source : Repl -> List String -> <IO> String
+source (Repl _ imports defs _ _ _) extra =
+  "module Main\n\n" ++ concatStrings (mapList (\i -> i ++ "\n") (readRef imports)) ++ "\n" ++ concatStrings (mapList (\d -> d ++ "\n\n") (readRef defs ++ extra))
+
+-- Load the definitions plus extra ones: the loader and the result.
+loadDefs : Repl -> List String -> <IO> (Loader, Result (List Diag) Program)
+loadDefs (r@(Repl root _ _ dir paths _)) extra =
+  let path = pathJoin dir "Main.ark"
+  let _ = writeFile path (source r extra)
+  let l = newLoader (dir :: paths) (pathJoin root "lib")
+  (l, loadFile l path)
+
+check : Repl -> List String -> <IO> Option Program
+check r extra =
+  let (l, res) = loadDefs r extra
+  match res with
+    Ok p -> Some p
+    Err errs ->
+      print (renderDiags (loaderSources l) errs (useColor ()))
+      None
+
+addDef : Repl -> String -> <IO> Unit
+addDef (r@(Repl _ _ defs _ _ _)) def = match check r [def] with
+  Some _ -> modifyRef defs (\ds -> snoc ds def)
+  None -> ()
+
+indentBody : String -> String
+indentBody e = "  " ++ replace "\n" "\n  " e
+
+showType : Repl -> String -> <IO> Unit
+showType (r@(Repl _ _ _ _ _ counter)) e =
+  let name = "it${nextId counter}"
+  match check r [name ++ " () =\n" ++ indentBody e] with
+    None -> ()
+    Some (Program _ g _) ->
+      let sc = match Map.lookup "Main" (readRef (gModules g)) with
+        Some ex -> match Map.lookup name (readRef (exportsValues ex)) with
+          Some v -> readRef (valueSchemeRef v)
+          None -> None
+        None -> None
+      match sc with
+        Some (Scheme ks ns ps (TFun _ eff res)) ->
+          let (labels, _) = flattenRow eff
+          let performs = match labels with
+            [] -> ""
+            _ -> "  (performs ${joinWith ", " (mapList typeString labels)})"
+          println "${e} : ${schemeString (Scheme ks ns ps res)}${performs}"
+        _ -> ()
+
+eval : Repl -> String -> <IO> Unit
+eval (r@(Repl root _ _ dir _ _)) e =
+  -- first as an action of type Unit, then printed with Show
+  let candidates = ["main () =\n" ++ indentBody e, "main () =\n  printLn (\n" ++ indentBody (indentBody e) ++ ")"]
+  let attempt main =
+    let (l, res) = loadDefs r [main]
+    match res with
+      Err errs -> Err (l, errs)
+      Ok (p@(Program _ g m)) -> match checkMain g m with
+        [] -> Ok (l, p)
+        errs -> Err (l, errs)
+  let report (l, errs) = print (renderDiags (loaderSources l) errs (useColor ()))
+  let run (l, p) =
+    let exe = pathJoin dir "repl-bin"
+    match build root p (BuildOptions exe (pathJoin dir "go") False []) with
+      Err errs -> report (l, errs)
+      Ok _ ->
+        let _ = execProgram exe [] []
+        ()
+  match attempt (at 0 candidates) with
+    Ok lp -> run lp
+    Err e0 -> match attempt (at 1 candidates) with
+      Ok lp -> run lp
+      Err e1 ->
+        -- prefer the error of the printing variant unless it only
+        -- complains about a missing Show instance
+        let text (_, errs) = joinWith "\n" (mapList diagString errs)
+        let t0 = text e0
+        let t1 = text e1
+        match contains "no instance for Show" t1 || contains "type mismatch" t1 && not (contains "main" t0) with
+          True -> report e0
+          False -> report e1
