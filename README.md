@@ -31,6 +31,7 @@ main () =
 | 正格評価 | 引数は左から右へ評価してから関数を呼ぶ（値呼び） |
 | アドホック多相 | 型クラス（スーパークラス・デフォルト実装・`deriving (Eq, Ord, Show)`）を辞書渡しで実装 |
 | 高カインド | `Functor f`, `Monad m`, `Foldable t` など、型構築子を抽象化できる。カインドは推論される |
+| レコード | 名前付きフィールド、`u.name` / `.name` / `{ u \| age = 1 }` / `User { name, age }` パターン。フィールドは型主導で解決 |
 | 代数的エフェクト | `effect` 宣言・`handle ... with` によるディープハンドラ。エフェクトは行多相の型で追跡され、未処理のエフェクトはコンパイルエラー |
 | GC | Go ランタイムの並行 GC を利用 |
 | ネイティブバイナリ | Arkadia → Go → `go build` で単一の静的バイナリを生成 |
@@ -112,6 +113,26 @@ class Shape a where
   describe : a -> String
   describe s = "area = ${area s}"     -- デフォルト実装
 ```
+
+### レコード
+
+```haskell
+type User = User { name : String, age : Int }
+  deriving (Show, Eq)
+
+birthday : User -> User
+birthday u = { u | age = u.age + 1 }        -- 更新（新しい値を返す）
+
+main () =
+  let ann = User { name = "ann", age = 30 }
+  println "${ann.name} is ${ann.age}"       -- フィールド参照
+  println (show (map .name [ann]))          -- アクセサ関数 .name
+  match birthday ann with
+    User { age } | age > 30 -> println "older"
+    _ -> println "same"
+```
+
+フィールドの参照はレコードの型で解決され、型が決まらない場合はフィールド名から一意に定まる型が選ばれます。
 
 ### 代数的エフェクト
 

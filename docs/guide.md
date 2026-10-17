@@ -132,6 +132,36 @@ alias Point = (Float, Float)
 
 `deriving` できるのは `Eq`, `Ord`, `Show` です。
 
+### レコード
+
+構築子のフィールドには名前を付けられます。
+
+```haskell
+type User = User { name : String, age : Int, tags : List String }
+  deriving (Show, Eq)
+
+-- 型が同じフィールドはまとめて書ける。複数の構築子にもフィールドを付けられる
+type Shape
+  = Circle { x, y : Float, r : Float }
+  | Rect { x, y : Float, w : Float, h : Float }
+```
+
+| 構文 | 例 |
+|---|---|
+| 構築 | `User { name = "ann", age = 30, tags = [] }`（全フィールドが必要。順序は自由） |
+| 省略記法 | `User { name, age, tags = [] }`（`name` は `name = name`） |
+| 参照 | `u.name`, `pet.owner.name`, `(f x).age` |
+| アクセサ関数 | `.name`（`\r -> r.name`）。`map .name users` |
+| 更新 | `{ u \| age = u.age + 1, tags = [] }`（新しい値を返す。型は変わらない） |
+| パターン | `User { name, age = a }`（書かなかったフィールドは `_`） |
+
+- `.` の前に空白を入れずに書くとフィールド参照、空白の後や行頭ではアクセサ関数になります（`f u.name` は `f (u.name)`、`f .name` は `f (\r -> r.name)`）。
+- フィールドの参照と更新は **レコードの型** で解決されます。型がまだ分からない場合（`\u -> u.name` など）は、囲んでいる束縛の型が決まるまで解決を待ち、それでも分からなければ、そのフィールドを全て持つ型がスコープ内に一つだけあるときにその型を使います。候補が複数あると型注釈を求めるエラーになります。
+- 参照・更新できるのは、型の **全ての構築子** が持つフィールドです（`Shape` の `x`, `y`）。
+- 構築・更新の値はソースに書いた順に評価されます。
+- レコード構築子は位置引数でも使えます（`User "ann" 30 []`、`User n a _`）。
+- `deriving Show` はレコード構文で表示します（`User { name = "ann", age = 30, tags = [] }`）。
+
 ## 5. 式
 
 | 構文 | 例 |
@@ -149,6 +179,7 @@ alias Point = (Float, Float)
 | handle | `handle e with` + 節のブロック（9 章） |
 | タプル / ユニット | `(1, "a")`, `()` |
 | リスト / 範囲 | `[1, 2, 3]`, `x :: xs`, `[1 .. 10]` |
+| レコード | `User { name = "a", age = 1 }`, `u.name`, `.name`, `{ u \| age = 2 }`（4 章） |
 | 型注釈 | `(e : List Int)` |
 | パイプ・合成 | `xs \|> map f`, `f <\| x`, `f >> g`, `g << f` |
 | ブロックの引数 | `forEach xs \x ->` の後に字下げした本体 |
@@ -175,6 +206,7 @@ max a b = match a >= b with
 | リスト | `[]`, `[x]`, `[x, y]`, `x :: rest` |
 | タプル | `(a, b)` |
 | as パターン | `all@(x :: _)` |
+| レコード | `User { name, age = a }` |
 | 型注釈 | `(x : Int)` |
 
 関数の引数位置では、引数を取る構築子パターンを括弧で囲みます: `f (Some x) = ...`。
