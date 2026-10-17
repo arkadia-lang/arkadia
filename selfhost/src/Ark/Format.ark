@@ -1,0 +1,565 @@
+-- The source formatter (`arkc fmt`).
+--
+-- It works on the token stream rather than the syntax tree, so it keeps
+-- comments, literals and the author's line breaks exactly. It
+--
+--   - indents every block two spaces past the line that opens it (four past
+--     a guard `| cond =`) and continuation lines two spaces past their item
+--     unless they are aligned with the previous line (see layoutColumns),
+--   - normalizes the spaces between tokens on a line: one space around `=`,
+--     `->`, `=>`, `|`, `:` and binary operators and after `,`; none inside
+--     `(..)` / `[..]` on one line and before `,`; one inside `{..}` on one
+--     line; runs of spaces become one (except before a trailing comment,
+--     where alignment is kept),
+--   - removes trailing whitespace, collapses runs of blank lines into one and
+--     ends the file with a single newline.
+--
+-- The contents of multi-line block comments and triple-quoted strings are
+-- never touched. As a safety net the result is lexed again and must produce
+-- the same tokens, layout and comments as the input.
+module Ark.Format
+
+import Ark.Util
+import Ark.Ast
+import Ark.Lexer
+import Std.Array as Arr
+import Std.MArray as MA
+import Std.Map as Map
+
+indentStep : Int
+indentStep = 2
+
+-- A token or a comment of the source, in source order: its offsets, line,
+-- column and last line, the index of the token (-1 for a comment), whether
+-- it is a line comment and whether it is the first item on its line.
+type Item = Item { off : Int, end : Int, line : Int, col : Int, endLine : Int, tok : Int, lineCmt : Bool, first : Bool }
+
+-- The source characters, the tokens (with EOF) and their offsets.
+type Src = Src { chs : Arr.Array Char, toks : Arr.Array Token, spans : Arr.Array (Int, Int) }
+
+-- Format a source file.
+format : String -> String -> <IO> Result (List Diag) String
+format file src =
+  let chs = Arr.fromList (chars src)
+  match lexSpans file chs with
+    Err errs -> Err errs
+    Ok (toks, spans, comments) -> match layout toks with
+      Err errs -> Err errs
+      Ok want ->
+        let s = Src { chs = chs, toks = Arr.fromList toks, spans = Arr.fromList spans }
+        let out = formatTokens s comments
+        match sameTokens file s want comments out with
+          [] -> Ok out
+          errs -> Err errs
+
+-- ================================================================ items
+
+private text : Arr.Array Char -> Int -> Int -> String
+text chs from to = fromChars (Arr.toList (Arr.slice from to chs))
+
+private tokAt : Src -> Int -> Token
+tokAt s i = Arr.at i s.toks
+
+-- The tokens (without EOF) and comments in source order.
+private items : Src -> List Comment -> List Item
+items s comments = finishItems s.chs 0 (mergeItems s 0 (Arr.length s.toks - 1) comments []) []
+
+private mergeItems : Src -> Int -> Int -> List Comment -> List Item -> List Item
+mergeItems s i n cs acc = match cs with
+  Comment off end line col :: rest | i >= n || off < fst (Arr.at i s.spans) ->
+    let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = -1, lineCmt = Arr.at off s.chs == '-', first = False }
+    mergeItems s i n rest (it :: acc)
+  _ | i < n ->
+      let (off, end) = Arr.at i s.spans
+      let Pos _ line col = tokPos (tokAt s i)
+      let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = i, lineCmt = False, first = False }
+      mergeItems s (i + 1) n cs (it :: acc)
+    | otherwise -> reverse acc
+
+private finishItems : Arr.Array Char -> Int -> List Item -> List Item -> List Item
+finishItems chs prevEnd its acc = match its with
+  [] -> reverse acc
+  it :: rest ->
+    let endLine = it.line + countNewlines chs it.off it.end 0
+    let first = isEmpty acc || prevEnd < it.line
+    finishItems chs endLine rest ({ it | endLine = endLine, first = first } :: acc)
+
+private countNewlines : Arr.Array Char -> Int -> Int -> Int -> Int
+countNewlines chs i end n
+  | i >= end = n
+  | Arr.at i chs == '\n' = countNewlines chs (i + 1) end (n + 1)
+  | otherwise = countNewlines chs (i + 1) end n
+
+-- The number of characters after the last newline between two offsets.
+private lastLineWidth : Arr.Array Char -> Int -> Int -> Int
+lastLineWidth chs from to = lastLineWidthAcc chs from (to - 1) 0
+
+private lastLineWidthAcc : Arr.Array Char -> Int -> Int -> Int -> Int
+lastLineWidthAcc chs from i n
+  | i < from || Arr.at i chs == '\n' = n
+  | otherwise = lastLineWidthAcc chs from (i - 1) (n + 1)
+
+private trimSpacesEnd : String -> String
+trimSpacesEnd s = fromChars (reverse (dropSpaces (reverse (chars s))))
+
+private dropSpaces : List Char -> List Char
+dropSpaces cs = match cs with
+  c :: rest | c == ' ' || c == '\r' -> dropSpaces rest
+  _ -> cs
+
+-- ================================================================ formatting
+
+private formatTokens : Src -> List Comment -> <IO> String
+formatTokens s comments = match items s comments with
+  [] -> ""
+  itemList ->
+    let its = Arr.fromList itemList
+    let n = Arr.length its
+    let sp = newSpacing s
+    let gaps = MA.make n ""
+    let lineOff = MA.make (Arr.length s.toks) 0
+    let off = newRef 0
+    forEach (range 0 n) (\i ->
+      let it = Arr.at i its
+      match it.first with
+        True -> writeRef off 0
+        False ->
+          let prev = Arr.at (i - 1) its
+          let g = gap sp prev it
+          MA.set i g gaps
+          writeRef off (readRef off + lastLineWidth s.chs prev.off prev.end + stringLength g)
+      match it.tok >= 0 with
+        True -> MA.set it.tok (readRef off) lineOff
+        False -> ())
+    let tokCol = layoutColumns s (MA.freeze lineOff)
+    let starts = lineStarts its tokCol
+    let out = newRef []
+    let emitStr str = modifyRef out (\o -> str :: o)
+    let k = newRef 0
+    forEach (range 0 n) (\i ->
+      let it = Arr.at i its
+      match it.first with
+        True ->
+          match i > 0 with
+            True ->
+              emitStr "\n"
+              match it.line - (Arr.at (i - 1) its).endLine > 1 with
+                True -> emitStr "\n"
+                False -> ()
+            False -> ()
+          emitStr (strRepeat (MA.at (readRef k) starts - 1) " ")
+          writeRef k (readRef k + 1)
+        False -> emitStr (MA.at i gaps)
+      let t = text s.chs it.off it.end
+      emitStr (match it.lineCmt with
+        True -> trimSpacesEnd t
+        False -> t))
+    emitStr "\n"
+    concatStrings (reverse (readRef out))
+
+-- The new column of every item that starts a line, in order. Comment lines
+-- are aligned with the next code line when they were aligned with it, else
+-- with the previous line, else shifted like the next line.
+private lineStarts : Arr.Array Item -> Arr.Array Int -> <IO> MA.MArray Int
+lineStarts its tokCol =
+  let firsts = Arr.fromList (filter (\it -> it.first) (Arr.toList its))
+  let m = Arr.length firsts
+  let news = MA.make m 0
+  let isTok k = (Arr.at k firsts).tok >= 0
+  let old k = (Arr.at k firsts).col
+  forEach (range 0 m) (\k -> match isTok k with
+    True -> MA.set k (Arr.at (Arr.at k firsts).tok tokCol) news
+    False -> ())
+  let findNext j = match j >= m with
+    True -> -1
+    False -> match isTok j with
+      True -> j
+      False -> findNext (j + 1)
+  forEach (range 0 m) (\k -> match isTok k with
+    True -> ()
+    False ->
+      let next = findNext (k + 1)
+      let nc = match () with
+        _ | next >= 0 && old next == old k -> MA.at next news
+          | k > 0 && old (k - 1) == old k -> MA.at (k - 1) news
+          | next >= 0 -> old k + MA.at next news - old next
+          | k > 0 -> old k + MA.at (k - 1) news - old (k - 1)
+          | otherwise -> 1
+      MA.set k (max nc 1) news)
+  news
+
+-- ================================================================ indentation
+
+-- A line, or the guard `|` on a line (the body of a guard is indented past
+-- the `|`): source line, old and new column.
+type Line = Line { ln : Int, lcol : Int, lnew : Int, guard : Bool }
+
+private noLine : Line
+noLine = Line { ln = 0, lcol = 0, lnew = 0, guard = False }
+
+private sameLine : Line -> Line -> Bool
+sameLine a b = a.ln == b.ln && a.lcol == b.lcol && a.lnew == b.lnew && a.guard == b.guard
+
+-- A layout context: a bracket or a block with its old and new column. For
+-- blocks: the line starting the current item, the new columns of its
+-- continuation lines by their old column, the new column of its first guard
+-- `|` (where later guards go) and whether the item is a type declaration
+-- (where `|` separates constructors).
+type Ctx = Ctx { bracket : Bool, ccol : Int, cnew : Int, item : Ref Line, cont : Ref (Map.Map Int Int), guardCol : Ref Int, typeDecl : Ref Bool }
+
+private newCtx : Bool -> Int -> Int -> Line -> Bool -> <IO> Ctx
+newCtx bracket col nc item typeDecl = Ctx { bracket = bracket, ccol = col, cnew = nc, item = newRef item, cont = newRef Map.empty, guardCol = newRef 0, typeDecl = newRef typeDecl }
+
+-- Mirror the layout algorithm and return the new column of every token that
+-- starts a line (0 for the others); lineOff holds the new offset of every
+-- token from the start of its line.
+--
+-- A block is indented past the line that opens it: the line of the opener,
+-- or for `with` the line of its `match` / `handle`. The step is two spaces,
+-- four past the `|` of a guard (when it starts the line or more guards
+-- follow). A block inside brackets is also indented by four when a `match`
+-- on its base line is still open, to set it apart from the block after that
+-- match's `with`:
+--
+--   combineAll rs = match foldr (\r (es, as) -> match r with
+--       Ok a -> (es, a :: as)
+--       Err e -> (e :: es, as)) ([], []) rs with
+--     ([], as) -> Ok as
+--     (es, _) -> Err es
+--
+-- A continuation line of an item goes where an earlier continuation line in
+-- the same column went, else stays aligned with a token of the same kind on
+-- the previous line that it was aligned with (`|` under `|`, an argument
+-- under an argument), else is indented two spaces past the item (or past the
+-- deepest earlier continuation line left of it).
+private layoutColumns : Src -> Arr.Array Int -> <IO> Arr.Array Int
+layoutColumns s lineOff =
+  let n = Arr.length s.toks
+  let cols = MA.make n 0
+  let col i = posCol (tokPos (tokAt s i))
+  let isType i = tokKind (tokAt s i) == KwType || tokKind (tokAt s i) == KwPrivate && tokKind (tokAt s (i + 1)) == KwType
+  let firstLine = Line { ln = posLine (tokPos (tokAt s 0)), lcol = col 0, lnew = 1, guard = False }
+  let stack = newRef [newCtx False (col 0) 1 firstLine (isType 0)]
+  let top () = match readRef stack with
+    c :: _ -> c
+    [] -> error "layoutColumns: empty stack"
+  let enclosing () = firstBlock (readRef stack)
+  let cur = newRef firstLine
+  let guard = newRef noLine
+  let matches = newRef []
+  let withLine = newRef noLine
+  let prevToks = newRef []
+  let curToks = newRef []
+  let depth = newRef 0
+  let lineDepth = newRef 0
+  -- the new column of a continuation line starting with token i in the
+  -- item of enc
+  let continuation enc i =
+    let t = tokAt s i
+    let c = col i
+    let item = readRef enc.item
+    match () with
+      _ | c <= item.lcol -> c + enc.cnew - enc.ccol
+        | tokKind t == BAR && readRef enc.guardCol > 0 -> readRef enc.guardCol
+        | otherwise -> match Map.lookup c (readRef enc.cont) with
+            Some nc -> nc
+            None ->
+              let toks = readRef prevToks
+              let aligned = filter (\j -> col j == c && tokKind (tokAt s j) == tokKind t && tokText (tokAt s j) == tokText t) toks
+              let nc = match (aligned, toks) with
+                (j :: _, p :: _) -> MA.at p cols + Arr.at j lineOff
+                _ -> Map.foldlWithKey (\acc old m -> match old < c && old > fst acc with
+                  True -> (old, m + indentStep)
+                  False -> acc) (0, item.lnew + indentStep) (readRef enc.cont) |> snd
+              modifyRef enc.cont (Map.insert c nc)
+              nc
+  forEach (range 0 (n - 1)) (\i ->
+    let t = tokAt s i
+    match () with
+      _ | i == 0 -> MA.set 0 1 cols
+        | tokFirst t ->
+            let prev = tokKind (tokAt s (i - 1))
+            let c = col i
+            let enc = enclosing ()
+            writeRef prevToks (reverse (readRef curToks))
+            writeRef curToks []
+            let tp = top ()
+            let (nc, newItem) = match () with
+              _ | c > tp.ccol || tp.bracket -> match isOpener prev && c > enc.ccol with
+                  True ->
+                    let base0 = match (readRef guard).guard with
+                      True -> readRef guard
+                      False -> readRef cur
+                    let base = match prev == KwWith with
+                      True -> readRef withLine
+                      False -> base0
+                    let step = match base.guard || tp.bracket && any (sameLine base) (readRef matches) with
+                      True -> 2 * indentStep
+                      False -> indentStep
+                    let nc = base.lnew + step
+                    let ctx = newCtx False c nc noLine False
+                    modifyRef stack (\st -> ctx :: st)
+                    (nc, True)
+                  False -> (continuation enc i, False)
+                | c == tp.ccol -> (tp.cnew, True)
+                | otherwise ->
+                    let popped = popBlocks stack c 0
+                    let tp2 = top ()
+                    match not tp2.bracket && c == tp2.ccol with
+                      True -> (tp2.cnew, True)
+                      False -> (min (continuation (enclosing ()) i) (popped - 1), False)
+            MA.set i nc cols
+            writeRef cur (Line { ln = posLine (tokPos t), lcol = c, lnew = nc, guard = False })
+            match newItem with
+              True ->
+                let tp3 = top ()
+                writeRef tp3.item (readRef cur)
+                writeRef tp3.cont Map.empty
+                writeRef tp3.guardCol 0
+                writeRef tp3.typeDecl (isType i)
+              False -> ()
+            writeRef guard noLine
+            writeRef lineDepth (readRef depth)
+        | otherwise -> ()
+    modifyRef curToks (\ts -> i :: ts)
+    match tokKind t with
+      BAR | readRef depth == readRef lineDepth && not (readRef guard).guard && not (readRef (enclosing ()).typeDecl) ->
+        let nc = (readRef cur).lnew + Arr.at i lineOff
+        let enc = enclosing ()
+        match readRef enc.guardCol == 0 with
+          True -> writeRef enc.guardCol nc
+          False -> ()
+        match tokFirst t || moreGuards s i (readRef enc.item).lcol with
+          True -> writeRef guard (Line { ln = (readRef cur).ln, lcol = col i, lnew = nc, guard = True })
+          False -> ()
+      KwMatch -> pushMatch matches guard cur
+      KwHandle -> pushMatch matches guard cur
+      KwWith ->
+        writeRef withLine (readRef cur)
+        match readRef matches with
+          m :: rest ->
+            writeRef withLine m
+            writeRef matches rest
+          [] -> ()
+      k | isOpenBracket k ->
+          let ctx = newCtx True 0 0 noLine False
+          modifyRef stack (\st -> ctx :: st)
+          writeRef depth (readRef depth + 1)
+        | isCloseBracket k ->
+            writeRef depth (readRef depth - 1)
+            writeRef stack (closeCtx (readRef stack))
+        | otherwise -> ())
+  MA.freeze cols
+
+private pushMatch : Ref (List Line) -> Ref Line -> Ref Line -> <IO> Unit
+pushMatch matches guard cur =
+  let g = readRef guard
+  let base = match g.guard with
+    True -> g
+    False -> readRef cur
+  modifyRef matches (\ms -> base :: ms)
+
+private firstBlock : List Ctx -> Ctx
+firstBlock st = match st with
+  [c] -> c
+  c :: rest | c.bracket -> firstBlock rest
+  c :: _ -> c
+  [] -> error "layoutColumns: empty stack"
+
+-- Pop the blocks left of column c; returns the new column of the last one
+-- popped (or popped when there is none).
+private popBlocks : Ref (List Ctx) -> Int -> Int -> <IO> Int
+popBlocks stack c popped = match readRef stack with
+  tp :: (rest@(_ :: _)) | not tp.bracket && c < tp.ccol ->
+    writeRef stack rest
+    popBlocks stack c tp.cnew
+  _ -> popped
+
+-- Pop the blocks up to and including the innermost bracket.
+private closeCtx : List Ctx -> List Ctx
+closeCtx st = match st with
+  tp :: (rest@(_ :: _)) | not tp.bracket -> closeCtx rest
+  _ :: (rest@(_ :: _)) -> rest
+  _ -> st
+
+private isOpenBracket : TokKind -> Bool
+isOpenBracket k = k == LPAREN || k == LBRACKET || k == LBRACE
+
+private isCloseBracket : TokKind -> Bool
+isCloseBracket k = k == RPAREN || k == RBRACKET || k == RBRACE
+
+-- Whether the guard token i in the middle of a line is followed by a line
+-- starting with another guard `|` before a line at or left of the item's
+-- column col ends the item. Then the bodies are indented past the `|`s.
+private moreGuards : Src -> Int -> Int -> Bool
+moreGuards s i col = moreGuardsFrom s (i + 1) col 0
+
+private moreGuardsFrom : Src -> Int -> Int -> Int -> Bool
+moreGuardsFrom s j col depth = match j >= Arr.length s.toks with
+  True -> False
+  False ->
+    let t = tokAt s j
+    let k = tokKind t
+    let depth2 = match () with
+      _ | isOpenBracket k -> depth + 1
+        | isCloseBracket k -> depth - 1
+        | otherwise -> depth
+    match () with
+      _ | tokFirst t && posCol (tokPos t) <= col -> False
+        | tokFirst t && k == BAR && depth == 0 -> True
+        | otherwise -> moreGuardsFrom s (j + 1) col depth2
+
+-- ================================================================ spacing
+
+-- The source, the index of the bracket matching each token (or -1) and
+-- whether each token is a `<` / `>` delimiting an effect row.
+type Spacing = Spacing { src : Src, partner : Arr.Array Int, row : Arr.Array Bool }
+
+private newSpacing : Src -> <IO> Spacing
+newSpacing s =
+  let n = Arr.length s.toks
+  let partner = MA.make n (-1)
+  let row = MA.make n False
+  let brackets = newRef []
+  let rows = newRef []
+  forEach (range 0 n) (\i ->
+    let t = tokAt s i
+    match tokKind t with
+      k | isOpenBracket k -> modifyRef brackets (\b -> i :: b)
+        | isCloseBracket k -> match readRef brackets with
+            o :: rest ->
+              MA.set i o partner
+              MA.set o i partner
+              writeRef brackets rest
+            [] -> ()
+      OP
+        | tokText t == "<" && not (tokSpace (tokAt s (i + 1))) && (i == 0 || not (endsOperand (tokKind (tokAt s (i - 1))))) ->
+            -- a row is written tight: `<IO, State s | e>`
+            modifyRef rows (\r -> i :: r)
+            MA.set i True row
+        | tokText t == ">" && not (tokSpace t) && not (isEmpty (readRef rows)) ->
+            modifyRef rows (drop 1)
+            MA.set i True row
+        | otherwise -> ()
+      _ -> ())
+  Spacing { src = s, partner = MA.freeze partner, row = MA.freeze row }
+
+-- The spaces between two items on the same line.
+private gap : Spacing -> Item -> Item -> String
+gap sp a b =
+  let s = sp.src
+  let orig = text s.chs a.end b.off
+  let spaced = orig != ""
+  match () with
+    -- a token that follows a multi-line comment keeps its column
+    _ | b.tok >= 0 && tokFirst (tokAt s b.tok) -> orig
+      | b.tok < 0 || a.tok < 0 -> match () with
+          _ | b.lineCmt && spaced -> orig -- keeps trailing comments aligned
+            | b.lineCmt || spaced -> " "
+            | otherwise -> ""
+      | otherwise ->
+          let ak = tokKind (tokAt s a.tok)
+          let bk = tokKind (tokAt s b.tok)
+          -- `( x )` becomes `(x)` and `{x}` becomes `{ x }`, but brackets
+          -- spanning lines keep their style (`[ a` / `, b` / `]`)
+          let oneLine i = Arr.at i sp.partner >= 0 && posLine (tokPos (tokAt s (Arr.at i sp.partner))) == posLine (tokPos (tokAt s i))
+          match () with
+            _ | ak == COMMA -> " "
+              | bk == COMMA || (ak == LPAREN || ak == LBRACKET) && oneLine a.tok || (bk == RPAREN || bk == RBRACKET) && oneLine b.tok -> ""
+              | ak == LBRACE && bk == RBRACE -> ""
+              | ak == LBRACE && oneLine a.tok || bk == RBRACE && oneLine b.tok -> " "
+              | spacedToken ak || spacedToken bk || binaryOp sp a.tok || binaryOp sp b.tok -> " "
+              | spaced -> " "
+              | otherwise -> ""
+
+private spacedToken : TokKind -> Bool
+spacedToken k = k == EQUALS || k == ARROW || k == DARROW || k == BAR || k == COLON
+
+-- Whether token i is an operator used between two operands.
+private binaryOp : Spacing -> Int -> Bool
+binaryOp sp i =
+  let s = sp.src
+  match tokKind (tokAt s i) == OP && not (Arr.at i sp.row) && i > 0 && i + 1 < Arr.length s.toks with
+    True -> endsOperand (tokKind (tokAt s (i - 1))) && startsOperand (tokKind (tokAt s (i + 1)))
+    False -> False
+
+private endsOperand : TokKind -> Bool
+endsOperand k = match k with
+  LIDENT -> True
+  UIDENT -> True
+  INT -> True
+  FLOAT -> True
+  STRING -> True
+  INTERP -> True
+  CHAR -> True
+  RPAREN -> True
+  RBRACKET -> True
+  RBRACE -> True
+  UNDERSCORE -> True
+  FIELD -> True
+  FIELDFN -> True
+  _ -> False
+
+private startsOperand : TokKind -> Bool
+startsOperand k = match k with
+  LIDENT -> True
+  UIDENT -> True
+  INT -> True
+  FLOAT -> True
+  STRING -> True
+  INTERP -> True
+  CHAR -> True
+  LPAREN -> True
+  LBRACKET -> True
+  LBRACE -> True
+  UNDERSCORE -> True
+  FIELDFN -> True
+  BACKSLASH -> True
+  _ -> False
+
+-- ================================================================ safety net
+
+-- Check that the formatted source has the same tokens, layout and comments
+-- as the original.
+private sameTokens : String -> Src -> List Token -> List Comment -> String -> <IO> List Diag
+sameTokens file s want comments out =
+  let bug p what = [diagAt p "internal error: formatting would change ${what}; please report this"]
+  let chs2 = Arr.fromList (chars out)
+  match lexSpans file chs2 with
+    Err (Diag p _ _ :: _) -> bug p "the tokens"
+    Err [] -> bug (Pos file 1 1) "the tokens"
+    Ok (toks2, spans2, comments2) -> match layout toks2 with
+      Err (Diag p _ _ :: _) -> bug p "the layout"
+      Err [] -> bug (Pos file 1 1) "the layout"
+      Ok got -> match compareLayout want got with
+        Some w -> bug (tokPos w) "the layout near ${tokString w}"
+        None ->
+          let raw2 = Arr.fromList spans2
+          let mismatch = filter (\i ->
+            let (o1, e1) = Arr.at i s.spans
+            let (o2, e2) = Arr.at i raw2
+            text s.chs o1 e1 != text chs2 o2 e2) (range 0 (Arr.length s.spans))
+          match mismatch with
+            i :: _ ->
+              let w = tokAt s i
+              bug (tokPos w) "the layout near ${tokString w}"
+            [] -> compareComments file s.chs comments chs2 comments2 bug
+
+-- The first token of want that differs in got.
+private compareLayout : List Token -> List Token -> Option Token
+compareLayout want got = match (want, got) with
+  ([], []) -> None
+  (w :: ws, g :: gs)
+    | tokKind w == tokKind g && tokText w == tokText g && tokQual w == tokQual g -> compareLayout ws gs
+    | otherwise -> Some w
+  (w :: _, []) -> Some w
+  ([], _) -> Some (mkTok EOF "" (Pos "" 1 1))
+
+private compareComments : String -> Arr.Array Char -> List Comment -> Arr.Array Char -> List Comment -> (Pos -> String -> List Diag) -> List Diag
+compareComments file chs cs chs2 cs2 bug = match length cs == length cs2 with
+  False -> bug (Pos file 1 1) "the comments"
+  True ->
+    let differs (Comment o1 e1 _ _, Comment o2 e2 _ _) = trimSpacesEnd (text chs o1 e1) != trimSpacesEnd (text chs2 o2 e2)
+    match filter differs (zip cs cs2) with
+      (Comment _ _ line col, _) :: _ -> bug (Pos file line col) "a comment"
+      [] -> []

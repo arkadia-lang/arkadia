@@ -21,6 +21,7 @@ make bootstrap    # arkc で自分自身を 2 回ビルドし、各世代の生�
 
 - `tests/run` と `examples` の全プログラムについて、arkc が Go 実装と同一の Go コードを生成する
 - `tests/errors` の全プログラムについて、期待されるコンパイルエラーを報告する
+- `tests/fmt` の整形例と、リポジトリの全ソース（およびインデントを崩したもの）について、Go 実装と同一の整形結果を出す
 - arkc 自身のソースについて同一のコードを生成し、arkc がビルドした arkc（stage 2）も同一のコードを生成する
 
 ## 使い方
@@ -30,7 +31,7 @@ make bootstrap    # arkc で自分自身を 2 回ビルドし、各世代の生�
 ```sh
 bin/arkc run examples/json.ark
 bin/arkc new hello && cd hello && ../bin/arkc run && ../bin/arkc test
-bin/arkc build | run | check | test | emit | doc | repl | lsp | new | version
+bin/arkc build | run | check | test | fmt | emit | doc | repl | lsp | new | version
 ```
 
 標準ライブラリ（`lib/`）と Go ランタイム（`runtime/rt`）は `$ARKADIA_ROOT`、
@@ -45,6 +46,7 @@ VS Code 拡張の LSP として使う場合も `ark lsp` と同じ応答を返�
 |---|---|---|
 | `Ark.Ast` | トークン・構文木（型検査器が埋める `Ref` 付き）・型・カインド・各種 Info | `syntax/ast.go`, `syntax/token.go`, `types/types.go`, `types/env.go` |
 | `Ark.Lexer` | 字句解析・レイアウト規則 | `syntax/lexer.go`, `syntax/layout.go` |
+| `Ark.Format` | ソースの整形（`arkc fmt`） | `syntax/format.go` |
 | `Ark.Parser` | 再帰下降パーサ（エラーは `Exn` エフェクトで脱出） | `syntax/parser.go` |
 | `Ark.Fixity` | 演算子の結合性解決・負号/セクション/補間の脱糖 | `syntax/fixity.go` |
 | `Ark.Types` | カインド・型の操作、型の表示、単一化（エフェクト行）、検査器の状態、名前解決、型式の変換 | `types/types.go`, `types/unify.go`, `types/check.go` |

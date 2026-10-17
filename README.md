@@ -204,7 +204,7 @@ make bootstrap    # arkc で arkc を 2 世代ビルドし、生成コードと�
 bin/arkc run examples/lisp.ark
 ```
 
-`bin/arkc` は `ark` と同じコマンド（`new` / `build` / `run` / `check` / `test` / `doc` / `repl` / `emit` / `lsp`）を備えています（`fmt` は Go 実装のみ）。
+`bin/arkc` は `ark` と同じコマンド（`new` / `build` / `run` / `check` / `test` / `fmt` / `doc` / `repl` / `emit` / `lsp`）を備えています。
 詳しくは [selfhost/README.md](selfhost/README.md) を参照してください。
 
 ## 標準ライブラリ

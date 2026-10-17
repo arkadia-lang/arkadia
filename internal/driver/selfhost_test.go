@@ -7,13 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/verniyyy/arkadia/internal/syntax"
 )
 
 // TestSelfHost builds the self-hosted compiler (selfhost/) with this
 // implementation and checks that it is a faithful port: it generates the
 // same Go code for the example and test programs and for its own sources,
-// reports the same errors, and the compiler it builds from its own sources
-// generates the same code again (the bootstrap reaches a fixpoint).
+// reports the same errors, formats sources the same way, and the compiler it
+// builds from its own sources generates the same code again (the bootstrap
+// reaches a fixpoint).
 func TestSelfHost(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the self-hosted compiler")
@@ -43,14 +46,18 @@ func TestSelfHost(t *testing.T) {
 		t.Fatal(l.Sources.Render(err, false))
 	}
 
-	arkc := func(exe, cwd string, args ...string) ([]byte, []byte, error) {
+	arkcIn := func(stdin []byte, exe, cwd string, args ...string) ([]byte, []byte, error) {
 		cmd := exec.Command(exe, args...)
 		cmd.Dir = cwd
+		cmd.Stdin = bytes.NewReader(stdin)
 		cmd.Env = append(os.Environ(), "ARKADIA_ROOT="+root, "ARKADIA_CACHE="+filepath.Join(bin, "cache"), "NO_COLOR=1")
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()
 		return stdout.Bytes(), stderr.Bytes(), err
+	}
+	arkc := func(exe, cwd string, args ...string) ([]byte, []byte, error) {
+		return arkcIn(nil, exe, cwd, args...)
 	}
 
 	t.Run("programs", func(t *testing.T) {
@@ -96,6 +103,54 @@ func TestSelfHost(t *testing.T) {
 		}
 	})
 
+	t.Run("fmt", func(t *testing.T) {
+		ins, _ := filepath.Glob("../../tests/fmt/*.in")
+		for _, in := range ins {
+			src, _ := os.ReadFile(in)
+			want, err := os.ReadFile(strings.TrimSuffix(in, ".in") + ".out")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, stderr, err := arkcIn(src, stage1, ".", "fmt", "-")
+			if err != nil {
+				t.Fatalf("arkc fmt %s: %v\n%s", in, err, stderr)
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("arkc fmt %s:\n%s\nwant\n%s", in, got, want)
+			}
+		}
+		// every source of the repository, as it is and with its indentation
+		// doubled, formats as with this implementation
+		var files []string
+		for _, dir := range []string{"lib", "examples", "selfhost/src", "tests/run", "tests/unit"} {
+			filepath.WalkDir(filepath.Join(root, dir), func(path string, d os.DirEntry, err error) error {
+				if err == nil && strings.HasSuffix(path, ".ark") {
+					files = append(files, path)
+				}
+				return nil
+			})
+		}
+		for _, f := range files {
+			data, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, src := range []string{string(data), doubleIndent(string(data))} {
+				want, err := syntax.Format(f, src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, stderr, err := arkcIn([]byte(src), stage1, ".", "fmt", "-")
+				if err != nil {
+					t.Fatalf("arkc fmt %s: %v\n%s", f, err, stderr)
+				}
+				if string(got) != want {
+					t.Errorf("arkc formats %s differently", f)
+				}
+			}
+		}
+	})
+
 	t.Run("bootstrap", func(t *testing.T) {
 		got, stderr, err := arkc(stage1, dir, "emit")
 		if err != nil {
@@ -116,4 +171,21 @@ func TestSelfHost(t *testing.T) {
 			t.Fatal("the compiler built by arkc generates different code for its own sources")
 		}
 	})
+}
+
+// doubleIndent doubles the indentation of the lines of a source outside
+// triple-quoted strings, which does not change its meaning.
+func doubleIndent(src string) string {
+	lines := strings.Split(src, "\n")
+	raw := false
+	for i, l := range lines {
+		if !raw {
+			n := len(l) - len(strings.TrimLeft(l, " "))
+			lines[i] = strings.Repeat(" ", n) + l
+		}
+		if strings.Count(l, `"""`)%2 == 1 {
+			raw = !raw
+		}
+	}
+	return strings.Join(lines, "\n")
 }

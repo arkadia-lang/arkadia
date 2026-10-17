@@ -19,44 +19,52 @@ isIdentChar r = r == '_' || r == '\'' || isAlpha r || isDigit r
 -- ================================================================ lexer state
 
 -- file, source, length, offset, line, column, tokens (reversed), errors
--- (reversed), saw newline, saw whitespace
-type Lx = Lx String (Arr.Array Char) Int (Ref Int) (Ref Int) (Ref Int) (Ref (List Token)) (Ref (List Diag)) (Ref Bool) (Ref Bool)
+-- (reversed), saw newline, saw whitespace; for the formatter: whether to
+-- record spans and comments, the offset where the current token starts, the
+-- offsets of the tokens (reversed) and the comments (reversed)
+type Lx = Lx String (Arr.Array Char) Int (Ref Int) (Ref Int) (Ref Int) (Ref (List Token)) (Ref (List Diag)) (Ref Bool) (Ref Bool) Bool (Ref Int) (Ref (List (Int, Int))) (Ref (List Comment))
+
+-- A comment: start and end offsets, line and column.
+type Comment = Comment Int Int Int Int
 
 lxFile : Lx -> String
-lxFile (Lx f _ _ _ _ _ _ _ _ _) = f
+lxFile (Lx f _ _ _ _ _ _ _ _ _ _ _ _ _) = f
 
 lxOff : Lx -> <IO> Int
-lxOff (Lx _ _ _ o _ _ _ _ _ _) = readRef o
+lxOff (Lx _ _ _ o _ _ _ _ _ _ _ _ _ _) = readRef o
 
 setOff : Lx -> Int -> <IO> Unit
-setOff (Lx _ _ _ o _ _ _ _ _ _) n = writeRef o n
+setOff (Lx _ _ _ o _ _ _ _ _ _ _ _ _ _) n = writeRef o n
 
 lxCol : Lx -> Ref Int
-lxCol (Lx _ _ _ _ _ c _ _ _ _) = c
+lxCol (Lx _ _ _ _ _ c _ _ _ _ _ _ _ _) = c
 
 lxToks : Lx -> Ref (List Token)
-lxToks (Lx _ _ _ _ _ _ t _ _ _) = t
+lxToks (Lx _ _ _ _ _ _ t _ _ _ _ _ _ _) = t
 
 lxErrs : Lx -> Ref (List Diag)
-lxErrs (Lx _ _ _ _ _ _ _ e _ _) = e
+lxErrs (Lx _ _ _ _ _ _ _ e _ _ _ _ _ _) = e
 
 lxSawNL : Lx -> Ref Bool
-lxSawNL (Lx _ _ _ _ _ _ _ _ n _) = n
+lxSawNL (Lx _ _ _ _ _ _ _ _ n _ _ _ _ _) = n
 
 lxSawSpc : Lx -> Ref Bool
-lxSawSpc (Lx _ _ _ _ _ _ _ _ _ s) = s
+lxSawSpc (Lx _ _ _ _ _ _ _ _ _ s _ _ _ _) = s
+
+lxStart : Lx -> Ref Int
+lxStart (Lx _ _ _ _ _ _ _ _ _ _ _ s _ _) = s
 
 atEnd : Lx -> <IO> Bool
-atEnd (Lx _ _ n o _ _ _ _ _ _) = readRef o >= n
+atEnd (Lx _ _ n o _ _ _ _ _ _ _ _ _ _) = readRef o >= n
 
 pos : Lx -> <IO> Pos
-pos (Lx f _ _ _ l c _ _ _ _) = Pos f (readRef l) (readRef c)
+pos (Lx f _ _ _ l c _ _ _ _ _ _ _ _) = Pos f (readRef l) (readRef c)
 
 errorAt : Lx -> Pos -> String -> <IO> Unit
 errorAt lx p msg = modifyRef (lxErrs lx) (\es -> diagAt p msg :: es)
 
 peekAt : Lx -> Int -> <IO> Char
-peekAt (Lx _ src n o _ _ _ _ _ _) k =
+peekAt (Lx _ src n o _ _ _ _ _ _ _ _ _ _) k =
   let i = readRef o + k
   match i < n with
     True -> Arr.at i src
@@ -66,7 +74,7 @@ peek : Lx -> <IO> Char
 peek lx = peekAt lx 0
 
 next : Lx -> <IO> Char
-next (Lx _ src n o l c _ _ _ _) =
+next (Lx _ src n o l c _ _ _ _ _ _ _ _) =
   let i = readRef o
   match i >= n with
     True -> '\0'
@@ -82,7 +90,7 @@ next (Lx _ src n o l c _ _ _ _) =
 
 -- Source text between two offsets.
 slice : Lx -> Int -> Int -> String
-slice (Lx _ src _ _ _ _ _ _ _ _) from to = fromChars (Arr.toList (Arr.slice from to src))
+slice (Lx _ src _ _ _ _ _ _ _ _ _ _ _ _) from to = fromChars (Arr.toList (Arr.slice from to src))
 
 emit : Lx -> Token -> <IO> Unit
 emit lx t =
@@ -92,6 +100,20 @@ emit lx t =
   writeRef (lxSawSpc lx) False
   let Token k text q p s ps _ _ = t
   modifyRef (lxToks lx) (\ts -> Token k text q p s ps first space :: ts)
+  let Lx _ _ _ off _ _ _ _ _ _ keep start spans _ = lx
+  match keep with
+    True ->
+      let span = (readRef start, readRef off)
+      modifyRef spans (\ss -> span :: ss)
+    False -> ()
+
+-- Record the comment that started at p and ends at the current position.
+comment : Lx -> Pos -> <IO> Unit
+comment (Lx _ _ _ off _ _ _ _ _ _ keep start _ cs) (Pos _ line col) = match keep with
+  True ->
+    let c = Comment (readRef start) (readRef off) line col
+    modifyRef cs (\l -> c :: l)
+  False -> ()
 
 prevEndsExpr : Lx -> <IO> Bool
 prevEndsExpr lx = match readRef (lxToks lx) with
@@ -123,18 +145,31 @@ lex file src = match lexRaw file src 1 1 with
 lexRaw : String -> String -> Int -> Int -> <IO> Result (List Diag) (List Token)
 lexRaw file src line col =
   let chs = Arr.fromList (chars src)
-  let lx = Lx file chs (Arr.length chs) (newRef 0) (newRef line) (newRef col) (newRef []) (newRef []) (newRef True) (newRef True)
+  let lx = Lx file chs (Arr.length chs) (newRef 0) (newRef line) (newRef col) (newRef []) (newRef []) (newRef True) (newRef True) False (newRef 0) (newRef []) (newRef [])
   run lx
   match readRef (lxErrs lx) with
     [] -> Ok (reverse (readRef (lxToks lx)))
     errs -> Err (reverse errs)
 
+-- Tokenize a source file for the formatter (without the layout algorithm):
+-- the tokens, their offsets in the source characters and the comments.
+lexSpans : String -> Arr.Array Char -> <IO> Result (List Diag) (List Token, List (Int, Int), List Comment)
+lexSpans file chs =
+  let lx = Lx file chs (Arr.length chs) (newRef 0) (newRef 1) (newRef 1) (newRef []) (newRef []) (newRef True) (newRef True) True (newRef 0) (newRef []) (newRef [])
+  run lx
+  let Lx _ _ _ _ _ _ toks errs _ _ _ _ spans cs = lx
+  match readRef errs with
+    [] -> Ok (reverse (readRef toks), reverse (readRef spans), reverse (readRef cs))
+    es -> Err (reverse es)
+
 run : Lx -> <IO> Unit
-run lx = match atEnd lx with
-  True -> emit lx (mkTok EOF "" (pos lx))
-  False ->
-    step lx (peek lx)
-    run lx
+run lx =
+  writeRef (lxStart lx) (lxOff lx)
+  match atEnd lx with
+    True -> emit lx (mkTok EOF "" (pos lx))
+    False ->
+      step lx (peek lx)
+      run lx
 
 step : Lx -> Char -> <IO> Unit
 step lx r
@@ -150,10 +185,14 @@ step lx r
       let _ = next lx
       ()
   | r == '-' && peekAt lx 1 == '-' && (not (isOpChar (peekAt lx 2)) || peekAt lx 2 == '-') =
+      let p = pos lx
       skipLine lx
+      comment lx p
       writeRef (lxSawSpc lx) True
   | r == '{' && peekAt lx 1 == '-' =
+      let p = pos lx
       blockComment lx
+      comment lx p
       writeRef (lxSawSpc lx) True
   | isDigit r = number lx False
   | r == '-' && isDigit (peekAt lx 1) && (readRef (lxSawSpc lx) || not (prevEndsExpr lx)) = number lx True

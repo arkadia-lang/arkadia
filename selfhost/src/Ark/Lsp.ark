@@ -1,5 +1,5 @@
--- A Language Server Protocol server: diagnostics, hover (types) and go to
--- definition.
+-- A Language Server Protocol server: diagnostics, hover (types), go to
+-- definition and formatting.
 module Ark.Lsp
 
 import Ark.Util
@@ -9,6 +9,8 @@ import Ark.Loader
 import Ark.Project
 import Ark.Json
 import Ark.Render
+import Ark.Format
+import Std.IO
 import Std.Map as Map
 
 foreign stdinLine : Unit -> <IO> Option String = "NativeStdinLine"
@@ -80,6 +82,7 @@ handleMessage (s@(Server _ ver docs _ _ srcs)) m =
     "initialize" -> reply id (JObj
       [ ("capabilities", JObj
           [ ("definitionProvider", JBool True)
+          , ("documentFormattingProvider", JBool True)
           , ("hoverProvider", JBool True)
           , ("textDocumentSync", JObj [("change", jint 1), ("openClose", JBool True), ("save", JBool True)])
           ])
@@ -109,9 +112,34 @@ handleMessage (s@(Server _ ver docs _ _ srcs)) m =
         let p = position (dline - 1) (dcol - 1)
         reply id (JObj [("uri", JStr (pathToURI dfile)), ("range", range p p)])
       _ -> reply id JNull
+    "textDocument/formatting" -> reply id (formatEdits (readRef docs) (docPath m))
     _ -> match id with
       JNull -> ()
       _ -> send (JObj [("error", JObj [("code", jint (-32601)), ("message", JStr "method not found")]), ("id", id), ("jsonrpc", JStr "2.0")])
+
+-- The edits that format a document: none when it is formatted or has
+-- syntax errors (which the diagnostics already report).
+formatEdits : Map.Map String String -> String -> <IO> Json
+formatEdits docs path =
+  let text = match Map.lookup path docs with
+    Some t -> Some t
+    None -> match readFile path with
+      Ok t -> Some t
+      Err _ -> None
+  match text with
+    None -> JNull
+    Some t -> match format path t with
+      Ok out | out != t ->
+        -- replace the whole document; the end is counted in UTF-16 code units
+        let ls = split "\n" t
+        let end = position (length ls - 1) (utf16Length (lastOf ls))
+        JArr [JObj [("newText", JStr out), ("range", range (position 0 0) end)]]
+      _ -> JArr []
+
+private utf16Length : String -> Int
+utf16Length s = sum (mapList (\c -> match charCode c > 65535 with
+  True -> 2
+  False -> 1) (chars s))
 
 -- The documentation comment of the definition of an identifier, as a
 -- markdown paragraph.

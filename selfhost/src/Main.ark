@@ -11,8 +11,10 @@ import Ark.Project
 import Ark.Build
 import Ark.Repl
 import Ark.Lsp
+import Ark.Format
 import Std.IO
 import Std.Map as Map
+import Std.Path as Path
 
 version : String
 version = "0.1.0"
@@ -31,6 +33,7 @@ Commands:
   test [file.ark]    run the project's tests; -run <text> runs only those
                      whose "Module › name" contains <text>
   emit [file.ark]    print the generated Go code
+  fmt [path...]      format .ark files in place (-check only lists unformatted ones)
   doc <Module>       show the public interface of a module
   new <name>         create a new project in directory <name>
   repl               start an interactive session
@@ -60,6 +63,7 @@ cli argv = match argv with
     "check" -> withRoot (\root -> cmdCheck root rest)
     "emit" -> withRoot (\root -> cmdEmit root rest)
     "doc" -> withRoot (\root -> cmdDoc root rest)
+    "fmt" -> cmdFmt rest
     "new" -> cmdNew rest
     "repl" -> withRoot (\root -> repl root version)
     "lsp" -> withRoot (\root -> serve (libDir root) version)
@@ -317,6 +321,108 @@ cmdDoc root argv = match argv with
   _ ->
     eprintln "usage: arkc doc <Module>"
     2
+
+-- ================================================================ fmt
+
+fmtUsage : String
+fmtUsage = """
+usage: arkc fmt [-check] [file.ark | dir | -]...
+  -check
+    	list the files that are not formatted instead of rewriting them; exit status 1 if there are any
+"""
+
+-- Format .ark files in place, or report the files that are not formatted
+-- (-check). A "-" argument formats stdin to stdout.
+cmdFmt : List String -> <IO> Int
+cmdFmt argv = match fmtFlags argv False with
+  Err "" ->
+    eprint fmtUsage
+    2
+  Err flag ->
+    eprint "flag provided but not defined: ${flag}\n${fmtUsage}"
+    2
+  Ok (check, targets) -> match targets with
+    ["-"] ->
+      let src = readAll ()
+      match format "<stdin>" src with
+        Err errs -> fmtFail "<stdin>" src errs
+        Ok out ->
+          print out
+          0
+    [] -> fmtTargets check ["."]
+    _ -> fmtTargets check targets
+
+private fmtFlags : List String -> Bool -> Result String (Bool, List String)
+fmtFlags argv check = match argv with
+  a :: rest
+    | a == "-check" || a == "--check" -> fmtFlags rest True
+    | a == "-h" || a == "-help" || a == "--help" -> Err ""
+    | a == "--" -> Ok (check, rest)
+    | startsWith "-" a && a != "-" -> Err a
+  _ -> Ok (check, argv)
+
+private fmtTargets : Bool -> List String -> <IO> Int
+fmtTargets check targets = match collectArkFiles targets [] with
+  Err e -> failMsg e
+  Ok files -> fmtFiles check files 0
+
+-- The .ark files named by the targets: files as given, directories walked
+-- (skipping hidden ones), in order.
+private collectArkFiles : List String -> List String -> <IO> Result String (List String)
+collectArkFiles targets acc = match targets with
+  [] -> Ok (reverse acc)
+  t :: rest
+    | not (fileExists t) -> Err "stat ${t}: no such file or directory"
+    | isDirectory t -> match walkArk t t acc with
+        Err e -> Err e
+        Ok acc2 -> collectArkFiles rest acc2
+    | otherwise -> collectArkFiles rest (t :: acc)
+
+-- Add the .ark files under dir (reversed) to acc.
+private walkArk : String -> String -> List String -> <IO> Result String (List String)
+walkArk root dir acc = match dir != root && startsWith "." (Path.baseName dir) with
+  True -> Ok acc
+  False -> match listDir dir with
+    Err e -> Err e
+    Ok names -> walkArkEntries root dir names acc
+
+private walkArkEntries : String -> String -> List String -> List String -> <IO> Result String (List String)
+walkArkEntries root dir names acc = match names with
+  [] -> Ok acc
+  name :: rest ->
+    let path = Path.normalize (dir ++ "/" ++ name)
+    match isDirectory path with
+      True -> match walkArk root path acc with
+        Err e -> Err e
+        Ok acc2 -> walkArkEntries root dir rest acc2
+      False
+        | endsWith ".ark" path -> walkArkEntries root dir rest (path :: acc)
+        | otherwise -> walkArkEntries root dir rest acc
+
+private fmtFiles : Bool -> List String -> Int -> <IO> Int
+fmtFiles check files status = match files with
+  [] -> status
+  f :: rest -> match readFile f with
+    Err e -> failMsg e
+    Ok src -> match format f src with
+      Err errs ->
+        let _ = fmtFail f src errs
+        fmtFiles check rest 1
+      Ok out
+        | out == src -> fmtFiles check rest status
+        | check ->
+            println f
+            fmtFiles check rest 1
+        | otherwise -> match writeFile f out with
+            Err e -> failMsg e
+            Ok _ ->
+              println f
+              fmtFiles check rest status
+
+private fmtFail : String -> String -> List Diag -> <IO> Int
+fmtFail file src errs =
+  eprint (renderDiags (Map.singleton file src) errs (useColor ()))
+  1
 
 -- Documentation lines indented below an entry.
 docText : String -> String
