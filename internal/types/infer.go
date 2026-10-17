@@ -412,7 +412,8 @@ func (c *Checker) inferBlock(e *syntax.EBlock, eff Type) Type {
 	saved := c.locals
 	defer func() { c.locals = saved }()
 	var result Type = c.tUnit()
-	for i, s := range e.Stmts {
+	for i := 0; i < len(e.Stmts); i++ {
+		s := e.Stmts[i]
 		last := i == len(e.Stmts)-1
 		switch s := s.(type) {
 		case *syntax.SLet:
@@ -420,7 +421,9 @@ func (c *Checker) inferBlock(e *syntax.EBlock, eff Type) Type {
 				c.errorf(s.SPos(), "a block must end with an expression, not a let binding")
 				return c.freshType()
 			}
-			c.inferLocalBind(s.Bind, eff)
+			binds, n := letRun(e.Stmts[i:])
+			c.inferLocalBinds(binds, eff)
+			i += n - 1
 		case *syntax.SExpr:
 			t := c.inferExpr(s.E, eff)
 			if last {
@@ -431,6 +434,20 @@ func (c *Checker) inferBlock(e *syntax.EBlock, eff Type) Type {
 		}
 	}
 	return result
+}
+
+// letRun returns the bindings of the let statements at the start of ss,
+// excluding a final statement (a block must end with an expression).
+func letRun(ss []syntax.Stmt) ([]*syntax.Bind, int) {
+	var bs []*syntax.Bind
+	for _, s := range ss[:len(ss)-1] {
+		l, ok := s.(*syntax.SLet)
+		if !ok {
+			break
+		}
+		bs = append(bs, l.Bind)
+	}
+	return bs, len(bs)
 }
 
 func rhsGuarded(r *syntax.Rhs) bool {
@@ -452,6 +469,11 @@ func isTrivialGuard(e syntax.Expr) bool {
 }
 
 func (c *Checker) checkRhs(r *syntax.Rhs, t Type, eff Type) {
+	if r.Where != nil {
+		saved := c.locals
+		defer func() { c.locals = saved }()
+		c.inferLocalBinds(r.Where, eff)
+	}
 	if r.Body != nil {
 		c.checkExpr(r.Body, t, eff, "this expression")
 		return

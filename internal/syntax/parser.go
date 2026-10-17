@@ -347,7 +347,83 @@ func (p *parser) funBind() *Bind {
 		p.unexpected("declaration")
 	}
 	rhs := p.rhs(EQUALS)
+	if p.at(KwWhere) {
+		rhs.Where = p.whereBinds()
+	}
 	return &Bind{P: t.Pos, Name: name, Clauses: []*Clause{{P: t.Pos, Params: params, Rhs: rhs}}}
+}
+
+// whereBinds parses `where` followed by local bindings, either on the same
+// line (separated by ';') or as an indented block. A signature may be
+// written on its own line before the binding.
+func (p *parser) whereBinds() []*Bind {
+	pos := p.expect(KwWhere).Pos
+	var binds []*Bind
+	sigs := map[string]*SchemeE{}
+	var sigOrder []Token
+	item := func() {
+		t := p.peek()
+		if t.Kind == LIDENT && t.Qual == "" && p.peekN(1).Kind == COLON {
+			p.next()
+			p.next()
+			sc := p.schemeTop()
+			if p.at(EQUALS) || p.at(BAR) {
+				binds = append(binds, &Bind{P: t.Pos, Name: t.Text, Sig: sc, Clauses: []*Clause{{P: t.Pos, Rhs: p.rhs(EQUALS)}}})
+				return
+			}
+			if _, dup := sigs[t.Text]; dup {
+				p.fail(t.Pos, "duplicate signature for '%s'", t.Text)
+			}
+			sigs[t.Text] = sc
+			sigOrder = append(sigOrder, t)
+			return
+		}
+		b := p.letBind(t.Pos)
+		if sc, ok := sigs[b.Name]; ok && b.Name != "" {
+			b.Sig = sc
+			delete(sigs, b.Name)
+		}
+		binds = append(binds, b)
+	}
+	if p.accept(INDENT) {
+		for {
+			item()
+			if p.accept(NEWLINE) || p.accept(SEMI) {
+				if p.at(DEDENT) {
+					p.next()
+					break
+				}
+				continue
+			}
+			p.expect(DEDENT)
+			break
+		}
+	} else {
+		item()
+		for p.accept(SEMI) {
+			item()
+		}
+	}
+	for _, t := range sigOrder {
+		if _, ok := sigs[t.Text]; ok {
+			p.fail(t.Pos, "the signature for '%s' lacks an accompanying binding", t.Text)
+		}
+	}
+	if len(binds) == 0 {
+		p.fail(pos, "empty where clause")
+	}
+	// merge consecutive clauses of local functions
+	var merged []*Bind
+	for _, b := range binds {
+		if n := len(merged); n > 0 && b.Name != "" && b.Sig == nil && len(b.Clauses[0].Params) > 0 {
+			if pb := merged[n-1]; pb.Name == b.Name && pb.Pat == nil && len(pb.Clauses[0].Params) > 0 {
+				pb.Clauses = append(pb.Clauses, b.Clauses...)
+				continue
+			}
+		}
+		merged = append(merged, b)
+	}
+	return merged
 }
 
 // isInfixDef speculatively parses a pattern and reports whether it is
@@ -1044,6 +1120,9 @@ func (p *parser) block() Expr {
 			stmts = append(stmts, &SExpr{E: p.expr()})
 		}
 		if p.accept(NEWLINE) || p.accept(SEMI) {
+			if p.at(KwWhere) {
+				p.fail(p.peek().Pos, "a `where` clause must be indented less than the body it belongs to")
+			}
 			if p.at(DEDENT) {
 				p.next()
 				break

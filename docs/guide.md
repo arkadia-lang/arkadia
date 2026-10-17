@@ -39,7 +39,7 @@
 
 負の数リテラル: `-` の直後に数字があり、`-` の前が空白か開き括弧ならリテラルになります（`f -1` は `f (-1)`、`x-1` と `x - 1` は減算）。
 
-予約語: `module import as type alias class instance effect where let in match with handle return foreign infixl infixr infix private test deriving`
+予約語: `module import as type alias class instance effect where let in match with handle return foreign infixl infixr infix private test deriving`（`as`, `alias`, `test`, `deriving` は文脈によってのみ予約語）
 
 タブ文字はインデントに使えません（スペースのみ）。
 
@@ -112,6 +112,52 @@ primes = [2, 3, 5, 7]
 ```
 
 ガードが全て失敗すると次の等式へフォールスルーします。どの等式にも一致しない可能性があるとコンパイルエラーになります（網羅性検査）。
+
+### where 節
+
+等式の後に `where` で局所的な束縛を書けます。束縛はその等式の本体と全てのガードから見え、引数も参照できます。
+
+```haskell
+classify : Int -> String
+classify n
+  | n < small = "small"
+  | n < big = "medium"
+  where
+    small = 10
+    big = 100
+classify _ = "large"            -- ガードが全て失敗するとここへ
+
+collatz : Int -> Int
+collatz n = go n 0
+  where
+    go : Int -> Int -> Int      -- シグネチャを別の行に書ける
+    go 1 steps = steps
+    go m steps = go (next m) (steps + 1)
+      where next k = match k % 2 with   -- 入れ子にできる
+        0 -> k / 2
+        _ -> 3 * k + 1
+```
+
+- `where` は本体より浅く（等式の頭より深く）字下げします。束縛が一つなら同じ行に書けます（`where y = x * 2`、`;` で複数）。
+- 束縛は `let` 文と同じ規則で、等式に一致した後、本体やガードより先に **書いた順に** 評価されます（正格評価）。
+- 関数・値・パターン束縛（`where (q, r) = quotRem a b`）を書けます。
+
+### ローカルな相互再帰
+
+ブロック内で連続する `let` の関数定義（および `where` の関数定義）は、後に定義された関数を参照すると一つの相互再帰グループになります。
+
+```haskell
+parity n =
+  let isEven k = match k with
+    0 -> True
+    _ -> isOdd (k - 1)          -- 後で定義される isOdd を参照
+  let isOdd k = match k with
+    0 -> False
+    _ -> isEven (k - 1)
+  isEven n
+```
+
+グループの関数はまとめて型推論・汎化されます（型クラス制約を持つ多相関数でも可）。値の束縛は再帰しません（`let x = x + 1` の右辺の `x` は外側の `x`）。
 
 ### データ型
 

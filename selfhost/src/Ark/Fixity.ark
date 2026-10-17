@@ -66,6 +66,9 @@ rRhs r rh = match rh with
   RGuards gs -> RGuards (mapList (\(Guard p c b) ->
     let c2 = rExpr r c
     Guard p c2 (rExpr r b)) gs)
+  RWhere inner bs ->
+    let inner2 = rRhs r inner
+    RWhere inner2 (mapList (rBind r) bs)
 
 rExprs : R -> List Expr -> <IO> List Expr
 rExprs r es = mapList (rExpr r) es

@@ -1,0 +1,81 @@
+-- `where` clauses and mutually recursive local functions.
+
+hypot : Float -> Float -> Float
+hypot a b = sqrt' (sq a + sq b)
+  where
+    sq x = x * x
+    sqrt' x = sqrt x
+
+-- guards see the where bindings; when they all fail, the next equation is
+-- tried
+classify : Int -> String
+classify n
+  | n < small = "small"
+  | n < big = "medium"
+  where
+    small = 10
+    big = 100
+classify 1000 = "exactly a thousand"
+classify _ = "large"
+
+-- a signature on its own line; nested where clauses
+collatz : Int -> Int
+collatz n = go n 0
+  where
+    go : Int -> Int -> Int
+    go 1 steps = steps
+    go m steps = go (next m) (steps + 1)
+      where next k = match k % 2 with
+        0 -> k / 2
+        _ -> 3 * k + 1
+
+-- pattern bindings in a where clause
+divmod : Int -> Int -> String
+divmod a b = "${q} r ${r}"
+  where (q, r) = (a / b, a % b)
+
+-- the bindings are evaluated before the guards, in order
+trace : String -> a -> <IO> a
+trace msg v =
+  println msg
+  v
+
+check : Int -> <IO> String
+check n
+  | ok = "ok"
+  | otherwise = "not ok"
+  where
+    a = trace "first" n
+    ok = trace "second" (a > 0)
+
+-- local functions in the same block may refer to each other
+parity : Int -> String
+parity n =
+  let isEven k = match k with
+    0 -> True
+    _ -> isOdd (k - 1)
+  let isOdd k = match k with
+    0 -> False
+    _ -> isEven (k - 1)
+  match isEven n with
+    True -> "even"
+    False -> "odd"
+
+-- mutual recursion in a where clause, polymorphic and with class constraints
+alternate : Show a => List a -> (List String, List String)
+alternate xs = (evens xs, odds xs)
+  where
+    evens [] = []
+    evens (y :: ys) = show y :: odds ys
+    odds [] = []
+    odds (_ :: ys) = evens ys
+
+main () =
+  println (show (hypot 3.0 4.0))
+  println (show (map classify [1, 50, 1000, 5000]))
+  println (show (collatz 27))
+  println (divmod 17 5)
+  println (check 5)
+  println (show (map parity [10, 7]))
+  println (show (alternate [1, 2, 3, 4, 5]))
+  println (show (alternate ["a", "b"]))

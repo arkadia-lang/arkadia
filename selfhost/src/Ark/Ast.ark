@@ -764,7 +764,20 @@ type Stmt = SExpr Expr | SLet Bind
 type Arm = Arm Pos Pattern Rhs
 
 -- A plain body or guarded bodies.
-type Rhs = RBody Expr | RGuards (List Guard)
+-- A plain body or guarded bodies, optionally with `where` bindings that
+-- scope over all of them.
+type Rhs = RBody Expr | RGuards (List Guard) | RWhere Rhs (List Bind)
+
+-- The right-hand side without its where bindings.
+rhsInner : Rhs -> Rhs
+rhsInner r = match r with
+  RWhere inner _ -> inner
+  _ -> r
+
+rhsWhere : Rhs -> List Bind
+rhsWhere r = match r with
+  RWhere _ bs -> bs
+  _ -> []
 
 type Guard = Guard Pos Expr Expr
 
@@ -824,6 +837,9 @@ bindId (Bind _ _ _ _ _ i _) = i
 bindInfo : Bind -> Ref (Option BindInfo)
 bindInfo (Bind _ _ _ _ _ _ i) = i
 
+withSig : Option SchemeE -> Bind -> Bind
+withSig sig (Bind p n pat cs _ i info) = Bind p n pat cs sig i info
+
 withClauses : List Clause -> Bind -> Bind
 withClauses cs (Bind p n pat _ sig i info) = Bind p n pat cs sig i info
 
@@ -881,3 +897,81 @@ moduleImports (Module _ _ is _) = is
 
 moduleDecls : Module -> List Decl
 moduleDecls (Module _ _ _ ds) = ds
+
+-- ================================================================ references
+
+-- Names referenced (unqualified) by an expression.
+collectRefs : Expr -> List String -> List String
+collectRefs e acc = match e with
+  EVar _ "" n _ _ -> n :: acc
+  EApp _ f args _ -> foldl (\a x -> collectRefs x a) (collectRefs f acc) args
+  ELam _ _ b -> collectRefs b acc
+  ELet _ bs b -> collectRefs b (foldl (\a x -> bindRefsAcc x a) acc bs)
+  EBlock _ stmts -> foldl (\a s -> match s with
+    SExpr x -> collectRefs x a
+    SLet b -> bindRefsAcc b a) acc stmts
+  EMatch _ s arms -> foldl (\a (Arm _ _ r) -> rhsRefs r a) (collectRefs s acc) arms
+  EHandle _ b ret ops _ ->
+    let a1 = collectRefs b acc
+    let a2 = match ret with
+      Some hc -> collectRefs (hcBody hc) a1
+      None -> a1
+    foldl (\a hc -> collectRefs (hcBody hc) a) a2 ops
+  ETuple _ es -> foldl (\a x -> collectRefs x a) acc es
+  EList _ es -> foldl (\a x -> collectRefs x a) acc es
+  EBinOp _ op l r -> collectRefs r (collectRefs l (varName op :: acc))
+  EInterp _ ps -> foldl (\a x -> collectRefs x a) acc ps
+  EAnnot _ x _ -> collectRefs x acc
+  EField _ x _ _ -> collectRefs x acc
+  ERecord _ _ _ fs _ -> foldl (\a (FieldInit _ _ v) -> collectRefs v a) acc fs
+  EUpdate _ x fs _ -> foldl (\a (FieldInit _ _ v) -> collectRefs v a) (collectRefs x acc) fs
+  _ -> acc
+
+rhsRefs : Rhs -> List String -> List String
+rhsRefs r acc = match r with
+  RBody b -> collectRefs b acc
+  RGuards gs -> foldl (\a (Guard _ cnd b) -> collectRefs b (collectRefs cnd a)) acc gs
+  RWhere inner bs -> foldl (\a b -> bindRefsAcc b a) (rhsRefs inner acc) bs
+
+bindRefsAcc : Bind -> List String -> List String
+bindRefsAcc b acc = foldl (\a cl -> rhsRefs (clauseRhs cl) a) acc (bindClauses b)
+
+-- Whether a binding is a local function (as opposed to a value or a
+-- pattern binding).
+isLocalFun : Bind -> Bool
+isLocalFun b = bindName b != "" && isNone (bindPat b) && match bindClauses b with
+  c :: _ -> not (isEmpty (clauseParams c))
+  [] -> False
+
+-- Split a sequence of local bindings into binding groups. A run of
+-- consecutive function bindings with distinct names is one mutually
+-- recursive group when one of them refers to a later one; otherwise every
+-- binding is a group of its own.
+localGroups : List Bind -> List (List Bind)
+localGroups bs = match bs with
+  [] -> []
+  b :: rest ->
+    let run = funRun bs []
+    match length run > 1 && forwardRef run with
+      True -> run :: localGroups (drop (length run) bs)
+      False -> [b] :: localGroups rest
+
+private funRun : List Bind -> List String -> List Bind
+funRun bs seen = match bs with
+  b :: rest | isLocalFun b && not (elem (bindName b) seen) -> b :: funRun rest (bindName b :: seen)
+  _ -> []
+
+private forwardRef : List Bind -> Bool
+forwardRef run = match run with
+  [] -> False
+  b :: later ->
+    let refs = bindRefsAcc b []
+    anyOf (\l -> elem (bindName l) refs) later || forwardRef later
+
+-- The bindings of the let statements at the start of ss (which has n
+-- statements), excluding a final statement (a block must end with an
+-- expression).
+letRun : List Stmt -> Int -> List Bind
+letRun ss n = match (ss, n > 1) with
+  (SLet b :: rest, True) -> b :: letRun rest (n - 1)
+  _ -> []

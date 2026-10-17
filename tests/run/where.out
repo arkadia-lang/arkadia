@@ -1,0 +1,10 @@
+5.0
+["small", "medium", "exactly a thousand", "large"]
+111
+3 r 2
+first
+second
+ok
+["even", "odd"]
+(["1", "3", "5"], ["2", "4"])
+(["\"a\""], ["\"b\""])

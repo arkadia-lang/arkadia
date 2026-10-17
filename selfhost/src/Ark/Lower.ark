@@ -91,35 +91,73 @@ bindBody l b =
   let n = length (clauseParams first)
   let wh = posString (bindPos b)
   match n == 0 with
-    True -> ([], rhsMatch l [] [] (clauseRhs first) wh)
+    True -> ([], clauseMatch l [] [([], clauseRhs first)] wh)
     False ->
       let simple = match clauses with
-        [Clause _ ps (RBody body)] ->
-          let ids = mapList patVarId ps
-          match allOf isSome ids with
-            True -> Some (filterMap id ids, body)
-            False -> None
+        [Clause _ ps rh] -> match rhsInner rh with
+          RBody _ ->
+            let ids = mapList patVarId ps
+            match allOf isSome ids with
+              True -> Some (filterMap id ids, rh)
+              False -> None
+          _ -> None
         _ -> None
       match simple with
-        Some (params, body) -> (params, lowerExpr l body)
+        Some (params, rh) -> (params, rhsBody l rh)
         None ->
           let params = mapList (\_ -> fresh l "arg") (range 0 n)
-          let rows = mapList (\(Clause _ ps rh) ->
-            let pats = mapList (lowerPat l) ps
-            lowerRow l pats rh) clauses
-          (params, CMatch (mapList CVar params) rows wh)
+          let rows = mapList (\(Clause _ ps rh) -> (mapList (lowerPat l) ps, rh)) clauses
+          (params, clauseMatch l (mapList CVar params) rows wh)
+
+-- Lower the equations of a function. The guards of an equation with a
+-- where clause see its bindings, so they become a chain of conditionals
+-- inside the bindings; when they all fail, the remaining equations are
+-- tried through the local function rest. Without equations the match
+-- fails.
+clauseMatch : L -> List CExpr -> List (List CPat, Rhs) -> String -> <IO> CExpr
+clauseMatch l scruts rows wh = match (rows, scruts) with
+  ([(_, rh)], []) | isBody rh -> rhsBody l rh
+  _ -> clauseRows l scruts rows wh []
+
+private isBody : Rhs -> Bool
+isBody rh = match rhsInner rh with
+  RBody _ -> True
+  _ -> False
+
+private clauseRows : L -> List CExpr -> List (List CPat, Rhs) -> String -> List Row -> <IO> CExpr
+clauseRows l scruts rows wh acc = match rows with
+  [] -> CMatch scruts (reverse acc) wh
+  (pats, rh) :: more -> match rh with
+    RWhere (RGuards gs) bs ->
+      let rest = fresh l "rest"
+      let restBody = clauseMatch l scruts more wh
+      let fallback = CApp (CVar rest) [CLit VUnit]
+      let lowered = mapList (\(Guard _ c body) ->
+        let c2 = lowerExpr l c
+        (c2, lowerExpr l body)) gs
+      let chain = foldr (\(c2, b2) els -> CIf c2 b2 els) fallback lowered
+      let row = Row pats (Some (localBinds l bs chain)) []
+      let wild = Row (mapList (\_ -> CPWild) scruts) (Some fallback) []
+      let m = CMatch scruts (reverse acc ++ [row, wild]) wh
+      let u = fresh l "u"
+      CLet rest (CLam (Lam [u] restBody)) m
+    _ -> clauseRows l scruts more wh (lowerRow l pats rh :: acc)
+
+-- A plain right-hand side and its where bindings.
+rhsBody : L -> Rhs -> <IO> CExpr
+rhsBody l rh = match rh with
+  RWhere inner bs ->
+    let body = rhsBody l inner
+    localBinds l bs body
+  RBody body -> lowerExpr l body
+  _ -> error "rhsBody: guarded"
 
 lowerRow : L -> List CPat -> Rhs -> <IO> Row
-lowerRow l pats rh = match rh with
-  RBody body -> Row pats (Some (lowerExpr l body)) []
+lowerRow l pats rh = match rhsInner rh with
   RGuards gs -> Row pats None (mapList (\(Guard _ c body) ->
     let c2 = lowerExpr l c
     (c2, lowerExpr l body)) gs)
-
-rhsMatch : L -> List CExpr -> List CPat -> Rhs -> String -> <IO> CExpr
-rhsMatch l scruts pats rh wh = match (rh, scruts) with
-  (RBody body, []) -> lowerExpr l body
-  _ -> CMatch scruts [lowerRow l pats rh] wh
+  _ -> Row pats (Some (rhsBody l rh)) []
 
 -- ================================================================ instances
 
@@ -390,8 +428,27 @@ lowerStmts l ss = match ss with
       [] -> e
       _ -> CLet "_" e (lowerStmts l rest)
   SLet b :: rest ->
-    let body = lowerStmts l rest
-    localBind l b body
+    match localGroups (letRun ss (length ss)) with
+      (g@(_ :: _ :: _)) :: _ ->
+        let body = lowerStmts l (drop (length g) ss)
+        localGroup l g body
+      _ ->
+        let body = lowerStmts l rest
+        localBind l b body
+
+-- Lower a sequence of local bindings around body.
+localBinds : L -> List Bind -> CExpr -> <IO> CExpr
+localBinds l bs body = foldr (\g acc -> match g with
+  [b] -> localBind l b acc
+  _ -> localGroup l g acc) body (localGroups bs)
+
+-- Lower mutually recursive local functions.
+localGroup : L -> List Bind -> CExpr -> <IO> CExpr
+localGroup l bs body =
+  let parts = mapList (\b ->
+    let (params, v) = bindBody l b
+    (readRef (bindId b), Lam (dictParamsOf b ++ params) v)) bs
+  CLetRec (map fst parts) (map snd parts) body
 
 localBind : L -> Bind -> CExpr -> <IO> CExpr
 localBind l b body = match bindPat b with

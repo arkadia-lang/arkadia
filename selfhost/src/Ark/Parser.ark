@@ -330,7 +330,81 @@ funBind p =
           (tokText t, paramPatterns p)
       | otherwise -> unexpected p "declaration"
   let r = rhs p EQUALS
-  mkBind (tokPos t) name None [Clause (tokPos t) params r] None
+  let r2 = match at p KwWhere with
+    True -> RWhere r (whereBinds p)
+    False -> r
+  mkBind (tokPos t) name None [Clause (tokPos t) params r2] None
+
+-- `where` followed by local bindings, either on the same line (separated
+-- by ';') or as an indented block. A signature may be written on its own
+-- line before the binding.
+whereBinds : P -> <Exn Diag, IO> List Bind
+whereBinds p =
+  let pos = tokPos (expect p KwWhere)
+  -- bindings (reversed) and pending signatures (name, position, scheme)
+  let binds = newRef []
+  let sigs = newRef []
+  let item () =
+    let t = peek p
+    match tokKind t == LIDENT && tokQual t == "" && tokKind (peekN p 1) == COLON with
+      True ->
+        skip p
+        skip p
+        let sc = schemeTop p
+        match at p EQUALS || at p BAR with
+          True ->
+            let r = rhs p EQUALS
+            let b = mkBind (tokPos t) (tokText t) None [Clause (tokPos t) [] r] (Some sc)
+            modifyRef binds (\bs -> b :: bs)
+          False -> match any (\(n, _, _) -> n == tokText t) (readRef sigs) with
+            True -> fail (tokPos t) "duplicate signature for '${tokText t}'"
+            False -> modifyRef sigs (\ss -> snoc ss (tokText t, tokPos t, sc))
+      False ->
+        let b = letBind p (tokPos t)
+        let ss = readRef sigs
+        let b2 = match find (\(n, _, _) -> n == bindName b) ss with
+          Some (_, _, sc) | bindName b != "" ->
+            writeRef sigs (filter (\(n, _, _) -> n != bindName b) ss)
+            withSig (Some sc) b
+          _ -> b
+        modifyRef binds (\bs -> b2 :: bs)
+  match accept p INDENT with
+    True ->
+      let loop () =
+        item ()
+        match accept p NEWLINE || accept p SEMI with
+          True -> match at p DEDENT with
+            True -> skip p
+            False -> loop ()
+          False -> expect_ p DEDENT
+      loop ()
+    False ->
+      item ()
+      let more () = match accept p SEMI with
+        True ->
+          item ()
+          more ()
+        False -> ()
+      more ()
+  match readRef sigs with
+    (n, sp, _) :: _ -> fail sp "the signature for '${n}' lacks an accompanying binding"
+    [] -> ()
+  match readRef binds with
+    [] -> fail pos "empty where clause"
+    _ -> ()
+  reverse (foldl mergeWhere [] (reverse (readRef binds)))
+
+-- Merge consecutive clauses of local functions.
+private mergeWhere : List Bind -> Bind -> List Bind
+mergeWhere acc b = match acc with
+  prev :: rest | bindName b != "" && isNone (bindSig b) && hasParams b && bindName prev == bindName b && isNone (bindPat prev) && hasParams prev ->
+    withClauses (bindClauses prev ++ bindClauses b) prev :: rest
+  _ -> b :: acc
+
+private hasParams : Bind -> Bool
+hasParams b = match bindClauses b with
+  c :: _ -> not (isEmpty (clauseParams c))
+  [] -> False
 
 -- Speculatively parse a pattern and report whether it is followed by an
 -- operator, i.e. the equation defines an infix operator.
@@ -935,11 +1009,13 @@ block p =
           False -> SLet b
       False -> SExpr (expr p)
     match accept p NEWLINE || accept p SEMI with
-      True -> match at p DEDENT with
-        True ->
-          skip p
-          reverse (s :: acc)
-        False -> loop (s :: acc)
+      True
+        | at p KwWhere -> fail (tokPos (peek p)) "a `where` clause must be indented less than the body it belongs to"
+        | otherwise -> match at p DEDENT with
+            True ->
+              skip p
+              reverse (s :: acc)
+            False -> loop (s :: acc)
       False -> match at p DEDENT with
         True ->
           skip p

@@ -88,7 +88,7 @@ func (l *lowerer) topBind(b *syntax.Bind) {
 func (l *lowerer) bindBody(b *syntax.Bind) ([]string, Expr) {
 	n := len(b.Clauses[0].Params)
 	if n == 0 {
-		return nil, l.rhsMatch(nil, nil, b.Clauses[0].Rhs, b.P.String())
+		return nil, l.clauseMatch(nil, []clauseRow{{nil, b.Clauses[0].Rhs}}, b.P.String())
 	}
 	// single equation with variable patterns: bind directly
 	if len(b.Clauses) == 1 && b.Clauses[0].Rhs.Body != nil {
@@ -103,7 +103,7 @@ func (l *lowerer) bindBody(b *syntax.Bind) ([]string, Expr) {
 			params = append(params, pv.ID)
 		}
 		if simple {
-			return params, l.expr(b.Clauses[0].Rhs.Body)
+			return params, l.rhsBody(b.Clauses[0].Rhs)
 		}
 	}
 	params := make([]string, n)
@@ -112,34 +112,75 @@ func (l *lowerer) bindBody(b *syntax.Bind) ([]string, Expr) {
 		params[i] = l.fresh("arg")
 		scruts[i] = &Var{params[i]}
 	}
-	m := &Match{Scruts: scruts, Where: b.P.String()}
+	var rows []clauseRow
 	for _, cl := range b.Clauses {
 		var pats []Pat
 		for _, p := range cl.Params {
 			pats = append(pats, l.pat(p))
 		}
-		m.Rows = append(m.Rows, l.row(pats, cl.Rhs))
+		rows = append(rows, clauseRow{pats, cl.Rhs})
 	}
-	return params, m
+	return params, l.clauseMatch(scruts, rows, b.P.String())
+}
+
+type clauseRow struct {
+	pats []Pat
+	rhs  *syntax.Rhs
+}
+
+// clauseMatch lowers the equations of a function. The guards of an
+// equation with a where clause see its bindings, so they become a chain of
+// conditionals inside the bindings; when they all fail, the remaining
+// equations are tried through the local function rest. Without equations
+// the match fails.
+func (l *lowerer) clauseMatch(scruts []Expr, rows []clauseRow, where string) Expr {
+	if len(rows) == 1 && rows[0].rhs.Body != nil && len(scruts) == 0 {
+		return l.rhsBody(rows[0].rhs)
+	}
+	m := &Match{Scruts: scruts, Where: where}
+	for i, r := range rows {
+		if r.rhs.Guards == nil || r.rhs.Where == nil {
+			m.Rows = append(m.Rows, l.row(r.pats, r.rhs))
+			continue
+		}
+		rest := l.fresh("rest")
+		restBody := l.clauseMatch(scruts, rows[i+1:], where)
+		fallback := &App{Fn: &Var{rest}, Args: []Expr{&Lit{Unit{}}}}
+		var conds, bodies []Expr
+		for _, g := range r.rhs.Guards {
+			conds = append(conds, l.expr(g.Cond))
+			bodies = append(bodies, l.expr(g.Body))
+		}
+		var chain Expr = fallback
+		for j := len(conds) - 1; j >= 0; j-- {
+			chain = &If{Cond: conds[j], Then: bodies[j], Else: chain}
+		}
+		m.Rows = append(m.Rows, &Row{Pats: r.pats, Body: l.localBinds(r.rhs.Where, chain)})
+		wild := make([]Pat, len(scruts))
+		for k := range wild {
+			wild[k] = &PWild{}
+		}
+		m.Rows = append(m.Rows, &Row{Pats: wild, Body: fallback})
+		return &Let{Name: rest, Val: &Lam{Params: []string{l.fresh("u")}, Body: restBody}, Body: m}
+	}
+	return m
+}
+
+// rhsBody lowers a plain right-hand side and its where bindings.
+func (l *lowerer) rhsBody(r *syntax.Rhs) Expr {
+	return l.localBinds(r.Where, l.expr(r.Body))
 }
 
 func (l *lowerer) row(pats []Pat, r *syntax.Rhs) *Row {
 	row := &Row{Pats: pats}
 	if r.Body != nil {
-		row.Body = l.expr(r.Body)
+		row.Body = l.rhsBody(r)
 		return row
 	}
 	for _, g := range r.Guards {
 		row.Guards = append(row.Guards, &Guard{Cond: l.expr(g.Cond), Body: l.expr(g.Body)})
 	}
 	return row
-}
-
-func (l *lowerer) rhsMatch(scruts []Expr, pats []Pat, r *syntax.Rhs, where string) Expr {
-	if r.Body != nil && len(scruts) == 0 {
-		return l.expr(r.Body)
-	}
-	return &Match{Scruts: scruts, Rows: []*Row{l.row(pats, r)}, Where: where}
 }
 
 // ---------------------------------------------------------------- instances
@@ -555,9 +596,44 @@ func (l *lowerer) stmts(ss []syntax.Stmt) Expr {
 		}
 		return &Let{Name: "_", Val: e, Body: l.stmts(ss[1:])}
 	case *syntax.SLet:
+		var binds []*syntax.Bind
+		for _, x := range ss[:len(ss)-1] {
+			lt, ok := x.(*syntax.SLet)
+			if !ok {
+				break
+			}
+			binds = append(binds, lt.Bind)
+		}
+		if groups := types.LocalGroups(binds); len(groups) > 0 && len(groups[0]) > 1 {
+			return l.localGroup(groups[0], l.stmts(ss[len(groups[0]):]))
+		}
 		return l.localBind(s.Bind, l.stmts(ss[1:]))
 	}
 	panic("stmts")
+}
+
+// localBinds lowers a sequence of local bindings around body.
+func (l *lowerer) localBinds(bs []*syntax.Bind, body Expr) Expr {
+	groups := types.LocalGroups(bs)
+	for i := len(groups) - 1; i >= 0; i-- {
+		if len(groups[i]) == 1 {
+			body = l.localBind(groups[i][0], body)
+		} else {
+			body = l.localGroup(groups[i], body)
+		}
+	}
+	return body
+}
+
+// localGroup lowers mutually recursive local functions.
+func (l *lowerer) localGroup(bs []*syntax.Bind, body Expr) Expr {
+	rec := &LetRec{Body: body}
+	for _, b := range bs {
+		params, val := l.bindBody(b)
+		rec.Names = append(rec.Names, b.ID)
+		rec.Lams = append(rec.Lams, &Lam{Params: append(append([]string{}, b.Info.DictParams...), params...), Body: val})
+	}
+	return rec
 }
 
 func (l *lowerer) localBind(b *syntax.Bind, body Expr) Expr {

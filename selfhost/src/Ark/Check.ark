@@ -505,41 +505,6 @@ collectValues c decls =
 
 -- ================================================================ top-level bindings
 
--- Names referenced (unqualified) by an expression.
-collectRefs : Expr -> List String -> List String
-collectRefs e acc = match e with
-  EVar _ "" n _ _ -> n :: acc
-  EApp _ f args _ -> foldl (\a x -> collectRefs x a) (collectRefs f acc) args
-  ELam _ _ b -> collectRefs b acc
-  ELet _ bs b -> collectRefs b (foldl (\a x -> bindRefsAcc x a) acc bs)
-  EBlock _ stmts -> foldl (\a s -> match s with
-    SExpr x -> collectRefs x a
-    SLet b -> bindRefsAcc b a) acc stmts
-  EMatch _ s arms -> foldl (\a (Arm _ _ r) -> rhsRefs r a) (collectRefs s acc) arms
-  EHandle _ b ret ops _ ->
-    let a1 = collectRefs b acc
-    let a2 = match ret with
-      Some hc -> collectRefs (hcBody hc) a1
-      None -> a1
-    foldl (\a hc -> collectRefs (hcBody hc) a) a2 ops
-  ETuple _ es -> foldl (\a x -> collectRefs x a) acc es
-  EList _ es -> foldl (\a x -> collectRefs x a) acc es
-  EBinOp _ op l r -> collectRefs r (collectRefs l (varName op :: acc))
-  EInterp _ ps -> foldl (\a x -> collectRefs x a) acc ps
-  EAnnot _ x _ -> collectRefs x acc
-  EField _ x _ _ -> collectRefs x acc
-  ERecord _ _ _ fs _ -> foldl (\a (FieldInit _ _ v) -> collectRefs v a) acc fs
-  EUpdate _ x fs _ -> foldl (\a (FieldInit _ _ v) -> collectRefs v a) (collectRefs x acc) fs
-  _ -> acc
-
-private rhsRefs : Rhs -> List String -> List String
-rhsRefs r acc = match r with
-  RBody b -> collectRefs b acc
-  RGuards gs -> foldl (\a (Guard _ cnd b) -> collectRefs b (collectRefs cnd a)) acc gs
-
-private bindRefsAcc : Bind -> List String -> List String
-bindRefsAcc b acc = foldl (\a cl -> rhsRefs (clauseRhs cl) a) acc (bindClauses b)
-
 -- Strongly connected components in dependency order (Tarjan).
 sccs : List String -> Map.Map String (List String) -> <IO> List (List String)
 sccs nodes edges =

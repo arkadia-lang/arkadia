@@ -329,10 +329,12 @@ type Arm struct {
 	Body *Rhs
 }
 
-// Rhs is either a plain body or a list of guarded bodies.
+// Rhs is either a plain body or a list of guarded bodies, optionally
+// followed by `where` bindings that scope over all of them.
 type Rhs struct {
 	Body   Expr
 	Guards []*Guard
+	Where  []*Bind
 }
 type Guard struct {
 	P    Pos

@@ -483,6 +483,9 @@ func collectRefs(e syntax.Expr, acc map[string]bool) {
 			expr(g.Cond)
 			expr(g.Body)
 		}
+		for _, b := range r.Where {
+			bind(b)
+		}
 	}
 	expr = func(e syntax.Expr) {
 		switch e := e.(type) {
@@ -568,8 +571,122 @@ func bindRefs(b *syntax.Bind) map[string]bool {
 			collectRefs(g.Cond, acc)
 			collectRefs(g.Body, acc)
 		}
+		for _, w := range cl.Rhs.Where {
+			for r := range bindRefs(w) {
+				acc[r] = true
+			}
+		}
 	}
 	return acc
+}
+
+func isLocalFun(b *syntax.Bind) bool {
+	return b.Name != "" && b.Pat == nil && len(b.Clauses[0].Params) > 0
+}
+
+// LocalGroups splits a sequence of local bindings into binding groups. A
+// run of consecutive function bindings with distinct names is one mutually
+// recursive group when one of them refers to a later one; otherwise every
+// binding is a group of its own.
+func LocalGroups(bs []*syntax.Bind) [][]*syntax.Bind {
+	var out [][]*syntax.Bind
+	for i := 0; i < len(bs); {
+		seen := map[string]bool{}
+		j := i
+		for j < len(bs) && isLocalFun(bs[j]) && !seen[bs[j].Name] {
+			seen[bs[j].Name] = true
+			j++
+		}
+		if j-i > 1 && forwardRef(bs[i:j]) {
+			out = append(out, bs[i:j])
+			i = j
+			continue
+		}
+		out = append(out, bs[i:i+1])
+		i++
+	}
+	return out
+}
+
+func forwardRef(run []*syntax.Bind) bool {
+	for k, b := range run {
+		refs := bindRefs(b)
+		for _, later := range run[k+1:] {
+			if refs[later.Name] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// inferLocalBinds checks a sequence of local bindings (a run of block
+// statements or a where clause), bringing them into scope.
+func (c *Checker) inferLocalBinds(bs []*syntax.Bind, eff Type) {
+	for _, g := range LocalGroups(bs) {
+		if len(g) == 1 {
+			c.inferLocalBind(g[0], eff)
+		} else {
+			c.inferLocalGroup(g, eff)
+		}
+	}
+}
+
+// inferLocalGroup checks mutually recursive local functions. Those with a
+// signature are checked against it after the others have been inferred
+// together.
+func (c *Checker) inferLocalGroup(bs []*syntax.Bind, eff Type) {
+	var sigd, unsig []*syntax.Bind
+	for _, b := range bs {
+		b.ID = c.freshLocalID(b.Name)
+		if b.Sig != nil {
+			sigd = append(sigd, b)
+		} else {
+			unsig = append(unsig, b)
+		}
+	}
+	schemes := map[*syntax.Bind]*Scheme{}
+	for _, b := range sigd {
+		sc := c.convScheme(b.Sig, newTVEnv(true, arrowAmbient))
+		schemes[b] = sc
+		c.pushLocal(b.Name, &localVar{id: b.ID, scheme: sc, pos: b.P})
+	}
+	if len(unsig) > 0 {
+		gs := &groupState{info: &syntax.BindGroupInfo{}}
+		saved := c.locals
+		c.level++
+		var monos []Type
+		for _, b := range unsig {
+			m := c.freshType()
+			monos = append(monos, m)
+			c.pushLocal(b.Name, &localVar{id: b.ID, mono: m, group: gs, pos: b.P})
+		}
+		c.pushWanted()
+		for i, b := range unsig {
+			c.checkClauses(b, monos[i], eff)
+		}
+		ws := c.popWanted()
+		c.level--
+		c.locals = saved
+		scs, names := c.generalize(monos, ws, true)
+		gs.info.DictParams = names
+		for i, b := range unsig {
+			b.Info = &syntax.BindInfo{DictParams: names, Group: gs.info, Scheme: scs[i]}
+			if len(scs[i].Kinds) == 0 && len(names) == 0 {
+				c.pushLocal(b.Name, &localVar{id: b.ID, mono: scs[i].Type, pos: b.P})
+				c.record(b.P, b.Name, scs[i].Type, nil, b.P, "local")
+			} else {
+				c.pushLocal(b.Name, &localVar{id: b.ID, scheme: scs[i], pos: b.P})
+				c.record(b.P, b.Name, nil, scs[i], b.P, "local")
+			}
+		}
+	}
+	for _, b := range sigd {
+		sc := schemes[b]
+		names := c.checkAgainst(b, sc, nil, false, eff)
+		c.record(b.P, b.Name, nil, sc, b.P, "local")
+		b.Info = &syntax.BindInfo{DictParams: names, Scheme: sc}
+	}
 }
 
 // sccs computes strongly connected components in dependency order (Tarjan).

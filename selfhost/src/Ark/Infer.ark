@@ -559,8 +559,10 @@ inferBlock c stmts eff =
               errorf c (bindPos b) "a block must end with an expression, not a let binding"
               freshType c
           | otherwise ->
-              inferLocalBind c b eff
-              loop (i + 1) rest result
+              let binds = letRun ss (n - i)
+              inferLocalBinds c binds eff
+              let k = length binds
+              loop (i + k) (drop (k - 1) rest) result
         SExpr x ->
           let t = inferExpr c x eff
           match isLast with
@@ -576,6 +578,7 @@ inferBlock c stmts eff =
 
 rhsGuarded : Rhs -> Bool
 rhsGuarded r = match r with
+  RWhere inner _ -> rhsGuarded inner
   RBody _ -> False
   RGuards [] -> False
   RGuards gs ->
@@ -590,6 +593,11 @@ isTrivialGuard e = match e with
 
 checkRhs : Checker -> Rhs -> Type -> Type -> <IO> Unit
 checkRhs c r t eff = match r with
+  RWhere inner bs ->
+    let saved = readRef (cLocals c)
+    inferLocalBinds c bs eff
+    checkRhs c inner t eff
+    writeRef (cLocals c) saved
   RBody b -> checkExpr c b t eff "this expression"
   RGuards gs -> forEach gs (\(Guard _ cond b) ->
     checkExpr c cond (tBool c) eff "this guard"
@@ -995,8 +1003,8 @@ bindArity b = match bindClauses b with
 isSyntacticValue : Bind -> Bool
 isSyntacticValue b = match bindArity b > 0 with
   True -> True
-  False -> match bindClauses b with
-    Clause _ _ (RBody body) :: _ -> match body with
+  False -> match mapList (\cl -> rhsInner (clauseRhs cl)) (bindClauses b) with
+    RBody body :: _ -> match body with
       ELam _ _ _ -> True
       EVar _ _ _ _ _ -> True
       ECon _ _ _ _ -> True
@@ -1086,6 +1094,59 @@ checkAgainst c b (Scheme kinds snames preds st) fixed skipFirst eff =
   writeRef (cGivens c) savedGivens
   decLevel c
   names
+
+-- Check a sequence of local bindings (a run of block statements or a
+-- where clause), bringing them into scope.
+inferLocalBinds : Checker -> List Bind -> Type -> <IO> Unit
+inferLocalBinds c bs eff = forEach (localGroups bs) (\g -> match g with
+  [b] -> inferLocalBind c b eff
+  _ -> inferLocalGroup c g eff)
+
+-- Check mutually recursive local functions. Those with a signature are
+-- checked against it after the others have been inferred together.
+inferLocalGroup : Checker -> List Bind -> Type -> <IO> Unit
+inferLocalGroup c bs eff =
+  forEach bs (\b -> writeRef (bindId b) (freshLocalID c (bindName b)))
+  let sigd = filter (\b -> isSome (bindSig b)) bs
+  let unsig = filter (\b -> isNone (bindSig b)) bs
+  let schemes = mapList (\b -> match bindSig b with
+    Some se ->
+      let sc = convScheme c se (newTvEnv True arrowAmbient)
+      pushLocal c (bindName b) (LocalVar (bindPos b) (readRef (bindId b)) (Some sc) TRowEmpty None)
+      sc
+    None -> error "inferLocalGroup") sigd
+  match unsig with
+    [] -> ()
+    _ ->
+      let gs = newRef []
+      let saved = readRef (cLocals c)
+      incLevel c
+      let monos = mapList (\b ->
+        let m = freshType c
+        pushLocal c (bindName b) (LocalVar (bindPos b) (readRef (bindId b)) None m (Some gs))
+        m) unsig
+      pushWanted c
+      forEach (zip unsig monos) (\(b, m) -> checkClauses c b m eff)
+      let ws = popWanted c
+      decLevel c
+      writeRef (cLocals c) saved
+      let (scs, names) = generalize c monos ws True
+      writeRef gs names
+      forEach (zip unsig scs) (\(b, sc) ->
+        writeRef (bindInfo b) (Some (BindInfo names (Some gs) (Some sc)))
+        let id = readRef (bindId b)
+        let Scheme skinds _ _ st = sc
+        match isEmpty skinds && isEmpty names with
+          True ->
+            pushLocal c (bindName b) (LocalVar (bindPos b) id None st None)
+            record c (bindPos b) (bindName b) (Some st) None (bindPos b) "local"
+          False ->
+            pushLocal c (bindName b) (LocalVar (bindPos b) id (Some sc) TRowEmpty None)
+            record c (bindPos b) (bindName b) None (Some sc) (bindPos b) "local")
+  forEach (zip sigd schemes) (\(b, sc) ->
+    let names = checkAgainst c b sc [] False (Some eff)
+    record c (bindPos b) (bindName b) None (Some sc) (bindPos b) "local"
+    writeRef (bindInfo b) (Some (BindInfo names None (Some sc))))
 
 inferLocalBind : Checker -> Bind -> Type -> <IO> Unit
 inferLocalBind c b eff = match bindPat b with

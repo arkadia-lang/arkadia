@@ -91,6 +91,9 @@ func (r *fixResolver) rhs(rh *Rhs) {
 		g.Cond = r.expr(g.Cond)
 		g.Body = r.expr(g.Body)
 	}
+	for _, b := range rh.Where {
+		r.bind(b)
+	}
 }
 
 func (r *fixResolver) exprs(es []Expr) {
