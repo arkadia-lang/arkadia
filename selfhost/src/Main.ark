@@ -32,6 +32,8 @@ Commands:
   check [file.ark]   type check without building
   test [file.ark]    run the project's tests
   emit [file.ark]    print the generated Go code
+  doc <Module>       show the public interface of a module
+  new <name>         create a new project in directory <name>
   version            print the version
 
 Options of build and run:
@@ -56,6 +58,8 @@ cli argv = match argv with
     "run" -> withRoot (\root -> cmdBuild root rest True)
     "check" -> withRoot (\root -> cmdCheck root rest)
     "emit" -> withRoot (\root -> cmdEmit root rest)
+    "doc" -> withRoot (\root -> cmdDoc root rest)
+    "new" -> cmdNew rest
     "test" -> withRoot (\root -> cmdTest root rest)
     "debug" -> withRoot (\root -> cmdDebug root rest)
     "version" -> versionCmd ()
@@ -274,6 +278,76 @@ runTests root l (prog@(Program mods g _)) (t@(Target _ _ _ natives)) =
           match execProgram exe [] env with
             Ok code -> code
             Err e -> failMsg e
+
+cmdDoc : String -> List String -> <IO> Int
+cmdDoc root argv = match argv with
+  [name] ->
+    let paths = match findManifest "." with
+      Some mp -> match resolveProject mp with
+        Ok (Project _ srcs _) -> srcs
+        Err _ -> []
+      None -> []
+    let l = newLoader paths (libDir root)
+    match loadModules l [name] with
+      Err errs -> failDiags l errs
+      Ok (Program _ g _) -> match Map.lookup name (readRef (gModules g)) with
+        Some ex ->
+          print (moduleDoc ex)
+          0
+        None -> failMsg "unknown module ${name}"
+  _ ->
+    eprintln "usage: arkc doc <Module>"
+    2
+
+-- The public interface of a module.
+moduleDoc : Exports -> <IO> String
+moduleDoc ex =
+  let mod = exportsModule ex
+  let types = concatStrings (mapList (\(n, t) -> match t with
+    TEType ti | startsWith (mod ++ ".") (typeInfoName ti) ->
+      let ctors = mapList ctorShort (typeInfoCtors ti)
+      let ctorText = match ctors with
+        [] -> ""
+        _ -> " = " ++ joinWith " | " ctors
+      "\ntype " ++ joinWith " " (n :: typeInfoParams ti) ++ ctorText ++ "\n"
+    TEClass cl | classModule cl == mod ->
+      "\nclass ${n}\n" ++ concatStrings (mapList (\m -> "  ${methodName m} : ${schemeString (methodScheme m)}\n") (classMethods cl))
+    TEEffect ei | effectModule ei == mod ->
+      "\neffect ${n}\n" ++ concatStrings (mapList (\o -> "  ${opName o} : ${schemeString (opScheme o)}\n") (effectOps ei))
+    _ -> "") (Map.toList (readRef (exportsTypes ex))))
+  let values = concatStrings (mapList (\(n, v) -> match (valueMethod v, valueOp v, readRef (valueSchemeRef v)) with
+    (None, None, Some sc) | startsWith (mod ++ ".") (valueSym v) -> "${n} : ${schemeString sc}\n"
+    _ -> "") (Map.toList (readRef (exportsValues ex))))
+  "module ${mod}\n" ++ types ++ "\n" ++ values
+
+cmdNew : List String -> <IO> Int
+cmdNew argv = match argv with
+  [dir] -> match fileExists dir with
+    True -> failMsg "${dir} already exists"
+    False ->
+      let name = pathBase dir
+      let files =
+        [ (manifestName, "[package]\nname = ${show name}\nversion = \"0.1.0\"\ndescription = \"\"\n\n[dependencies]\n# mylib = { path = \"../mylib\" }\n")
+        , ("src/Main.ark", "module Main\n\nimport Greeting\n\nmain () =\n  println (greet \"Arkadia\")\n")
+        , ("src/Greeting.ark", "module Greeting\n\ngreet : String -> String\ngreet name = \"Hello, \${name}!\"\n")
+        , ("tests/GreetingTest.ark", "module GreetingTest\n\nimport Greeting\n\ntest \"greet says hello\" =\n  assertEq (greet \"world\") \"Hello, world!\"\n")
+        , (".gitignore", "/bin/\n")
+        ]
+      let write (rel, content) acc = match acc with
+        Err e -> Err e
+        Ok _ ->
+          let full = pathJoin dir rel
+          match makeDir (pathDir full) with
+            Err e -> Err e
+            Ok _ -> writeFile full content
+      match foldl (\acc f -> write f acc) (Ok ()) files with
+        Err e -> failMsg e
+        Ok _ ->
+          println "created project ${name}\n\n  cd ${dir}\n  arkc run\n  arkc test"
+          0
+  _ ->
+    eprintln "usage: arkc new <name>"
+    2
 
 -- ================================================================ debugging
 
