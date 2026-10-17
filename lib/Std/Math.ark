@@ -1,0 +1,156 @@
+-- Floating-point functions and integer arithmetic helpers. Nothing here
+-- shadows a Prelude name (`sqrt`, `pow`, `abs`, `floor`, `gcd`, ... live
+-- there), so the module can be imported unqualified.
+module Std.Math
+
+pi : Float
+pi = 3.141592653589793
+
+tau : Float
+tau = 6.283185307179586
+
+e : Float
+e = 2.718281828459045
+
+foreign infinity : Float = "rt.FloatInf"
+foreign nan : Float = "rt.FloatNaN"
+
+maxInt : Int
+maxInt = 9223372036854775807
+
+minInt : Int
+minInt = negate maxInt - 1
+
+-- ===================================================================
+-- Floating point
+-- ===================================================================
+
+foreign sin : Float -> Float = "rt.FloatSin"
+foreign cos : Float -> Float = "rt.FloatCos"
+foreign tan : Float -> Float = "rt.FloatTan"
+foreign asin : Float -> Float = "rt.FloatAsin"
+foreign acos : Float -> Float = "rt.FloatAcos"
+foreign atan : Float -> Float = "rt.FloatAtan"
+-- atan2 y x: the angle of the point (x, y).
+foreign atan2 : Float -> Float -> Float = "rt.FloatAtan2"
+foreign sinh : Float -> Float = "rt.FloatSinh"
+foreign cosh : Float -> Float = "rt.FloatCosh"
+foreign tanh : Float -> Float = "rt.FloatTanh"
+foreign exp : Float -> Float = "rt.FloatExp"
+-- Natural logarithm.
+foreign log : Float -> Float = "rt.FloatLog"
+foreign log2 : Float -> Float = "rt.FloatLog2"
+foreign log10 : Float -> Float = "rt.FloatLog10"
+foreign cbrt : Float -> Float = "rt.FloatCbrt"
+-- sqrt (x * x + y * y) without overflow.
+foreign hypot : Float -> Float -> Float = "rt.FloatHypot"
+-- Floating-point remainder with the sign of the dividend.
+foreign fmod : Float -> Float -> Float = "rt.FloatMod"
+foreign isNaN : Float -> Bool = "rt.FloatIsNaN"
+foreign isInfinite : Float -> Bool = "rt.FloatIsInf"
+-- Rounding that stays in Float (the Prelude versions return Int).
+foreign floorFloat : Float -> Float = "rt.FloatFloorF"
+foreign ceilFloat : Float -> Float = "rt.FloatCeilF"
+foreign roundFloat : Float -> Float = "rt.FloatRoundF"
+foreign truncateFloat : Float -> Float = "rt.FloatTruncateF"
+
+logBase : Float -> Float -> Float
+logBase b x = log x / log b
+
+toRadians : Float -> Float
+toRadians deg = deg * pi / 180.0
+
+toDegrees : Float -> Float
+toDegrees rad = rad * 180.0 / pi
+
+-- Linear interpolation: lerp a b 0.0 == a, lerp a b 1.0 == b.
+lerp : Float -> Float -> Float -> Float
+lerp a b t = a + (b - a) * t
+
+-- Round to a number of decimal places.
+roundTo : Int -> Float -> Float
+roundTo digits x =
+  let scale = pow 10.0 (toFloat digits)
+  roundFloat (x * scale) / scale
+
+-- Equal within an absolute tolerance.
+approxEq : Float -> Float -> Float -> Bool
+approxEq eps a b = abs (a - b) <= eps
+
+-- ===================================================================
+-- Generic numbers
+-- ===================================================================
+
+-- -1, 0 or 1.
+signum : (Ord a, Num a) => a -> a
+signum x
+  | x > fromInt 0 = fromInt 1
+  | x < fromInt 0 = fromInt -1
+  | otherwise = fromInt 0
+
+-- clamp lo hi x keeps x within [lo, hi].
+clamp : Ord a => a -> a -> a -> a
+clamp lo hi x = max lo (min hi x)
+
+-- Arithmetic mean; None for an empty list.
+mean : List Float -> Option Float
+mean [] = None
+mean xs = Some (sum xs / toFloat (length xs))
+
+-- ===================================================================
+-- Integers
+-- ===================================================================
+
+lcm : Int -> Int -> Int
+lcm _ 0 = 0
+lcm 0 _ = 0
+lcm a b = abs (a / gcd a b * b)
+
+-- Integer power by repeated squaring; the exponent must be non-negative.
+powInt : Int -> Int -> Int
+powInt b n
+  | n < 0 = error "Std.Math.powInt: negative exponent"
+  | otherwise = powAcc b n 1
+
+private powAcc : Int -> Int -> Int -> Int
+powAcc _ 0 acc = acc
+powAcc b n acc
+  | odd n = powAcc (b * b) (n / 2) (acc * b)
+  | otherwise = powAcc (b * b) (n / 2) acc
+
+-- Floored division: the remainder has the sign of the divisor (like `%`).
+divMod : Int -> Int -> (Int, Int)
+divMod a b =
+  let m = mod a b
+  ((a - m) / b, m)
+
+-- Integer square root: the largest r with r * r <= n.
+isqrt : Int -> Int
+isqrt n
+  | n < 0 = error "Std.Math.isqrt: negative argument"
+  | otherwise = isqrtFix n (truncate (sqrt (toFloat n)))
+
+private isqrtFix : Int -> Int -> Int
+isqrtFix n r
+  | r * r > n = isqrtFix n (r - 1)
+  | (r + 1) * (r + 1) <= n = isqrtFix n (r + 1)
+  | otherwise = r
+
+isPrime : Int -> Bool
+isPrime n
+  | n < 2 = False
+  | n < 4 = True
+  | even n = False
+  | otherwise = primeFrom n 3
+
+private primeFrom : Int -> Int -> Bool
+primeFrom n d
+  | d * d > n = True
+  | n % d == 0 = False
+  | otherwise = primeFrom n (d + 2)
+
+-- The decimal digits of a non-negative integer, most significant first.
+digits : Int -> List Int
+digits n
+  | n < 10 = [n]
+  | otherwise = digits (n / 10) ++ [n % 10]

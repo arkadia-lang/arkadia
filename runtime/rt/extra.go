@@ -1,6 +1,7 @@
 package rt
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"sort"
@@ -19,6 +20,34 @@ func IntShl(a, b Value) Value     { return a.(int64) << uint64(b.(int64)) }
 func IntShr(a, b Value) Value     { return a.(int64) >> uint64(b.(int64)) }
 func IntUShr(a, b Value) Value    { return int64(uint64(a.(int64)) >> uint64(b.(int64))) }
 func IntComplement(a Value) Value { return ^a.(int64) }
+
+// ---------------------------------------------------------------- math
+
+func FloatSin(x Value) Value       { return math.Sin(x.(float64)) }
+func FloatCos(x Value) Value       { return math.Cos(x.(float64)) }
+func FloatTan(x Value) Value       { return math.Tan(x.(float64)) }
+func FloatAsin(x Value) Value      { return math.Asin(x.(float64)) }
+func FloatAcos(x Value) Value      { return math.Acos(x.(float64)) }
+func FloatAtan(x Value) Value      { return math.Atan(x.(float64)) }
+func FloatAtan2(y, x Value) Value  { return math.Atan2(y.(float64), x.(float64)) }
+func FloatSinh(x Value) Value      { return math.Sinh(x.(float64)) }
+func FloatCosh(x Value) Value      { return math.Cosh(x.(float64)) }
+func FloatTanh(x Value) Value      { return math.Tanh(x.(float64)) }
+func FloatExp(x Value) Value       { return math.Exp(x.(float64)) }
+func FloatLog(x Value) Value       { return math.Log(x.(float64)) }
+func FloatLog2(x Value) Value      { return math.Log2(x.(float64)) }
+func FloatLog10(x Value) Value     { return math.Log10(x.(float64)) }
+func FloatCbrt(x Value) Value      { return math.Cbrt(x.(float64)) }
+func FloatHypot(x, y Value) Value  { return math.Hypot(x.(float64), y.(float64)) }
+func FloatMod(x, y Value) Value    { return math.Mod(x.(float64), y.(float64)) }
+func FloatIsNaN(x Value) Value     { return math.IsNaN(x.(float64)) }
+func FloatIsInf(x Value) Value     { return math.IsInf(x.(float64), 0) }
+func FloatNaN() Value              { return math.NaN() }
+func FloatInf() Value              { return math.Inf(1) }
+func FloatFloorF(x Value) Value    { return math.Floor(x.(float64)) }
+func FloatCeilF(x Value) Value     { return math.Ceil(x.(float64)) }
+func FloatRoundF(x Value) Value    { return math.Round(x.(float64)) }
+func FloatTruncateF(x Value) Value { return math.Trunc(x.(float64)) }
 
 // ---------------------------------------------------------------- arrays
 
