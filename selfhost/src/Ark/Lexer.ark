@@ -1,0 +1,623 @@
+-- The lexer and the layout algorithm.
+module Ark.Lexer
+
+import Ark.Util
+import Ark.Ast
+import Std.Array as Arr
+
+-- ================================================================ characters
+
+isOpChar : Char -> Bool
+isOpChar r = charCode r < 128 && contains (charToString r) "!#$%&*+./<=>?@\\^|-~:"
+
+isIdentStart : Char -> Bool
+isIdentStart r = r == '_' || isAlpha r
+
+isIdentChar : Char -> Bool
+isIdentChar r = r == '_' || r == '\'' || isAlpha r || isDigit r
+
+-- ================================================================ lexer state
+
+-- file, source, length, offset, line, column, tokens (reversed), errors
+-- (reversed), saw newline, saw whitespace
+type Lx = Lx String (Arr.Array Char) Int (Ref Int) (Ref Int) (Ref Int) (Ref (List Token)) (Ref (List Diag)) (Ref Bool) (Ref Bool)
+
+lxFile : Lx -> String
+lxFile (Lx f _ _ _ _ _ _ _ _ _) = f
+
+lxOff : Lx -> <IO> Int
+lxOff (Lx _ _ _ o _ _ _ _ _ _) = readRef o
+
+setOff : Lx -> Int -> <IO> Unit
+setOff (Lx _ _ _ o _ _ _ _ _ _) n = writeRef o n
+
+lxCol : Lx -> Ref Int
+lxCol (Lx _ _ _ _ _ c _ _ _ _) = c
+
+lxToks : Lx -> Ref (List Token)
+lxToks (Lx _ _ _ _ _ _ t _ _ _) = t
+
+lxErrs : Lx -> Ref (List Diag)
+lxErrs (Lx _ _ _ _ _ _ _ e _ _) = e
+
+lxSawNL : Lx -> Ref Bool
+lxSawNL (Lx _ _ _ _ _ _ _ _ n _) = n
+
+lxSawSpc : Lx -> Ref Bool
+lxSawSpc (Lx _ _ _ _ _ _ _ _ _ s) = s
+
+atEnd : Lx -> <IO> Bool
+atEnd (Lx _ _ n o _ _ _ _ _ _) = readRef o >= n
+
+pos : Lx -> <IO> Pos
+pos (Lx f _ _ _ l c _ _ _ _) = Pos f (readRef l) (readRef c)
+
+errorAt : Lx -> Pos -> String -> <IO> Unit
+errorAt lx p msg = modifyRef (lxErrs lx) (\es -> diagAt p msg :: es)
+
+peekAt : Lx -> Int -> <IO> Char
+peekAt (Lx _ src n o _ _ _ _ _ _) k =
+  let i = readRef o + k
+  match i < n with
+    True -> Arr.at i src
+    False -> '\0'
+
+peek : Lx -> <IO> Char
+peek lx = peekAt lx 0
+
+next : Lx -> <IO> Char
+next (Lx _ src n o l c _ _ _ _) =
+  let i = readRef o
+  match i >= n with
+    True -> '\0'
+    False ->
+      let r = Arr.at i src
+      writeRef o (i + 1)
+      match r with
+        '\n' ->
+          writeRef l (readRef l + 1)
+          writeRef c 1
+        _ -> writeRef c (readRef c + 1)
+      r
+
+-- Source text between two offsets.
+slice : Lx -> Int -> Int -> String
+slice (Lx _ src _ _ _ _ _ _ _ _) from to = fromChars (Arr.toList (Arr.slice from to src))
+
+emit : Lx -> Token -> <IO> Unit
+emit lx t =
+  let first = readRef (lxSawNL lx)
+  let space = readRef (lxSawSpc lx)
+  writeRef (lxSawNL lx) False
+  writeRef (lxSawSpc lx) False
+  let Token k text q p s ps _ _ = t
+  modifyRef (lxToks lx) (\ts -> Token k text q p s ps first space :: ts)
+
+prevEndsExpr : Lx -> <IO> Bool
+prevEndsExpr lx = match readRef (lxToks lx) with
+  [] -> False
+  t :: _ -> match tokKind t with
+    LIDENT -> True
+    UIDENT -> True
+    INT -> True
+    FLOAT -> True
+    STRING -> True
+    INTERP -> True
+    CHAR -> True
+    RPAREN -> True
+    RBRACKET -> True
+    RBRACE -> True
+    UNDERSCORE -> True
+    _ -> False
+
+-- ================================================================ entry points
+
+-- Tokenize a source file and apply the layout algorithm.
+lex : String -> String -> <IO> Result (List Diag) (List Token)
+lex file src = match lexRaw file src 1 1 with
+  Err errs -> Err errs
+  Ok toks -> layout toks
+
+lexRaw : String -> String -> Int -> Int -> <IO> Result (List Diag) (List Token)
+lexRaw file src line col =
+  let chs = Arr.fromList (chars src)
+  let lx = Lx file chs (Arr.length chs) (newRef 0) (newRef line) (newRef col) (newRef []) (newRef []) (newRef True) (newRef True)
+  run lx
+  match readRef (lxErrs lx) with
+    [] -> Ok (reverse (readRef (lxToks lx)))
+    errs -> Err (reverse errs)
+
+run : Lx -> <IO> Unit
+run lx = match atEnd lx with
+  True -> emit lx (mkTok EOF "" (pos lx))
+  False ->
+    step lx (peek lx)
+    run lx
+
+step : Lx -> Char -> <IO> Unit
+step lx r
+  | r == '\n' =
+      let _ = next lx
+      writeRef (lxSawNL lx) True
+      writeRef (lxSawSpc lx) True
+  | r == ' ' || r == '\r' =
+      let _ = next lx
+      writeRef (lxSawSpc lx) True
+  | r == '\t' =
+      errorAt lx (pos lx) "tab characters are not allowed; use spaces for indentation"
+      let _ = next lx
+      ()
+  | r == '-' && peekAt lx 1 == '-' && (not (isOpChar (peekAt lx 2)) || peekAt lx 2 == '-') =
+      skipLine lx
+      writeRef (lxSawSpc lx) True
+  | r == '{' && peekAt lx 1 == '-' =
+      blockComment lx
+      writeRef (lxSawSpc lx) True
+  | isDigit r = number lx False
+  | r == '-' && isDigit (peekAt lx 1) && (readRef (lxSawSpc lx) || not (prevEndsExpr lx)) = number lx True
+  | isIdentStart r = ident lx
+  | r == '"' = str lx
+  | r == '\'' = char lx
+  | otherwise = punct lx
+
+skipLine : Lx -> <IO> Unit
+skipLine lx = match atEnd lx || peek lx == '\n' with
+  True -> ()
+  False ->
+    let _ = next lx
+    skipLine lx
+
+blockComment : Lx -> <IO> Unit
+blockComment lx =
+  let start = pos lx
+  let loop depth = match atEnd lx with
+    True -> errorAt lx start "unterminated block comment"
+    False
+      | peek lx == '{' && peekAt lx 1 == '-' ->
+          let _ = next lx
+          let _ = next lx
+          loop (depth + 1)
+      | peek lx == '-' && peekAt lx 1 == '}' ->
+          let _ = next lx
+          let _ = next lx
+          match depth - 1 == 0 with
+            True -> ()
+            False -> loop (depth - 1)
+      | otherwise ->
+          match next lx with
+            '\n' -> writeRef (lxSawNL lx) True
+            _ -> ()
+          loop depth
+  loop 0
+
+skipWhile : Lx -> (Char -> Bool) -> <IO | e> Unit
+skipWhile lx p = match p (peek lx) with
+  True ->
+    let _ = next lx
+    skipWhile lx p
+  False -> ()
+
+-- ================================================================ numbers
+
+number : Lx -> Bool -> <IO> Unit
+number lx neg =
+  let p = pos lx
+  let start = lxOff lx
+  match neg with
+    True ->
+      let _ = next lx
+      ()
+    False -> ()
+  let isFloat = match peek lx == '0' && (peekAt lx 1 == 'x' || peekAt lx 1 == 'b' || peekAt lx 1 == 'o') with
+    True ->
+      let _ = next lx
+      let _ = next lx
+      skipWhile lx isIdentChar
+      False
+    False ->
+      skipWhile lx (\c -> isDigit c || c == '_')
+      let frac = match peek lx == '.' && isDigit (peekAt lx 1) with
+        True ->
+          let _ = next lx
+          skipWhile lx (\c -> isDigit c || c == '_')
+          True
+        False -> False
+      let e1 = peekAt lx 1
+      match (peek lx == 'e' || peek lx == 'E') && (isDigit e1 || (e1 == '-' || e1 == '+') && isDigit (peekAt lx 2)) with
+        True ->
+          let _ = next lx
+          match peek lx == '-' || peek lx == '+' with
+            True ->
+              let _ = next lx
+              ()
+            False -> ()
+          skipWhile lx isDigit
+          True
+        False -> frac
+  let text = replace "_" "" (slice lx start (lxOff lx))
+  match isFloat with
+    True ->
+      match parseFloatLit text with
+        None -> errorAt lx p "invalid float literal ${show text}"
+        Some _ -> ()
+      emit lx (mkTok FLOAT text p)
+    False ->
+      match parseIntLit text with
+        None -> errorAt lx p "invalid integer literal ${show text}"
+        Some _ -> ()
+      emit lx (mkTok INT text p)
+
+-- ================================================================ identifiers
+
+readSeg : Lx -> <IO> String
+readSeg lx =
+  let s = lxOff lx
+  skipWhile lx isIdentChar
+  slice lx s (lxOff lx)
+
+firstChar : String -> Char
+firstChar s = match chars s with
+  c :: _ -> c
+  [] -> '\0'
+
+ident : Lx -> <IO> Unit
+ident lx =
+  let p = pos lx
+  let loop quals seg = match isUpper (firstChar seg) && peek lx == '.' && isIdentStart (peekAt lx 1) with
+    True ->
+      let _ = next lx
+      loop (seg :: quals) (readSeg lx)
+    False -> (reverse quals, seg)
+  let (quals, seg) = loop [] (readSeg lx)
+  let qual = joinWith "." quals
+  let plain = match qual == "" with
+    True
+      | seg == "_" ->
+          emit lx (mkTok UNDERSCORE "_" p)
+          True
+      | otherwise -> match keywordKind seg with
+          Some k ->
+            emit lx (mkTok k seg p)
+            True
+          None -> False
+    False -> False
+  match plain with
+    True -> ()
+    False ->
+      let kind = match isUpper (firstChar seg) with
+        True -> UIDENT
+        False -> LIDENT
+      emit lx (Token kind seg qual p "" [] False False)
+
+-- ================================================================ strings and characters
+
+hexValue : Char -> Int
+hexValue c
+  | c >= '0' && c <= '9' = charCode c - 48
+  | c >= 'a' && c <= 'f' = charCode c - 87
+  | c >= 'A' && c <= 'F' = charCode c - 55
+  | otherwise = -1
+
+parseHex : String -> Option Int
+parseHex s = match chars s with
+  [] -> None
+  cs -> parseHexAcc cs 0
+
+parseHexAcc : List Char -> Int -> Option Int
+parseHexAcc [] acc = Some acc
+parseHexAcc (c :: cs) acc
+  | hexValue c < 0 = None
+  | acc * 16 + hexValue c > 4294967295 = None
+  | otherwise = parseHexAcc cs (acc * 16 + hexValue c)
+
+-- Decode an escape sequence after the backslash.
+escape : Lx -> Pos -> <IO> Option Char
+escape lx p =
+  let c = next lx
+  match c with
+    'n' -> Some '\n'
+    't' -> Some '\t'
+    'r' -> Some '\r'
+    '0' -> Some '\0'
+    '\\' -> Some c
+    '"' -> Some c
+    '\'' -> Some c
+    '$' -> Some c
+    'u' | peek lx == '{' ->
+      let _ = next lx
+      let s = lxOff lx
+      skipWhile lx (\x -> x != '}' && x != '\0' && x != '\n')
+      let hex = slice lx s (lxOff lx)
+      let _ = next lx
+      match parseHex hex with
+        Some v -> Some (fromCharCode v)
+        None ->
+          errorAt lx p "invalid unicode escape"
+          None
+    _ ->
+      errorAt lx p "invalid escape sequence '\\${charToString c}'"
+      None
+
+str : Lx -> <IO> Unit
+str lx =
+  let p = pos lx
+  let _ = next lx
+  match peek lx == '"' && peekAt lx 1 == '"' with
+    True -> rawString lx p
+    False -> quotedString lx p [] []
+
+rawString : Lx -> Pos -> <IO> Unit
+rawString lx p =
+  let _ = next lx
+  let _ = next lx
+  let s = lxOff lx
+  let loop () = match atEnd lx || peek lx == '"' && peekAt lx 1 == '"' && peekAt lx 2 == '"' with
+    True -> ()
+    False ->
+      let _ = next lx
+      loop ()
+  loop ()
+  let body0 = slice lx s (lxOff lx)
+  match atEnd lx with
+    True -> errorAt lx p "unterminated string literal"
+    False ->
+      let _ = next lx
+      let _ = next lx
+      let _ = next lx
+      let body = match startsWith "\n" body0 with
+        True -> substring 1 (stringLength body0) body0
+        False -> body0
+      emit lx (Token STRING (show body) "" p body [] False False)
+
+-- parts (reversed), current literal (reversed chars)
+quotedString : Lx -> Pos -> List InterpPart -> List Char -> <IO> Unit
+quotedString lx p parts sb =
+  let c = peek lx
+  match c with
+    _ | c == '\0' || c == '\n' -> errorAt lx p "unterminated string literal"
+    '"' ->
+      let _ = next lx
+      finishString lx p parts sb
+    '\\' ->
+      let ep = pos lx
+      let _ = next lx
+      match escape lx ep with
+        Some r -> quotedString lx p parts (r :: sb)
+        None -> quotedString lx p parts sb
+    '$' | peekAt lx 1 == '{' ->
+      let ep = pos lx
+      let _ = next lx
+      let _ = next lx
+      let parts1 = match not (isEmpty sb) || isEmpty parts with
+        True -> InterpLit (fromChars (reverse sb)) :: parts
+        False -> parts
+      match interpolation lx ep with
+        Some part -> quotedString lx p (part :: parts1) []
+        None -> ()
+    _ -> quotedString lx p parts (next lx :: sb)
+
+finishString : Lx -> Pos -> List InterpPart -> List Char -> <IO> Unit
+finishString lx p parts sb = match parts with
+  [] ->
+    let s = fromChars (reverse sb)
+    emit lx (Token STRING (show s) "" p s [] False False)
+  _ ->
+    let all = match isEmpty sb with
+      True -> parts
+      False -> InterpLit (fromChars (reverse sb)) :: parts
+    emit lx (Token INTERP "\"...\"" "" p "" (reverse all) False False)
+
+-- Lex the expression of `${...}` (after the opening brace).
+interpolation : Lx -> Pos -> <IO> Option InterpPart
+interpolation lx ep =
+  let Pos _ startLine startCol = pos lx
+  let s = lxOff lx
+  let skipNested () = match peek lx with
+    c | c == '"' || c == '\0' || c == '\n' -> ()
+    '\\' ->
+      let _ = next lx
+      let _ = next lx
+      skipNested ()
+    _ ->
+      let _ = next lx
+      skipNested ()
+  let scan depth = match peek lx with
+    c | c == '\0' || c == '\n' ->
+      errorAt lx ep "unterminated interpolation"
+      False
+    '{' ->
+      let _ = next lx
+      scan (depth + 1)
+    '}' | depth - 1 == 0 -> True
+    '}' ->
+      let _ = next lx
+      scan (depth - 1)
+    '"' ->
+      let _ = next lx
+      skipNested ()
+      let _ = next lx
+      scan depth
+    _ ->
+      let _ = next lx
+      scan depth
+  match scan 1 with
+    False -> None
+    True ->
+      let inner = slice lx s (lxOff lx)
+      let _ = next lx
+      match lexRaw (lxFile lx) inner startLine startCol with
+        Err errs ->
+          modifyRef (lxErrs lx) (\es -> reverseOnto errs es)
+          None
+        Ok toks -> Some (InterpExpr (mapList (setTokFirst False) toks) ep)
+
+reverseOnto : List a -> List a -> List a
+reverseOnto [] acc = acc
+reverseOnto (x :: xs) acc = reverseOnto xs (x :: acc)
+
+char : Lx -> <IO> Unit
+char lx =
+  let p = pos lx
+  let _ = next lx
+  let r = match peek lx == '\\' with
+    True ->
+      let _ = next lx
+      withDefault '\0' (escape lx p)
+    False -> next lx
+  match peek lx == '\'' with
+    False -> errorAt lx p "unterminated character literal"
+    True ->
+      let _ = next lx
+      emit lx (Token CHAR (show r) "" p (charToString r) [] False False)
+
+-- ================================================================ punctuation
+
+singleKind : Char -> Option TokKind
+singleKind c = match c with
+  '(' -> Some LPAREN
+  ')' -> Some RPAREN
+  '[' -> Some LBRACKET
+  ']' -> Some RBRACKET
+  '{' -> Some LBRACE
+  '}' -> Some RBRACE
+  ',' -> Some COMMA
+  '`' -> Some BACKTICK
+  ';' -> Some SEMI
+  _ -> None
+
+punct : Lx -> <IO> Unit
+punct lx =
+  let p = pos lx
+  let r = peek lx
+  match singleKind r with
+    Some k ->
+      let _ = next lx
+      emit lx (mkTok k (charToString r) p)
+    None
+      | not (isOpChar r) ->
+          let _ = next lx
+          errorAt lx p "unexpected character ${show r}"
+      | otherwise ->
+          let s = lxOff lx
+          skipWhile lx isOpChar
+          let op = slice lx s (lxOff lx)
+          match op with
+            "=" -> emit lx (mkTok EQUALS op p)
+            "|" -> emit lx (mkTok BAR op p)
+            "->" -> emit lx (mkTok ARROW op p)
+            ":" -> emit lx (mkTok COLON op p)
+            "=>" -> emit lx (mkTok DARROW op p)
+            "@" -> emit lx (mkTok AT op p)
+            "\\" -> emit lx (mkTok BACKSLASH op p)
+            _ | startsWith "\\" op ->
+                  -- `\x` is lexed as BACKSLASH followed by more
+                  setOff lx s
+                  writeRef (lxCol lx) (posCol p)
+                  let _ = next lx
+                  emit lx (mkTok BACKSLASH "\\" p)
+              | otherwise -> emit lx (mkTok OP op p)
+
+-- ================================================================ layout
+
+-- A layout context: bracket or block (with its column).
+type LCtx = LBracket | LBlock Int
+
+isOpener : TokKind -> Bool
+isOpener k = match k with
+  EQUALS -> True
+  ARROW -> True
+  KwWhere -> True
+  KwWith -> True
+  _ -> False
+
+isBracket : LCtx -> Bool
+isBracket LBracket = True
+isBracket _ = False
+
+ctxCol : LCtx -> Int
+ctxCol (LBlock c) = c
+ctxCol LBracket = 0
+
+enclosingBlockCol : List LCtx -> Int
+enclosingBlockCol [] = 0
+enclosingBlockCol (LBlock c :: _) = c
+enclosingBlockCol (LBracket :: rest) = enclosingBlockCol rest
+
+layout : List Token -> <IO> Result (List Diag) (List Token)
+layout raw = match raw with
+  [] -> Ok []
+  first :: _ ->
+    let base = match tokKind first with
+      EOF -> 1
+      _ -> posCol (tokPos first)
+    let (out, errs) = layoutLoop raw False EOF [LBlock base] [] []
+    match errs with
+      [] -> Ok (reverse out)
+      _ -> Err (reverse errs)
+
+mk : TokKind -> Pos -> Token
+mk k p = mkTok k "" p
+
+-- Pop block contexts left of column c (emitting DEDENTs).
+popBlocks : Int -> List LCtx -> List Token -> Pos -> (List LCtx, List Token)
+popBlocks c stack out p = match stack with
+  LBlock col :: rest | c < col && not (isEmpty rest) -> popBlocks c rest (mk DEDENT p :: out) p
+  _ -> (stack, out)
+
+-- Pop blocks up to (and including) the innermost bracket.
+closeBracket : List LCtx -> List Token -> Pos -> (List LCtx, List Token, Bool)
+closeBracket stack out p = match stack with
+  LBlock _ :: (rest@(_ :: _)) -> closeBracket rest (mk DEDENT p :: out) p
+  LBracket :: (rest@(_ :: _)) -> (rest, out, True)
+  _ -> (stack, out, False)
+
+-- `started` is False for the first token; prev is the previous token's kind.
+layoutLoop : List Token -> Bool -> TokKind -> List LCtx -> List Token -> List Diag -> (List Token, List Diag)
+layoutLoop toks started prev stack out errs = match toks with
+  [] -> (out, errs)
+  t :: rest -> match tokKind t with
+    EOF ->
+      let closeAll st o = match st with
+        top :: (more@(_ :: _)) -> match isBracket top with
+          True -> closeAll more o
+          False -> closeAll more (mk DEDENT (tokPos t) :: o)
+        _ -> o
+      (t :: mk NEWLINE (tokPos t) :: closeAll stack out, errs)
+    _ ->
+      let (stack1, out1, errs1) = match tokFirst t && started with
+        True -> lineStart t prev stack out errs
+        False -> (stack, out, errs)
+      match tokKind t with
+        k | k == LPAREN || k == LBRACKET || k == LBRACE ->
+          layoutLoop rest True k (LBracket :: stack1) (t :: out1) errs1
+        k | k == RPAREN || k == RBRACKET || k == RBRACE ->
+          let (stack2, out2, ok) = closeBracket stack1 out1 (tokPos t)
+          let errs2 = match ok with
+            True -> errs1
+            False -> diagAt (tokPos t) "unbalanced ${kindName k}" :: errs1
+          layoutLoop rest True k stack2 (t :: out2) errs2
+        k -> layoutLoop rest True k stack1 (t :: out1) errs1
+
+-- Handle the first token of a line.
+lineStart : Token -> TokKind -> List LCtx -> List Token -> List Diag -> (List LCtx, List Token, List Diag)
+lineStart t prev stack out errs =
+  let c = posCol (tokPos t)
+  let p = tokPos t
+  match stack with
+    top :: _
+      | isBracket top -> match isOpener prev && c > enclosingBlockCol stack with
+          True -> (LBlock c :: stack, mk INDENT p :: out, errs)
+          False -> (stack, out, errs)
+      | c > ctxCol top -> match isOpener prev with
+          True -> (LBlock c :: stack, mk INDENT p :: out, errs)
+          False -> (stack, out, errs)
+      | c == ctxCol top -> (stack, mk NEWLINE p :: out, errs)
+      | otherwise ->
+          let (st, o) = popBlocks c stack out p
+          match st with
+            top2 :: _
+              | isBracket top2 -> (st, o, errs)
+              | c == ctxCol top2 -> (st, mk NEWLINE p :: o, errs)
+              | c < ctxCol top2 -> (st, o, diagAt p "inconsistent indentation" :: errs)
+            _ -> (st, o, errs)
+    [] -> (stack, out, errs)

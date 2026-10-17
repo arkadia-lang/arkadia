@@ -1,0 +1,28 @@
+module Main
+
+import Ark.Util
+import Ark.Ast
+import Ark.Lexer
+
+dumpTok : String -> Token -> String
+dumpTok ind t =
+  let fl = match tokFirst t with
+    True -> " F"
+    False -> ""
+  let sp = match tokSpace t with
+    True -> " S"
+    False -> ""
+  let head = ind ++ show (tagOf (tokKind t)) ++ " " ++ tokText t ++ " q=" ++ tokQual t ++ " " ++ posString (tokPos t) ++ " s=" ++ tokStr t ++ fl ++ sp ++ "\n"
+  head ++ concatStrings (mapList (dumpPart ind) (tokParts t))
+
+dumpPart : String -> InterpPart -> String
+dumpPart ind (InterpLit s) = ind ++ "  lit " ++ s ++ "\n"
+dumpPart ind (InterpExpr toks p) = ind ++ "  expr " ++ posString p ++ "\n" ++ concatStrings (mapList (dumpTok (ind ++ "    ")) toks)
+
+main () = match args () with
+  ["tokens", file] -> match readFile file with
+    Ok src -> match lex file src with
+      Ok toks -> print (concatStrings (mapList (dumpTok "") toks))
+      Err errs -> println ("ERR " ++ joinWith "\n" (mapList diagString errs))
+    Err e -> println e
+  _ -> println "usage"

@@ -1,0 +1,823 @@
+-- Data types shared by every phase: source positions, diagnostics, tokens,
+-- the syntax tree (with slots the type checker fills in), types, kinds and
+-- the descriptions of declared entities.
+module Ark.Ast
+
+import Ark.Util
+import Std.Map as Map
+
+-- ================================================================ positions
+
+type Pos = Pos String Int Int
+
+noPos : Pos
+noPos = Pos "" 0 0
+
+posFile : Pos -> String
+posFile (Pos f _ _) = f
+
+posLine : Pos -> Int
+posLine (Pos _ l _) = l
+
+posCol : Pos -> Int
+posCol (Pos _ _ c) = c
+
+posString : Pos -> String
+posString (Pos "" l c) = "${l}:${c}"
+posString (Pos f l c) = "${f}:${l}:${c}"
+
+-- ================================================================ diagnostics
+
+-- A compiler error: position, message and notes.
+type Diag = Diag Pos String (List String)
+
+diagAt : Pos -> String -> Diag
+diagAt p msg = Diag p msg []
+
+diagPos : Diag -> Pos
+diagPos (Diag p _ _) = p
+
+diagString : Diag -> String
+diagString (Diag p msg _) = posString p ++ ": " ++ msg
+
+-- ================================================================ tokens
+
+type TokKind
+  = EOF | NEWLINE | INDENT | DEDENT
+  | LIDENT | UIDENT | OP | INT | FLOAT | STRING | INTERP | CHAR
+  | LPAREN | RPAREN | LBRACKET | RBRACKET | LBRACE | RBRACE
+  | COMMA | SEMI | BACKTICK | BACKSLASH | EQUALS | BAR | ARROW | COLON | DARROW | AT | UNDERSCORE
+  | KwModule | KwImport | KwAs | KwType | KwAlias | KwClass | KwInstance | KwEffect | KwWhere
+  | KwLet | KwIn | KwMatch | KwWith | KwHandle | KwReturn | KwForeign
+  | KwInfixl | KwInfixr | KwInfix | KwPrivate | KwTest | KwDeriving
+
+instance Eq TokKind where
+  a == b = tagOf a == tagOf b
+
+keywordKind : String -> Option TokKind
+keywordKind s = match s with
+  "module" -> Some KwModule
+  "import" -> Some KwImport
+  "type" -> Some KwType
+  "class" -> Some KwClass
+  "instance" -> Some KwInstance
+  "effect" -> Some KwEffect
+  "where" -> Some KwWhere
+  "let" -> Some KwLet
+  "in" -> Some KwIn
+  "match" -> Some KwMatch
+  "with" -> Some KwWith
+  "handle" -> Some KwHandle
+  "return" -> Some KwReturn
+  "foreign" -> Some KwForeign
+  "infixl" -> Some KwInfixl
+  "infixr" -> Some KwInfixr
+  "infix" -> Some KwInfix
+  "private" -> Some KwPrivate
+  _ -> None
+
+kindName : TokKind -> String
+kindName k = match k with
+  EOF -> "end of file"
+  NEWLINE -> "newline"
+  INDENT -> "indent"
+  DEDENT -> "dedent"
+  LIDENT -> "identifier"
+  UIDENT -> "constructor"
+  OP -> "operator"
+  INT -> "integer"
+  FLOAT -> "float"
+  STRING -> "string"
+  INTERP -> "string"
+  CHAR -> "character"
+  LPAREN -> "'('"
+  RPAREN -> "')'"
+  LBRACKET -> "'['"
+  RBRACKET -> "']'"
+  LBRACE -> "'{'"
+  RBRACE -> "'}'"
+  COMMA -> "','"
+  SEMI -> "';'"
+  BACKTICK -> "'`'"
+  BACKSLASH -> "'\\'"
+  EQUALS -> "'='"
+  BAR -> "'|'"
+  ARROW -> "'->'"
+  COLON -> "':'"
+  DARROW -> "'=>'"
+  AT -> "'@'"
+  UNDERSCORE -> "'_'"
+  KwModule -> "'module'"
+  KwImport -> "'import'"
+  KwType -> "'type'"
+  KwClass -> "'class'"
+  KwInstance -> "'instance'"
+  KwEffect -> "'effect'"
+  KwWhere -> "'where'"
+  KwLet -> "'let'"
+  KwIn -> "'in'"
+  KwMatch -> "'match'"
+  KwWith -> "'with'"
+  KwHandle -> "'handle'"
+  KwReturn -> "'return'"
+  KwForeign -> "'foreign'"
+  KwInfixl -> "'infixl'"
+  KwInfixr -> "'infixr'"
+  KwInfix -> "'infix'"
+  KwPrivate -> "'private'"
+  _ -> "token(${tagOf k})"
+
+-- A piece of an interpolated string: literal text, or the tokens of an
+-- embedded expression.
+type InterpPart = InterpLit String | InterpExpr (List Token) Pos
+
+-- kind, text, qualifier, position, decoded string, interpolation parts,
+-- first token on its line, preceded by whitespace
+type Token = Token TokKind String String Pos String (List InterpPart) Bool Bool
+
+mkTok : TokKind -> String -> Pos -> Token
+mkTok k text p = Token k text "" p "" [] False False
+
+tokKind : Token -> TokKind
+tokKind (Token k _ _ _ _ _ _ _) = k
+
+tokText : Token -> String
+tokText (Token _ t _ _ _ _ _ _) = t
+
+tokQual : Token -> String
+tokQual (Token _ _ q _ _ _ _ _) = q
+
+tokPos : Token -> Pos
+tokPos (Token _ _ _ p _ _ _ _) = p
+
+tokStr : Token -> String
+tokStr (Token _ _ _ _ s _ _ _) = s
+
+tokParts : Token -> List InterpPart
+tokParts (Token _ _ _ _ _ ps _ _) = ps
+
+tokFirst : Token -> Bool
+tokFirst (Token _ _ _ _ _ _ f _) = f
+
+tokSpace : Token -> Bool
+tokSpace (Token _ _ _ _ _ _ _ s) = s
+
+setTokFirst : Bool -> Token -> Token
+setTokFirst f (Token k t q p s ps _ sp) = Token k t q p s ps f sp
+
+tokString : Token -> String
+tokString t = match tokKind t with
+  LIDENT -> quotedName t
+  UIDENT -> quotedName t
+  OP -> quotedName t
+  INT -> tokText t
+  FLOAT -> tokText t
+  STRING -> tokText t
+  CHAR -> tokText t
+  k -> kindName k
+
+private quotedName : Token -> String
+quotedName t = match tokQual t with
+  "" -> "'" ++ tokText t ++ "'"
+  q -> "'" ++ q ++ "." ++ tokText t ++ "'"
+
+-- ================================================================ kinds
+
+type Kind
+  = KStar
+  | KRow
+  | KEffect
+  | KArrow Kind Kind
+  | KVar Int (Ref (Option Kind))
+
+-- ================================================================ types
+
+type Type
+  = TCon String Kind
+  | TApp Type Type
+  | TFun Type Type Type
+  | TRowEmpty
+  | TRowExt Type Type
+  | TMeta Meta
+  | TSkol Int String Kind Int
+  | TGen Int
+
+-- A unification variable: id, kind, level and binding.
+type Meta = Meta Int Kind (Ref Int) (Ref (Option Type))
+
+metaId : Meta -> Int
+metaId (Meta i _ _ _) = i
+
+metaKind : Meta -> Kind
+metaKind (Meta _ k _ _) = k
+
+metaLevelRef : Meta -> Ref Int
+metaLevelRef (Meta _ _ l _) = l
+
+metaRef : Meta -> Ref (Option Type)
+metaRef (Meta _ _ _ r) = r
+
+-- A class constraint.
+type Pred = Pred ClassInfo Type
+
+-- kinds of the quantified variables, their display names, constraints, type
+type Scheme = Scheme (List Kind) (List String) (List Pred) Type
+
+mono : Type -> Scheme
+mono t = Scheme [] [] [] t
+
+schemeKinds : Scheme -> List Kind
+schemeKinds (Scheme ks _ _ _) = ks
+
+schemeNames : Scheme -> List String
+schemeNames (Scheme _ ns _ _) = ns
+
+schemePreds : Scheme -> List Pred
+schemePreds (Scheme _ _ ps _) = ps
+
+schemeType : Scheme -> Type
+schemeType (Scheme _ _ _ t) = t
+
+-- ================================================================ entities
+
+-- name, kind, params, constructors, builtin, module, position
+type TypeInfo = TypeInfo String (Ref Kind) (List String) (Ref (List CtorInfo)) Bool String Pos
+
+typeInfoName : TypeInfo -> String
+typeInfoName (TypeInfo n _ _ _ _ _ _) = n
+
+typeInfoKind : TypeInfo -> <IO> Kind
+typeInfoKind (TypeInfo _ k _ _ _ _ _) = readRef k
+
+typeInfoParams : TypeInfo -> List String
+typeInfoParams (TypeInfo _ _ ps _ _ _ _) = ps
+
+typeInfoCtors : TypeInfo -> <IO> List CtorInfo
+typeInfoCtors (TypeInfo _ _ _ cs _ _ _) = readRef cs
+
+typeInfoModule : TypeInfo -> String
+typeInfoModule (TypeInfo _ _ _ _ _ m _) = m
+
+typeInfoPos : TypeInfo -> Pos
+typeInfoPos (TypeInfo _ _ _ _ _ _ p) = p
+
+-- global name, short name, type name, type module, number of constructors
+-- of the type, tag, arity, scheme, field types (TGen terms), type position
+type CtorInfo = CtorInfo String String String String Int Int Int Scheme (List Type) Pos
+
+ctorName : CtorInfo -> String
+ctorName (CtorInfo n _ _ _ _ _ _ _ _ _) = n
+
+ctorShort : CtorInfo -> String
+ctorShort (CtorInfo _ s _ _ _ _ _ _ _ _) = s
+
+ctorTypeName : CtorInfo -> String
+ctorTypeName (CtorInfo _ _ t _ _ _ _ _ _ _) = t
+
+ctorTypeModule : CtorInfo -> String
+ctorTypeModule (CtorInfo _ _ _ m _ _ _ _ _ _) = m
+
+ctorSiblings : CtorInfo -> Int
+ctorSiblings (CtorInfo _ _ _ _ n _ _ _ _ _) = n
+
+ctorTag : CtorInfo -> Int
+ctorTag (CtorInfo _ _ _ _ _ t _ _ _ _) = t
+
+ctorArity : CtorInfo -> Int
+ctorArity (CtorInfo _ _ _ _ _ _ a _ _ _) = a
+
+ctorScheme : CtorInfo -> Scheme
+ctorScheme (CtorInfo _ _ _ _ _ _ _ s _ _) = s
+
+ctorTypePos : CtorInfo -> Pos
+ctorTypePos (CtorInfo _ _ _ _ _ _ _ _ _ p) = p
+
+-- name, params, body, module, defining scope, expanding
+type AliasInfo = AliasInfo String (List String) TypeExpr String Scope (Ref Bool)
+
+-- name, parameter kind, superclasses, methods, defaults (method -> symbol),
+-- module, position
+type ClassInfo = ClassInfo String (Ref Kind) (Ref (List ClassInfo)) (Ref (List MethodInfo)) (Ref (Map.Map String String)) String Pos
+
+className : ClassInfo -> String
+className (ClassInfo n _ _ _ _ _ _) = n
+
+classParamKind : ClassInfo -> <IO> Kind
+classParamKind (ClassInfo _ k _ _ _ _ _) = readRef k
+
+classSupers : ClassInfo -> <IO> List ClassInfo
+classSupers (ClassInfo _ _ s _ _ _ _) = readRef s
+
+classMethods : ClassInfo -> <IO> List MethodInfo
+classMethods (ClassInfo _ _ _ ms _ _ _) = readRef ms
+
+classDefaults : ClassInfo -> <IO> Map.Map String String
+classDefaults (ClassInfo _ _ _ _ ds _ _) = readRef ds
+
+classModule : ClassInfo -> String
+classModule (ClassInfo _ _ _ _ _ m _) = m
+
+instance Eq ClassInfo where
+  a == b = className a == className b
+
+-- class name, method name, slot, scheme (TGen 0 is the class variable)
+type MethodInfo = MethodInfo String String Int Scheme
+
+methodName : MethodInfo -> String
+methodName (MethodInfo _ n _ _) = n
+
+methodSlot : MethodInfo -> Int
+methodSlot (MethodInfo _ _ s _) = s
+
+methodScheme : MethodInfo -> Scheme
+methodScheme (MethodInfo _ _ _ s) = s
+
+findMethod : ClassInfo -> String -> <IO> Option MethodInfo
+findMethod cl name = find (\m -> methodName m == name) (classMethods cl)
+
+-- class, head type constructor, number of variables, kinds, head,
+-- context, dictionary symbol, methods (name -> symbol), superclass
+-- dictionaries, context parameter names, module, position, declaration
+type InstInfo = InstInfo ClassInfo String Int (List Kind) Type (List Pred) String (Ref (Map.Map String String)) (Ref (List DictExpr)) (Ref (List String)) String Pos Decl
+
+instClass : InstInfo -> ClassInfo
+instClass (InstInfo c _ _ _ _ _ _ _ _ _ _ _ _) = c
+
+instTyCon : InstInfo -> String
+instTyCon (InstInfo _ t _ _ _ _ _ _ _ _ _ _ _) = t
+
+instNVars : InstInfo -> Int
+instNVars (InstInfo _ _ n _ _ _ _ _ _ _ _ _ _) = n
+
+instKinds : InstInfo -> List Kind
+instKinds (InstInfo _ _ _ ks _ _ _ _ _ _ _ _ _) = ks
+
+instHead : InstInfo -> Type
+instHead (InstInfo _ _ _ _ h _ _ _ _ _ _ _ _) = h
+
+instContext : InstInfo -> List Pred
+instContext (InstInfo _ _ _ _ _ c _ _ _ _ _ _ _) = c
+
+instSym : InstInfo -> String
+instSym (InstInfo _ _ _ _ _ _ s _ _ _ _ _ _) = s
+
+instMethods : InstInfo -> Ref (Map.Map String String)
+instMethods (InstInfo _ _ _ _ _ _ _ m _ _ _ _ _) = m
+
+instSuperDicts : InstInfo -> Ref (List DictExpr)
+instSuperDicts (InstInfo _ _ _ _ _ _ _ _ s _ _ _ _) = s
+
+instCtxParams : InstInfo -> Ref (List String)
+instCtxParams (InstInfo _ _ _ _ _ _ _ _ _ c _ _ _) = c
+
+instModule : InstInfo -> String
+instModule (InstInfo _ _ _ _ _ _ _ _ _ _ m _ _) = m
+
+instPos : InstInfo -> Pos
+instPos (InstInfo _ _ _ _ _ _ _ _ _ _ _ p _) = p
+
+instDecl : InstInfo -> Decl
+instDecl (InstInfo _ _ _ _ _ _ _ _ _ _ _ _ d) = d
+
+-- name, kind, number of parameters, operations, module, position
+type EffectInfo = EffectInfo String (Ref Kind) Int (Ref (List OpInfo)) String Pos
+
+effectName : EffectInfo -> String
+effectName (EffectInfo n _ _ _ _ _) = n
+
+effectKind : EffectInfo -> <IO> Kind
+effectKind (EffectInfo _ k _ _ _ _) = readRef k
+
+effectNParams : EffectInfo -> Int
+effectNParams (EffectInfo _ _ n _ _ _) = n
+
+effectOps : EffectInfo -> <IO> List OpInfo
+effectOps (EffectInfo _ _ _ ops _ _) = readRef ops
+
+effectModule : EffectInfo -> String
+effectModule (EffectInfo _ _ _ _ m _) = m
+
+-- effect name, name, index, arity, symbol, scheme, parameter types,
+-- result type, index of the ambient row variable (-1 if none)
+type OpInfo = OpInfo String String Int Int String Scheme (List Type) Type Int
+
+opEffect : OpInfo -> String
+opEffect (OpInfo e _ _ _ _ _ _ _ _) = e
+
+opName : OpInfo -> String
+opName (OpInfo _ n _ _ _ _ _ _ _) = n
+
+opIndex : OpInfo -> Int
+opIndex (OpInfo _ _ i _ _ _ _ _ _) = i
+
+opArity : OpInfo -> Int
+opArity (OpInfo _ _ _ a _ _ _ _ _) = a
+
+opSym : OpInfo -> String
+opSym (OpInfo _ _ _ _ s _ _ _ _) = s
+
+opScheme : OpInfo -> Scheme
+opScheme (OpInfo _ _ _ _ _ s _ _ _) = s
+
+opParams : OpInfo -> List Type
+opParams (OpInfo _ _ _ _ _ _ ps _ _) = ps
+
+opRes : OpInfo -> Type
+opRes (OpInfo _ _ _ _ _ _ _ r _) = r
+
+opAmbient : OpInfo -> Int
+opAmbient (OpInfo _ _ _ _ _ _ _ _ a) = a
+
+-- short name, symbol, scheme (set after inference for unannotated
+-- bindings), method, operation, foreign target, arity, position, binding,
+-- group state while its group is being inferred
+type ValueInfo = ValueInfo String String (Ref (Option Scheme)) (Option MethodInfo) (Option OpInfo) String Int Pos (Option Bind) (Ref (Option (Ref (List String), Type)))
+
+valueName : ValueInfo -> String
+valueName (ValueInfo n _ _ _ _ _ _ _ _ _) = n
+
+valueSym : ValueInfo -> String
+valueSym (ValueInfo _ s _ _ _ _ _ _ _ _) = s
+
+valueSchemeRef : ValueInfo -> Ref (Option Scheme)
+valueSchemeRef (ValueInfo _ _ s _ _ _ _ _ _ _) = s
+
+valueMethod : ValueInfo -> Option MethodInfo
+valueMethod (ValueInfo _ _ _ m _ _ _ _ _ _) = m
+
+valueOp : ValueInfo -> Option OpInfo
+valueOp (ValueInfo _ _ _ _ o _ _ _ _ _) = o
+
+valueForeign : ValueInfo -> String
+valueForeign (ValueInfo _ _ _ _ _ f _ _ _ _) = f
+
+valueArity : ValueInfo -> Int
+valueArity (ValueInfo _ _ _ _ _ _ a _ _ _) = a
+
+valuePos : ValueInfo -> Pos
+valuePos (ValueInfo _ _ _ _ _ _ _ p _ _) = p
+
+valueBind : ValueInfo -> Option Bind
+valueBind (ValueInfo _ _ _ _ _ _ _ _ b _) = b
+
+valueGroup : ValueInfo -> Ref (Option (Ref (List String), Type))
+valueGroup (ValueInfo _ _ _ _ _ _ _ _ _ g) = g
+
+-- A type-level name.
+type TypeEntry
+  = TEType TypeInfo
+  | TEClass ClassInfo
+  | TEEffect EffectInfo
+  | TEAlias AliasInfo
+  | TEAmbig (List String)
+
+-- A value-level name in scope.
+type ValEntry = VEValue ValueInfo | VEAmbig (List String)
+
+-- A constructor name in scope.
+type CtorEntry = CEctor CtorInfo | CEAmbig (List String)
+
+-- The public interface of a module.
+type Exports = Exports String (Ref (Map.Map String ValueInfo)) (Ref (Map.Map String TypeEntry)) (Ref (Map.Map String CtorInfo))
+
+exportsModule : Exports -> String
+exportsModule (Exports m _ _ _) = m
+
+exportsValues : Exports -> Ref (Map.Map String ValueInfo)
+exportsValues (Exports _ v _ _) = v
+
+exportsTypes : Exports -> Ref (Map.Map String TypeEntry)
+exportsTypes (Exports _ _ t _) = t
+
+exportsCtors : Exports -> Ref (Map.Map String CtorInfo)
+exportsCtors (Exports _ _ _ c) = c
+
+newExports : String -> <IO> Exports
+newExports m = Exports m (newRef Map.empty) (newRef Map.empty) (newRef Map.empty)
+
+-- The top-level naming environment of a module.
+type Scope = Scope (Ref (Map.Map String ValEntry)) (Ref (Map.Map String TypeEntry)) (Ref (Map.Map String CtorEntry)) (Ref (Map.Map String (List Exports)))
+
+newScope : Unit -> <IO> Scope
+newScope () = Scope (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty)
+
+scopeValues : Scope -> Ref (Map.Map String ValEntry)
+scopeValues (Scope v _ _ _) = v
+
+scopeTypes : Scope -> Ref (Map.Map String TypeEntry)
+scopeTypes (Scope _ t _ _) = t
+
+scopeCtors : Scope -> Ref (Map.Map String CtorEntry)
+scopeCtors (Scope _ _ c _) = c
+
+scopeQuals : Scope -> Ref (Map.Map String (List Exports))
+scopeQuals (Scope _ _ _ q) = q
+
+-- name, symbol, module
+type TestInfo = TestInfo String String String
+
+-- Information shared by all modules of a program.
+type Global = Global
+  (Ref (Map.Map String Exports))
+  (Ref (Map.Map String (Map.Map String InstInfo)))
+  (Ref (List InstInfo))
+  (Ref (Map.Map String TypeInfo))
+  (Ref (Map.Map String ClassInfo))
+  (Ref (Map.Map String EffectInfo))
+  (Ref (Map.Map String ValueInfo))
+  (Ref (List TestInfo))
+  (Ref Int)
+
+newGlobal : Unit -> <IO> Global
+newGlobal () = Global (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef 0)
+
+gModules : Global -> Ref (Map.Map String Exports)
+gModules (Global m _ _ _ _ _ _ _ _) = m
+
+gInstances : Global -> Ref (Map.Map String (Map.Map String InstInfo))
+gInstances (Global _ i _ _ _ _ _ _ _) = i
+
+-- instances in reverse order of declaration
+gInstList : Global -> Ref (List InstInfo)
+gInstList (Global _ _ l _ _ _ _ _ _) = l
+
+gTypes : Global -> Ref (Map.Map String TypeInfo)
+gTypes (Global _ _ _ t _ _ _ _ _) = t
+
+gClasses : Global -> Ref (Map.Map String ClassInfo)
+gClasses (Global _ _ _ _ c _ _ _ _) = c
+
+gEffects : Global -> Ref (Map.Map String EffectInfo)
+gEffects (Global _ _ _ _ _ e _ _ _) = e
+
+gValues : Global -> Ref (Map.Map String ValueInfo)
+gValues (Global _ _ _ _ _ _ v _ _) = v
+
+-- tests in reverse order of declaration
+gTests : Global -> Ref (List TestInfo)
+gTests (Global _ _ _ _ _ _ _ t _) = t
+
+gNextId : Global -> Ref Int
+gNextId (Global _ _ _ _ _ _ _ _ n) = n
+
+freshId : Global -> <IO> Int
+freshId g = nextId (gNextId g)
+
+-- ================================================================ syntax: types
+
+type TypeExpr
+  = TVarE Pos String
+  | TConE Pos String String
+  | TAppE Pos TypeExpr (List TypeExpr)
+  | TFunE Pos TypeExpr (Option RowE) TypeExpr
+  | TTupleE Pos (List TypeExpr)
+  | TUnitE Pos
+
+typePos : TypeExpr -> Pos
+typePos te = match te with
+  TVarE p _ -> p
+  TConE p _ _ -> p
+  TAppE p _ _ -> p
+  TFunE p _ _ _ -> p
+  TTupleE p _ -> p
+  TUnitE p -> p
+
+-- An effect row `<L1, L2 | tail>`; the tail is "" when closed.
+type RowE = RowE Pos (List TypeExpr) String
+
+-- A class constraint: position, qualifier, class, type.
+type PredE = PredE Pos String String TypeExpr
+
+-- `ctx => type`
+type SchemeE = SchemeE (List PredE) TypeExpr
+
+-- ================================================================ syntax: patterns
+
+type Lit = LInt Int | LFloat Float | LString String | LChar Char
+
+type Pattern
+  = PVar Pos String (Ref String)
+  | PWild Pos
+  | PLit Pos Lit
+  | PCon Pos String String (List Pattern) (Ref (Option CtorInfo))
+  | PTuple Pos (List Pattern)
+  | PList Pos (List Pattern)
+  | PAs Pos String (Ref String) Pattern
+  | PUnit Pos
+  | PAnnot Pos Pattern TypeExpr
+
+patPos : Pattern -> Pos
+patPos p = match p with
+  PVar pos _ _ -> pos
+  PWild pos -> pos
+  PLit pos _ -> pos
+  PCon pos _ _ _ _ -> pos
+  PTuple pos _ -> pos
+  PList pos _ -> pos
+  PAs pos _ _ _ -> pos
+  PUnit pos -> pos
+  PAnnot pos _ _ -> pos
+
+-- ================================================================ syntax: expressions
+
+-- The resolution of a variable occurrence: local, id (local unique id or
+-- global symbol), dictionary parameters of a monomorphic recursive
+-- reference, method, operation, constructor (operators like `::`).
+type VarRef = VarRef Bool String (Option (Ref (List String))) (Option MethodInfo) (Option OpInfo) (Option CtorInfo)
+
+-- A placeholder for a dictionary argument: class and solution.
+type DictRef = DictRef String (Ref (Option DictExpr))
+
+type DictExpr
+  = DictInst String (List DictExpr)
+  | DictParam String
+  | DictSuper DictExpr Int
+  | DictHole DictRef
+
+type Expr
+  = ELit Pos Lit
+  | EVar Pos String String (Ref (Option VarRef)) (Ref (List DictRef))
+  | ECon Pos String String (Ref (Option CtorInfo))
+  | EApp Pos Expr (List Expr) (Ref (Map.Map Int (List String)))
+  | ELam Pos (List Pattern) Expr
+  | ELet Pos (List Bind) Expr
+  | EBlock Pos (List Stmt)
+  | EMatch Pos Expr (List Arm)
+  | EHandle Pos Expr (Option HandlerClause) (List HandlerClause) (Ref String)
+  | ETuple Pos (List Expr)
+  | EList Pos (List Expr)
+  | EUnit Pos
+  | EOpChain Pos (List Expr) (List Expr)
+  | EBinOp Pos Expr Expr Expr
+  | ENeg Pos Expr
+  | ESection Pos Expr (Option Expr) (Option Expr)
+  | EInterp Pos (List Expr)
+  | EAnnot Pos Expr SchemeE
+
+exprPos : Expr -> Pos
+exprPos e = match e with
+  ELit p _ -> p
+  EVar p _ _ _ _ -> p
+  ECon p _ _ _ -> p
+  EApp p _ _ _ -> p
+  ELam p _ _ -> p
+  ELet p _ _ -> p
+  EBlock p _ -> p
+  EMatch p _ _ -> p
+  EHandle p _ _ _ _ -> p
+  ETuple p _ -> p
+  EList p _ -> p
+  EUnit p -> p
+  EOpChain p _ _ -> p
+  EBinOp p _ _ _ -> p
+  ENeg p _ -> p
+  ESection p _ _ _ -> p
+  EInterp p _ -> p
+  EAnnot p _ _ -> p
+
+-- A fresh variable reference node.
+mkVar : Pos -> String -> String -> <IO> Expr
+mkVar p qual name = EVar p qual name (newRef None) (newRef [])
+
+mkCon : Pos -> String -> String -> <IO> Expr
+mkCon p qual name = ECon p qual name (newRef None)
+
+mkApp : Pos -> Expr -> List Expr -> <IO> Expr
+mkApp p f args = EApp p f args (newRef Map.empty)
+
+mkPVar : Pos -> String -> <IO> Pattern
+mkPVar p name = PVar p name (newRef "")
+
+mkPCon : Pos -> String -> String -> List Pattern -> <IO> Pattern
+mkPCon p qual name args = PCon p qual name args (newRef None)
+
+varName : Expr -> String
+varName (EVar _ _ n _ _) = n
+varName _ = ""
+
+varQual : Expr -> String
+varQual (EVar _ q _ _ _) = q
+varQual _ = ""
+
+type Stmt = SExpr Expr | SLet Bind
+
+-- A match arm.
+type Arm = Arm Pos Pattern Rhs
+
+-- A plain body or guarded bodies.
+type Rhs = RBody Expr | RGuards (List Guard)
+
+type Guard = Guard Pos Expr Expr
+
+-- `return x -> e` (name "") or `op p1 .. pn k -> e`.
+type HandlerClause = HandlerClause Pos String (List Pattern) Expr (Ref (Option OpInfo))
+
+hcPos : HandlerClause -> Pos
+hcPos (HandlerClause p _ _ _ _) = p
+
+hcName : HandlerClause -> String
+hcName (HandlerClause _ n _ _ _) = n
+
+hcParams : HandlerClause -> List Pattern
+hcParams (HandlerClause _ _ ps _ _) = ps
+
+hcBody : HandlerClause -> Expr
+hcBody (HandlerClause _ _ _ b _) = b
+
+hcOp : HandlerClause -> Ref (Option OpInfo)
+hcOp (HandlerClause _ _ _ _ o) = o
+
+-- One equation of a function definition.
+type Clause = Clause Pos (List Pattern) Rhs
+
+clauseParams : Clause -> List Pattern
+clauseParams (Clause _ ps _) = ps
+
+clauseRhs : Clause -> Rhs
+clauseRhs (Clause _ _ r) = r
+
+-- Elaboration results: dictionary parameters, group dictionary parameters
+-- (shared by the members of a recursive group), scheme.
+type BindInfo = BindInfo (List String) (Option (Ref (List String))) (Option Scheme)
+
+-- A function binding (name, clauses) or a pattern binding (name "").
+-- position, name, pattern, clauses, local signature, unique id, info
+type Bind = Bind Pos String (Option Pattern) (List Clause) (Option SchemeE) (Ref String) (Ref (Option BindInfo))
+
+bindPos : Bind -> Pos
+bindPos (Bind p _ _ _ _ _ _) = p
+
+bindName : Bind -> String
+bindName (Bind _ n _ _ _ _ _) = n
+
+bindPat : Bind -> Option Pattern
+bindPat (Bind _ _ p _ _ _ _) = p
+
+bindClauses : Bind -> List Clause
+bindClauses (Bind _ _ _ cs _ _ _) = cs
+
+bindSig : Bind -> Option SchemeE
+bindSig (Bind _ _ _ _ s _ _) = s
+
+bindId : Bind -> Ref String
+bindId (Bind _ _ _ _ _ i _) = i
+
+bindInfo : Bind -> Ref (Option BindInfo)
+bindInfo (Bind _ _ _ _ _ _ i) = i
+
+withClauses : List Clause -> Bind -> Bind
+withClauses cs (Bind p n pat _ sig i info) = Bind p n pat cs sig i info
+
+mkBind : Pos -> String -> Option Pattern -> List Clause -> Option SchemeE -> <IO> Bind
+mkBind p name pat cs sig = Bind p name pat cs sig (newRef "") (newRef None)
+
+-- ================================================================ syntax: declarations
+
+type ImportName = ImportName Pos String Int Bool
+
+-- position, module path, alias, names, `(..)`
+type Import = Import Pos String String (List ImportName) Bool
+
+importPath : Import -> String
+importPath (Import _ p _ _ _) = p
+
+-- A signature: position, name, scheme, private.
+type Sig = Sig Pos String SchemeE Bool
+
+sigPos : Sig -> Pos
+sigPos (Sig p _ _ _) = p
+
+sigName : Sig -> String
+sigName (Sig _ n _ _) = n
+
+sigScheme : Sig -> SchemeE
+sigScheme (Sig _ _ s _) = s
+
+type CtorDecl = CtorDecl Pos String (List TypeExpr)
+
+type Decl
+  = DSig Sig
+  | DFun Pos Bind Bool
+  | DType Pos String (List String) (List CtorDecl) (List String) Bool
+  | DAlias Pos String (List String) TypeExpr
+  | DClass Pos String String (List PredE) (List Sig) (List Bind)
+  | DInstance Pos (List PredE) String String TypeExpr (List Bind) Bool
+  | DEffect Pos String (List String) (List Sig)
+  | DForeign Pos String SchemeE String
+  | DFixity Pos Int Int (List String)
+  | DTest Pos String Expr (Ref String)
+
+-- name, file, imports, declarations
+type Module = Module String String (List Import) (List Decl)
+
+moduleName : Module -> String
+moduleName (Module n _ _ _) = n
+
+moduleFile : Module -> String
+moduleFile (Module _ f _ _) = f
+
+moduleImports : Module -> List Import
+moduleImports (Module _ _ is _) = is
+
+moduleDecls : Module -> List Decl
+moduleDecls (Module _ _ _ ds) = ds

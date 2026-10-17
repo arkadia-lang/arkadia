@@ -1,0 +1,4 @@
+[package]
+name = "arkc"
+version = "0.1.0"
+description = "The Arkadia compiler, written in Arkadia"

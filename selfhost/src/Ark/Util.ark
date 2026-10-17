@@ -1,0 +1,129 @@
+-- Small utilities shared by the compiler: mutable references, string and
+-- list helpers.
+module Ark.Util
+
+-- ------------------------------------------------------------ references
+
+type Ref a
+
+foreign newRef : a -> <IO> Ref a = "NativeRefNew"
+foreign readRef : Ref a -> <IO> a = "NativeRefGet"
+foreign writeRef : Ref a -> a -> <IO> Unit = "NativeRefSet"
+
+modifyRef : Ref a -> (a -> a) -> <IO | e> Unit
+modifyRef r f = writeRef r (f (readRef r))
+
+-- Increment a counter and return the new value.
+nextId : Ref Int -> <IO> Int
+nextId r =
+  let n = readRef r + 1
+  writeRef r n
+  n
+
+-- Constructor tag of a data value (O(1) equality for enumerations).
+foreign tagOf : a -> Int = "NativeTag"
+
+-- ------------------------------------------------------------ numbers
+
+foreign parseIntLit : String -> Option Int = "NativeParseInt"
+foreign parseFloatLit : String -> Option Float = "NativeParseFloat"
+foreign formatFloat : Float -> String = "NativeFormatFloat"
+
+-- ------------------------------------------------------------ files and paths
+
+foreign formatGo : String -> Result String String = "NativeFormatGo"
+foreign pathJoin : String -> String -> String = "NativePathJoin"
+foreign pathDir : String -> String = "NativePathDir"
+foreign pathBase : String -> String = "NativePathBase"
+foreign pathIsAbs : String -> Bool = "NativePathIsAbs"
+foreign pathAbs : String -> <IO> String = "NativePathAbs"
+foreign isDir : String -> <IO> Bool = "NativeIsDir"
+foreign executablePath : Unit -> <IO> String = "NativeExecutable"
+foreign userCacheDir : Unit -> <IO> String = "NativeUserCacheDir"
+
+-- ------------------------------------------------------------ strings
+
+-- Text after the last '.' (or the whole string).
+shortName : String -> String
+shortName n = match reverse (split "." n) with
+  last :: _ -> last
+  [] -> n
+
+-- Text before the last '.' ("" when there is none).
+qualifierOf : String -> String
+qualifierOf n = match reverse (split "." n) with
+  _ :: (rest@(_ :: _)) -> joinWith "." (reverse rest)
+  _ -> ""
+
+-- Join names as "a", "a and b", "a, b and c".
+joinNames : List String -> String
+joinNames ns = joinNamesAcc ns 0 (length ns) ""
+
+private joinNamesAcc : List String -> Int -> Int -> String -> String
+joinNamesAcc [] _ _ acc = acc
+joinNamesAcc (n :: rest) i total acc
+  | i == 0 = joinNamesAcc rest 1 total n
+  | i == total - 1 = joinNamesAcc rest (i + 1) total (acc ++ " and " ++ n)
+  | otherwise = joinNamesAcc rest (i + 1) total (acc ++ ", " ++ n)
+
+showBool : Bool -> String
+showBool True = "true"
+showBool False = "false"
+
+strRepeat : Int -> String -> String
+strRepeat n s = concatStrings (replicate n s)
+
+-- ------------------------------------------------------------ lists
+
+snoc : List a -> a -> List a
+snoc xs x = xs ++ [x]
+
+-- Element at an index (the index must be valid).
+at : Int -> List a -> a
+at i xs = match nth i xs with
+  Some x -> x
+  None -> error "index out of range: ${i}"
+
+-- Replace the element at an index.
+setAt : Int -> a -> List a -> List a
+setAt i v xs = setAtAcc i v xs []
+
+private setAtAcc : Int -> a -> List a -> List a -> List a
+setAtAcc _ _ [] acc = reverse acc
+setAtAcc i v (x :: rest) acc
+  | i == 0 = reverseOnto2 acc (v :: rest)
+  | otherwise = setAtAcc (i - 1) v rest (x :: acc)
+
+private reverseOnto2 : List a -> List a -> List a
+reverseOnto2 [] ys = ys
+reverseOnto2 (x :: xs) ys = reverseOnto2 xs (x :: ys)
+
+-- All but the last element.
+initList : List a -> List a
+initList xs = reverse (drop 1 (reverse xs))
+
+lastOf : List a -> a
+lastOf xs = match last xs with
+  Some x -> x
+  None -> error "lastOf: empty list"
+
+-- Pairs each element with its index.
+indexed : List a -> List (Int, a)
+indexed xs = enumerate xs
+
+-- True when any element satisfies the predicate (effect polymorphic).
+anyOf : (a -> Bool) -> List a -> Bool
+anyOf _ [] = False
+anyOf p (x :: xs)
+  | p x = True
+  | otherwise = anyOf p xs
+
+allOf : (a -> Bool) -> List a -> Bool
+allOf _ [] = True
+allOf p (x :: xs)
+  | p x = allOf p xs
+  | otherwise = False
+
+-- Insertion sort for strings (stable, bytewise like Go).
+sortStrings : List String -> List String
+sortStrings xs = sortBy compare xs
