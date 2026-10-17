@@ -1,0 +1,88 @@
+-- Command-line argument parsing.
+--
+--   import Std.Args
+--   main () = match parseArgs ["output", "o"] (args ()) with
+--     Err msg -> eprintln msg
+--     Ok opts ->
+--       let verbose = hasFlag "verbose" opts || hasFlag "v" opts
+--       let out = withDefault "a.out" (firstOption ["output", "o"] opts)
+--       forEach opts.positional println
+--
+-- Recognized forms (the names in the first argument of parseArgs take a
+-- value; every other option is a flag):
+--
+--   --name=value   --name value   -n value   -nvalue   an option with a value
+--   --name   -abc                                       flags (-abc is -a -b -c)
+--   -   anything else                                   positional arguments
+--   --                                                  ends the options
+module Std.Args
+
+import Std.String (splitOnce)
+import Std.String as S
+
+-- flags and options in command-line order (an option may be repeated)
+type Args = Args { flags : List String, options : List (String, String), positional : List String }
+  deriving (Show, Eq)
+
+-- Parse arguments; options whose names are listed take a value.
+parseArgs : List String -> List String -> Result String Args
+parseArgs valued argv = parseLoop valued argv (Args { flags = [], options = [], positional = [] })
+
+private parseLoop : List String -> List String -> Args -> Result String Args
+parseLoop valued argv acc = match argv with
+  [] -> Ok (Args { flags = reverse acc.flags, options = reverse acc.options, positional = reverse acc.positional })
+  "--" :: rest -> parseLoop valued [] { acc | positional = Prelude.foldl (\ps a -> a :: ps) acc.positional rest }
+  a :: rest
+    | startsWith "--" a -> long valued (S.drop 2 a) rest acc
+    | startsWith "-" a && a != "-" && not (isNumber a) -> short valued (chars (S.drop 1 a)) rest acc
+    | otherwise -> parseLoop valued rest { acc | positional = a :: acc.positional }
+
+private isNumber : String -> Bool
+isNumber s = isSome (parseFloat s)
+
+private long : List String -> String -> List String -> Args -> Result String Args
+long valued body rest acc = match splitOnce "=" body with
+  Some (name, value) -> parseLoop valued rest { acc | options = (name, value) :: acc.options }
+  None
+    | elem body valued -> match rest with
+        value :: more -> parseLoop valued more { acc | options = (body, value) :: acc.options }
+        [] -> Err "option --${body} needs a value"
+    | otherwise -> parseLoop valued rest { acc | flags = body :: acc.flags }
+
+private short : List String -> List Char -> List String -> Args -> Result String Args
+short valued cs rest acc = match cs with
+  [] -> parseLoop valued rest acc
+  c :: more
+    | elem (charToString c) valued -> match (more, rest) with
+        ([], value :: rest2) -> parseLoop valued rest2 { acc | options = (charToString c, value) :: acc.options }
+        ([], []) -> Err "option -${charToString c} needs a value"
+        (_, _) -> parseLoop valued rest { acc | options = (charToString c, fromChars more) :: acc.options }
+    | otherwise -> short valued more rest { acc | flags = charToString c :: acc.flags }
+
+hasFlag : String -> Args -> Bool
+hasFlag name a = elem name a.flags
+
+-- The last value given for an option.
+option : String -> Args -> Option String
+option name a = Prelude.last (optionAll name a)
+
+-- Every value given for an option, in order.
+optionAll : String -> Args -> List String
+optionAll name a = filterMap (\(n, v) -> match n == name with
+  True -> Some v
+  False -> None) a.options
+
+-- The last value given under any of several names (e.g. a long and a
+-- short one).
+firstOption : List String -> Args -> Option String
+firstOption names a = Prelude.last (filterMap (\(n, v) -> match elem n names with
+  True -> Some v
+  False -> None) a.options)
+
+-- An option parsed as an Int; Err when it is not a number.
+optionInt : String -> Args -> Result String (Option Int)
+optionInt name a = match option name a with
+  None -> Ok None
+  Some v -> match parseInt v with
+    Some n -> Ok (Some n)
+    None -> Err "option ${name} must be an integer, got \"${v}\""

@@ -227,6 +227,11 @@ bin/arkc run examples/lisp.ark
 | `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻と計測、可変参照 |
 | `Std.Http` | HTTP サーバ（ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie）と HTTP クライアント |
 | `Std.Net` / `Std.Url` | TCP ソケット・名前解決、URL のパース・パーセントエンコード・クエリ文字列 |
+| `Std.Regex` | 正規表現（RE2 構文）。一致・キャプチャ・名前付きグループ・置換（関数による置換も可）・分割 |
+| `Std.MArray` / `Std.HashMap` | 可変配列（push/pop・その場ソート・freeze/thaw）、挿入順を保つ可変ハッシュマップ（構造的なキー比較） |
+| `Std.BigInt` | 多倍長整数（`Num`/`Ord`/`Show` のインスタンス、`pow`, `powMod`, `gcd`, `isqrt`, 基数変換） |
+| `Std.Encoding` / `Std.Crypto` | Base64（URL セーフ版を含む）・16 進、MD5/SHA-1/SHA-256/SHA-512・HMAC-SHA256、安全な乱数・UUID |
+| `Std.Args` | コマンドライン引数の解析（`--name=value`, `-n value`, `-abc`, `--`） |
 
 モジュールの公開インターフェースは `ark doc Std.Map` のように表示できます。
 

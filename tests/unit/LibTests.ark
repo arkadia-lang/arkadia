@@ -1,0 +1,100 @@
+-- Unit tests for Std.Regex, Std.MArray, Std.HashMap, Std.BigInt,
+-- Std.Encoding, Std.Crypto and Std.Args.
+module LibTests
+
+import Std.Regex as Re
+import Std.MArray as MA
+import Std.HashMap as HM
+import Std.BigInt (BigInt, big)
+import Std.BigInt as Big
+import Std.Array as Array
+import Std.Encoding
+import Std.Crypto
+import Std.Args
+import Std.Result (isErr)
+
+test "regex matching and captures" =
+  let date = Re.regex "(\\d{4})-(\\d{2})-(\\d{2})"
+  assert (Re.matches date "due 2024-05-06") "matches"
+  assert (not (Re.matches (Re.regex "^\\d+$") "12a")) "anchored"
+  assertEq (Re.find date "x 2024-05-06 y") (Some "2024-05-06")
+  assertEq (Re.captures date "due 2024-05-06") (Some ["2024-05-06", "2024", "05", "06"])
+  assertEq (Re.findAll (Re.regex "\\d+") "a1 b22 c333") ["1", "22", "333"]
+  assertEq (map (\gs -> nth 1 gs) (Re.capturesAll (Re.regex "(\\w)=") "a=1 b=2")) [Some "a", Some "b"]
+  assert (isErr (Re.compile "(")) "invalid pattern"
+
+test "regex replacement and splitting" =
+  let date = Re.regex "(?P<y>\\d{4})-(?P<m>\\d{2})"
+  assertEq (Re.replace date "\${m}/\${y}" "2024-05 and 2023-12") "05/2024 and 12/2023"
+  assertEq (Re.replaceLiteral (Re.regex "a") "$1" "banana") "b$1n$1n$1"
+  assertEq (Re.replaceWith (Re.regex "\\d+") (\gs -> show (stringLength (withDefault "" (head gs)))) "7 and 4242") "1 and 4"
+  assertEq (Re.split (Re.regex ",\\s*") "a, b,c") ["a", "b", "c"]
+  assertEq (Re.captures date "2024-05" |> map (Re.group "m" date) |> withDefault None) (Some "05")
+  assertEq (Re.quote "a.b*c") "a\\.b\\*c"
+
+test "mutable arrays" =
+  let a = MA.make 3 0
+  MA.set 1 5 a
+  MA.push 7 a
+  MA.modify 0 (+ 2) a
+  assertEq (MA.toList a) [2, 5, 0, 7]
+  assertEq (MA.length a, MA.get 9 a, MA.at 3 a) (4, None, 7)
+  assertEq (MA.pop a) (Some 7)
+  MA.sort a
+  assertEq (MA.toList a) [0, 2, 5]
+  MA.reverse a
+  MA.swap 0 2 a
+  assertEq (MA.toList a) [0, 2, 5]
+  let frozen = MA.freeze a
+  MA.set 0 9 a
+  assertEq (Array.toList frozen, MA.foldl (+) 0 a) ([0, 2, 5], 16)
+
+test "hash maps" =
+  let m = HM.fromList [("b", 1), ("a", 2)]
+  HM.insert "c" 3 m
+  HM.insert "b" 10 m
+  assertEq (HM.toList m) [("b", 10), ("a", 2), ("c", 3)]
+  HM.remove "a" m
+  assertEq (HM.keys m, HM.size m, HM.member "a" m) (["b", "c"], 2, False)
+  HM.modify "d" 0 (+ 1) m
+  HM.alter "b" (\_ -> None) m
+  assertEq (HM.toList m) [("c", 3), ("d", 1)]
+  let structural = HM.new ()
+  HM.insert (Some [1, 2], 'x') "found" structural
+  assertEq (HM.lookup (Some [1, 2], 'x') structural, HM.lookup (Some [2], 'x') structural) (Some "found", None)
+  assertEq (HM.getOrInsert (None, 'y') (\_ -> "made") structural) "made"
+  assertEq (HM.size structural) 2
+
+test "big integers" =
+  let f = foldl (*) (big 1) (map big [1 .. 25])
+  assertEq (show f) "15511210043330985984000000"
+  assertEq (Big.pow (big 2) 64 - big 1) (withDefault (big 0) (Big.parse "18446744073709551615"))
+  assertEq (Big.toInt (big 42), Big.toInt (Big.pow (big 10) 30)) (Some 42, None)
+  assertEq (big (-7) / big 2, Big.rem (big (-7)) (big 2)) (big (-3), big (-1))
+  assert (Big.pow (big 3) 50 > Big.pow (big 2) 70) "ordering"
+  assertEq (Big.toStringBase 16 (big 255), Big.gcd (big 12) (big 18)) ("ff", big 6)
+  assertEq (Big.powMod (big 4) (big 13) (big 497), Big.isqrt (big 99)) (big 445, big 9)
+  assertEq "${big 12}" "12"
+
+test "encodings and hashes" =
+  assertEq (base64Encode "hello", base64Decode "aGVsbG8=") ("aGVsbG8=", Ok "hello")
+  assertEq (base64UrlEncode "\u{ff}\u{fe}", hexEncode "hi") ("w7_Dvg", "6869")
+  assertEq (base64UrlDecode "w7_Dvg", hexDecode "6869") (Ok "\u{ff}\u{fe}", Ok "hi")
+  assert (isErr (base64Decode "!!")) "invalid base64"
+  assertEq (sha256 "abc") "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  assertEq (md5 "") "d41d8cd98f00b204e9800998ecf8427e"
+  assertEq (sha1 "abc") "a9993e364706816aba3e25717850c26c9cd0d89d"
+  assertEq (hmacSha256 "key" "The quick brown fox jumps over the lazy dog") "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+  assertEq (stringLength (randomBytes 16), stringLength (uuid ())) (16, 36)
+
+test "command-line arguments" =
+  let parsed = parseArgs ["output", "o"] ["-v", "--output=x", "in.txt", "-o", "y", "-ab", "--", "--z"]
+  match parsed with
+    Ok a ->
+      assertEq a.flags ["v", "a", "b"]
+      assertEq (option "output" a, firstOption ["output", "o"] a) (Some "x", Some "y")
+      assertEq a.positional ["in.txt", "--z"]
+      assert (hasFlag "b" a && not (hasFlag "c" a)) "flags"
+    Err e -> fail e
+  assertEq (parseArgs ["n"] ["-n"]) (Err "option -n needs a value")
+  assertEq (map (optionInt "n") (parseArgs ["n"] ["-n42", "-5"])) (Ok (Ok (Some 42)))

@@ -1,0 +1,66 @@
+-- Regular expressions in RE2 syntax (no backreferences; matching takes
+-- linear time). Import qualified: several names clash with the Prelude.
+--
+--   import Std.Regex as Re
+--   let date = Re.regex "(\\d{4})-(\\d{2})-(\\d{2})"
+--   Re.matches date "due 2024-05-06"              -- True
+--   Re.captures date "due 2024-05-06"             -- Some ["2024-05-06", "2024", "05", "06"]
+--   Re.replace date "$3/$2/$1" "due 2024-05-06"   -- "due 06/05/2024"
+module Std.Regex
+
+type Regex
+
+-- Compile a pattern; the error describes an invalid one.
+foreign compile : String -> Result String Regex = "rt.RegexCompile"
+
+-- Compile a pattern known to be valid. An invalid pattern is a runtime
+-- error.
+foreign regex : String -> Regex = "rt.RegexMust"
+
+-- The pattern a regex was compiled from.
+foreign source : Regex -> String = "rt.RegexSource"
+
+-- Whether the regex matches somewhere in the string. Anchor it with `^`
+-- and `$` to match the whole string.
+foreign matches : Regex -> String -> Bool = "rt.RegexMatches"
+
+-- The first (leftmost) match.
+foreign find : Regex -> String -> Option String = "rt.RegexFind"
+
+-- All non-overlapping matches.
+foreign findAll : Regex -> String -> List String = "rt.RegexFindAll"
+
+-- The first match followed by its groups (a group that did not take part
+-- in the match is "").
+foreign captures : Regex -> String -> Option (List String) = "rt.RegexCaptures"
+
+-- The groups of every match.
+foreign capturesAll : Regex -> String -> List (List String) = "rt.RegexCapturesAll"
+
+-- The names of the groups, "" for unnamed ones: `(?P<year>\d+)`.
+foreign groupNames : Regex -> List String = "rt.RegexNamedGroups"
+
+-- Replace every match; `$1` and `${name}` in the replacement refer to
+-- groups (`$$` is a literal `$`).
+foreign replace : Regex -> String -> String -> String = "rt.RegexReplace"
+
+-- Replace every match with a literal string.
+foreign replaceLiteral : Regex -> String -> String -> String = "rt.RegexReplaceLiteral"
+
+-- Replace every match with a function of its groups (as in `captures`).
+foreign replaceWith : Regex -> (List String -> <> String) -> String -> String = "rt.RegexReplaceWith"
+
+-- Split around the matches.
+foreign split : Regex -> String -> List String = "rt.RegexSplit"
+
+-- Escape the metacharacters of a string so that it matches literally.
+foreign quote : String -> String = "rt.RegexQuote"
+
+-- The named group of a match from `captures`.
+group : String -> Regex -> List String -> Option String
+group name r parts = match Prelude.find (\(n, _) -> n == name) (zip ("" :: groupNames r) parts) with
+  Some (_, v) -> Some v
+  None -> None
+
+instance Show Regex where
+  show r = "regex " ++ show (source r)

@@ -1,0 +1,59 @@
+-- Mutable hash maps with constant-time access. Keys are compared
+-- structurally (Int, Float, String, Char, Bool, tuples, lists and other
+-- data, but not functions). Iteration follows insertion order. Reading and
+-- writing a map is an IO effect; Std.Map is the persistent alternative.
+-- Import qualified: several names clash with the Prelude.
+--
+--   import Std.HashMap as HM
+--   let counts = HM.new ()
+--   forEach (words "a b a") (\w -> HM.modify w 0 (+ 1) counts)
+--   HM.toList counts   -- [("a", 2), ("b", 1)]
+module Std.HashMap
+
+type HashMap k v
+
+foreign new : Unit -> <IO> HashMap k v = "rt.HashMapNew"
+foreign size : HashMap k v -> <IO> Int = "rt.HashMapSize"
+
+-- Add a key or replace its value.
+foreign insert : k -> v -> HashMap k v -> <IO> Unit = "rt.HashMapInsert"
+foreign lookup : k -> HashMap k v -> <IO> Option v = "rt.HashMapLookup"
+foreign member : k -> HashMap k v -> <IO> Bool = "rt.HashMapMember"
+foreign remove : k -> HashMap k v -> <IO> Unit = "rt.HashMapRemove"
+foreign clear : HashMap k v -> <IO> Unit = "rt.HashMapClear"
+
+-- The entries in insertion order.
+foreign toList : HashMap k v -> <IO> List (k, v) = "rt.HashMapToList"
+foreign keys : HashMap k v -> <IO> List k = "rt.HashMapKeys"
+foreign values : HashMap k v -> <IO> List v = "rt.HashMapValues"
+
+fromList : List (k, v) -> <IO> HashMap k v
+fromList kvs =
+  let m = new ()
+  forEach kvs (\(k, v) -> insert k v m)
+  m
+
+isEmpty : HashMap k v -> <IO> Bool
+isEmpty m = size m == 0
+
+findWithDefault : v -> k -> HashMap k v -> <IO> v
+findWithDefault d k m = withDefault d (lookup k m)
+
+-- Update the value of a key, starting from a default when it is missing.
+modify : k -> v -> (v -> <IO | e> v) -> HashMap k v -> <IO | e> Unit
+modify k d f m = insert k (f (findWithDefault d k m)) m
+
+-- Insert, update or remove the value of a key.
+alter : k -> (Option v -> <IO | e> Option v) -> HashMap k v -> <IO | e> Unit
+alter k f m = match f (lookup k m) with
+  Some v -> insert k v m
+  None -> remove k m
+
+-- The value of a key, computing and inserting it when it is missing.
+getOrInsert : k -> (Unit -> <IO | e> v) -> HashMap k v -> <IO | e> v
+getOrInsert k make m = match lookup k m with
+  Some v -> v
+  None ->
+    let v = make ()
+    insert k v m
+    v

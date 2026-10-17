@@ -1,0 +1,17 @@
+-- Base64 and hexadecimal encodings of strings (as bytes in UTF-8).
+--
+--   import Std.Encoding
+--   base64Encode "hello"           -- "aGVsbG8="
+--   base64Decode "aGVsbG8="        -- Ok "hello"
+--   hexEncode "hi"                 -- "6869"
+module Std.Encoding
+
+foreign base64Encode : String -> String = "rt.Base64Encode"
+foreign base64Decode : String -> Result String String = "rt.Base64Decode"
+
+-- The URL-safe alphabet without padding (as used by JWTs).
+foreign base64UrlEncode : String -> String = "rt.Base64URLEncode"
+foreign base64UrlDecode : String -> Result String String = "rt.Base64URLDecode"
+
+foreign hexEncode : String -> String = "rt.HexEncode"
+foreign hexDecode : String -> Result String String = "rt.HexDecode"

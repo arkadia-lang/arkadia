@@ -1,0 +1,75 @@
+-- Arbitrary-precision integers. BigInt is an instance of Num, Eq, Ord,
+-- Show and Display, so the usual operators work on it.
+--
+--   import Std.BigInt (BigInt, big)
+--   import Std.BigInt as Big
+--   let f = Prelude.foldl (*) (big 1) (map big [1 .. 30])
+--   println "30! = ${f}"   -- 265252859812191058636308480000000
+module Std.BigInt
+
+type BigInt
+
+foreign big : Int -> BigInt = "rt.BigFromInt"
+
+-- Parse a decimal number (or 0x / 0o / 0b prefixed); `_` separators are
+-- allowed.
+foreign parse : String -> Option BigInt = "rt.BigParse"
+
+foreign toString : BigInt -> String = "rt.BigToString"
+
+-- Digits in a base from 2 to 36.
+foreign toStringBase : Int -> BigInt -> String = "rt.BigToStringBase"
+
+-- The value as an Int, when it fits in 64 bits.
+foreign toInt : BigInt -> Option Int = "rt.BigToInt"
+foreign toFloat : BigInt -> Float = "rt.BigToFloat"
+
+foreign add : BigInt -> BigInt -> BigInt = "rt.BigAdd"
+foreign sub : BigInt -> BigInt -> BigInt = "rt.BigSub"
+foreign mul : BigInt -> BigInt -> BigInt = "rt.BigMul"
+
+-- Division and remainder truncate toward zero, like Int.
+foreign div : BigInt -> BigInt -> BigInt = "rt.BigDiv"
+foreign rem : BigInt -> BigInt -> BigInt = "rt.BigMod"
+foreign neg : BigInt -> BigInt = "rt.BigNeg"
+foreign abs : BigInt -> BigInt = "rt.BigAbs"
+
+-- -1, 0 or 1.
+foreign sign : BigInt -> Int = "rt.BigSign"
+foreign pow : BigInt -> Int -> BigInt = "rt.BigPow"
+
+-- powMod b e m is b^e mod m.
+foreign powMod : BigInt -> BigInt -> BigInt -> BigInt = "rt.BigPowMod"
+foreign gcd : BigInt -> BigInt -> BigInt = "rt.BigGcd"
+
+-- The integer square root (rounded down).
+foreign isqrt : BigInt -> BigInt = "rt.BigSqrt"
+
+foreign primEq : BigInt -> BigInt -> Bool = "rt.BigEq"
+foreign primCompare : BigInt -> BigInt -> Ordering = "rt.BigCompare"
+
+zero : BigInt
+zero = big 0
+
+one : BigInt
+one = big 1
+
+instance Eq BigInt where
+  a == b = primEq a b
+
+instance Ord BigInt where
+  compare a b = primCompare a b
+
+instance Num BigInt where
+  a + b = add a b
+  a - b = sub a b
+  a * b = mul a b
+  a / b = div a b
+  negate a = neg a
+  fromInt n = big n
+
+instance Show BigInt where
+  show n = toString n
+
+instance Display BigInt where
+  display n = toString n

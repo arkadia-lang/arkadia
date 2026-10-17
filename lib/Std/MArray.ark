@@ -1,0 +1,78 @@
+-- Mutable arrays (growable vectors). Reading and writing them is an IO
+-- effect; prefer Std.Array (immutable) unless you need in-place updates.
+-- Import qualified: several names clash with the Prelude.
+--
+--   import Std.MArray as MA
+--   let a = MA.make 5 0
+--   forEach [0 .. 4] (\i -> MA.set i (i * i) a)
+--   MA.push 25 a
+--   MA.toList a   -- [0, 1, 4, 9, 16, 25]
+module Std.MArray
+
+import Std.Array (Array)
+
+type MArray a
+
+-- An empty array.
+foreign new : Unit -> <IO> MArray a = "rt.MArrayNew"
+
+-- An array of n copies of a value.
+foreign make : Int -> a -> <IO> MArray a = "rt.MArrayMake"
+
+foreign fromList : List a -> <IO> MArray a = "rt.MArrayFromList"
+foreign toList : MArray a -> <IO> List a = "rt.MArrayToList"
+foreign length : MArray a -> <IO> Int = "rt.MArrayLength"
+
+-- The element at an index, or None when it is out of range.
+foreign get : Int -> MArray a -> <IO> Option a = "rt.MArrayGet"
+
+-- The element at an index; out of range is a runtime error.
+foreign at : Int -> MArray a -> <IO> a = "rt.MArrayAt"
+
+-- Replace the element at an index; out of range is a runtime error.
+foreign set : Int -> a -> MArray a -> <IO> Unit = "rt.MArraySet"
+
+-- Add an element at the end (amortized constant time).
+foreign push : a -> MArray a -> <IO> Unit = "rt.MArrayPush"
+
+-- Add elements at the end.
+foreign pushAll : List a -> MArray a -> <IO> Unit = "rt.MArrayAppendList"
+
+-- Remove and return the last element.
+foreign pop : MArray a -> <IO> Option a = "rt.MArrayPop"
+
+foreign swap : Int -> Int -> MArray a -> <IO> Unit = "rt.MArraySwap"
+foreign reverse : MArray a -> <IO> Unit = "rt.MArrayReverse"
+foreign clear : MArray a -> <IO> Unit = "rt.MArrayClear"
+foreign copy : MArray a -> <IO> MArray a = "rt.MArrayCopy"
+
+-- An immutable snapshot.
+foreign freeze : MArray a -> <IO> Array a = "rt.MArrayFreeze"
+
+-- A mutable copy of an immutable array.
+foreign thaw : Array a -> <IO> MArray a = "rt.MArrayThaw"
+
+-- Sort in place (stable).
+foreign sortBy : (a -> a -> <> Ordering) -> MArray a -> <IO> Unit = "rt.MArraySortBy"
+
+sort : Ord a => MArray a -> <IO> Unit
+sort a = sortBy compare a
+
+isEmpty : MArray a -> <IO> Bool
+isEmpty a = length a == 0
+
+-- Update the element at an index.
+modify : Int -> (a -> <IO | e> a) -> MArray a -> <IO | e> Unit
+modify i f a = set i (f (at i a)) a
+
+-- Set every element to a value.
+fill : a -> MArray a -> <IO> Unit
+fill v a = forEach (Prelude.range 0 (length a)) (\i -> set i v a)
+
+-- Call a function with each index and element.
+forEachIndexed : (Int -> a -> <IO | e> Unit) -> MArray a -> <IO | e> Unit
+forEachIndexed f a = forEach (Prelude.range 0 (length a)) (\i -> f i (at i a))
+
+-- Fold over the elements from the first.
+foldl : (b -> a -> <IO | e> b) -> b -> MArray a -> <IO | e> b
+foldl f z a = Prelude.foldl (\acc i -> f acc (at i a)) z (Prelude.range 0 (length a))
