@@ -1,0 +1,86 @@
+-- Helpers for Option, meant to be imported qualified:
+--
+--   import Std.Option as Option
+--   Option.map2 (+) (Some 1) (Some 2)   -- Some 3
+--
+-- `withDefault`, `isSome` and `isNone` live in the Prelude.
+module Std.Option
+
+-- The value, or a runtime error.
+unwrap : Option a -> a
+unwrap (Some x) = x
+unwrap None = error "Std.Option.unwrap: None"
+
+-- The value, or a runtime error with the given message.
+expect : String -> Option a -> a
+expect _ (Some x) = x
+expect msg None = error msg
+
+-- Case analysis: `fold d f` is `d` for None and `f x` for `Some x`.
+fold : b -> (a -> b) -> Option a -> b
+fold d _ None = d
+fold _ f (Some x) = f x
+
+-- The value, or the result of a (possibly effectful) fallback.
+withDefaultLazy : (Unit -> a) -> Option a -> a
+withDefaultLazy _ (Some x) = x
+withDefaultLazy f None = f ()
+
+-- The first option if it is Some, otherwise the fallback.
+orElse : Option a -> Option a -> Option a
+orElse _ (Some x) = Some x
+orElse fallback None = fallback
+
+-- The first Some in the list.
+firstSome : List (Option a) -> Option a
+firstSome [] = None
+firstSome (Some x :: _) = Some x
+firstSome (None :: rest) = firstSome rest
+
+filter : (a -> Bool) -> Option a -> Option a
+filter p (Some x)
+  | p x = Some x
+filter _ _ = None
+
+-- Map with a function that may perform effects.
+mapOption : (a -> b) -> Option a -> Option b
+mapOption _ None = None
+mapOption f (Some x) = Some (f x)
+
+-- Run an action on the value, if there is one.
+whenSome : Option a -> (a -> Unit) -> Unit
+whenSome None _ = ()
+whenSome (Some x) f = f x
+
+map2 : (a -> b -> c) -> Option a -> Option b -> Option c
+map2 f (Some a) (Some b) = Some (f a b)
+map2 _ _ _ = None
+
+zip : Option a -> Option b -> Option (a, b)
+zip a b = map2 (\x y -> (x, y)) a b
+
+flatten : Option (Option a) -> Option a
+flatten (Some o) = o
+flatten None = None
+
+-- Does the option hold a value satisfying p?
+exists : (a -> Bool) -> Option a -> Bool
+exists p (Some x) = p x
+exists _ None = False
+
+toList : Option a -> List a
+toList (Some x) = [x]
+toList None = []
+
+toResult : e -> Option a -> Result e a
+toResult _ (Some x) = Ok x
+toResult e None = Err e
+
+fromResult : Result e a -> Option a
+fromResult (Ok x) = Some x
+fromResult (Err _) = None
+
+-- `Some x` when the condition holds, otherwise None.
+when : Bool -> a -> Option a
+when True x = Some x
+when False _ = None

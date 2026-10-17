@@ -568,6 +568,15 @@ instance (Show e, Show a) => Show (Result e a) where
   show (Ok x) = "Ok " ++ showArg (show x)
   show (Err e) = "Err " ++ showArg (show e)
 
+instance (Ord e, Ord a) => Ord (Result e a) where
+  compare (Err x) (Err y) = compare x y
+  compare (Err _) (Ok _) = LT
+  compare (Ok _) (Err _) = GT
+  compare (Ok x) (Ok y) = compare x y
+
+instance (Show e, Show a) => Display (Result e a) where
+  display = show
+
 instance Functor (Result e) where
   map f (Ok x) = Ok (f x)
   map _ (Err e) = Err e
@@ -587,6 +596,10 @@ instance Foldable (Result e) where
   foldr _ z (Err _) = z
   foldl f z (Ok x) = f z x
   foldl _ z (Err _) = z
+
+instance Traversable (Result e) where
+  traverse f (Ok x) = map Ok (f x)
+  traverse _ (Err e) = pure (Err e)
 
 mapErr : (e -> f) -> Result e a -> Result f a
 mapErr _ (Ok x) = Ok x

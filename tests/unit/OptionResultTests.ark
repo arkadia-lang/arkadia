@@ -1,0 +1,55 @@
+-- Unit tests for Std.Option and Std.Result.
+module OptionResultTests
+
+import Std.Option as Option
+import Std.Result as Result
+
+test "option accessors" =
+  assertEq (Option.unwrap (Some 3)) 3
+  assertEq (Option.fold 0 (* 2) (Some 4), Option.fold 0 (* 2) None) (8, 0)
+  assertEq (Option.withDefaultLazy (\_ -> 9) None) 9
+
+test "option combinators" =
+  assertEq (Option.orElse (Some 2) None, Option.orElse (Some 2) (Some 1)) (Some 2, Some 1)
+  assertEq (Option.firstSome [None, Some 'a', Some 'b']) (Some 'a')
+  assertEq (Option.filter even (Some 3), Option.filter even (Some 4)) (None, Some 4)
+  assertEq (Option.map2 (+) (Some 1) (Some 2)) (Some 3)
+  assertEq (Option.zip (Some 1) (None : Option Int)) None
+  assertEq (Option.flatten (Some (Some 'x'))) (Some 'x')
+  assert (Option.exists odd (Some 1) && not (Option.exists odd None)) "exists"
+  assertEq (Option.when True 1, Option.when False 1) (Some 1, None)
+
+test "option conversions" =
+  assertEq (Option.toList (Some 1)) [1]
+  assertEq (Option.toResult "none" (None : Option Int)) (Err "none")
+  assertEq (Option.fromResult (Ok 1 : Result String Int)) (Some 1)
+
+test "option with effects" =
+  let r = runFail (\_ -> Option.mapOption (\x -> orFail "neg" (Option.when (x > 0) x)) (Some 5))
+  assertEq r (Ok (Some 5))
+  Option.whenSome (Some 1) (\x -> assertEq x 1)
+
+test "result accessors" =
+  let ok = Ok 1 : Result String Int
+  let err = Err "bad" : Result String Int
+  assert (Result.isOk ok && Result.isErr err) "isOk / isErr"
+  assertEq (Result.withDefault 0 err, Result.unwrap ok, Result.unwrapErr err) (0, 1, "bad")
+  assertEq (Result.fold stringLength negate err) 3
+
+test "result combinators" =
+  let err = Err "bad" : Result String Int
+  assertEq (Result.mapBoth stringLength show err) (Err 3)
+  assertEq (Result.map2 (+) (Ok 1) err) err
+  assertEq (Result.orElse (\e -> Ok (stringLength e)) err) (Ok 3 : Result String Int)
+  assertEq (Result.toOption err, Result.errToOption err) (None, Some "bad")
+  assertEq (Result.fromOption "x" (Some 1)) (Ok 1)
+  assertEq (Result.combineAll [Ok 1, Err "a", Ok 2, Err "b"]) (Err ["a", "b"])
+  assertEq (Result.combineAll [Ok 1, Ok 2] : Result (List String) (List Int)) (Ok [1, 2])
+  assertEq (runFail (\_ -> Result.orFail err)) err
+
+test "result instances" =
+  assert ((Err 5 : Result Int Int) < Ok 0) "Err sorts before Ok"
+  assertEq (traverse (\x -> match x > 0 with
+      True -> Some x
+      False -> None) (Ok 3 : Result String Int)) (Some (Ok 3))
+  assertEq "${(Ok 1 : Result String Int)}" "Ok 1"

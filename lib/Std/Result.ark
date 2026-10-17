@@ -1,0 +1,76 @@
+-- Helpers for Result, meant to be imported qualified:
+--
+--   import Std.Result as Result
+--   Result.withDefault 0 (Err "oops")   -- 0
+--
+-- `mapErr` lives in the Prelude.
+module Std.Result
+
+isOk : Result e a -> Bool
+isOk (Ok _) = True
+isOk (Err _) = False
+
+isErr : Result e a -> Bool
+isErr r = not (isOk r)
+
+withDefault : a -> Result e a -> a
+withDefault _ (Ok x) = x
+withDefault d (Err _) = d
+
+-- The value, or a runtime error.
+unwrap : Show e => Result e a -> a
+unwrap (Ok x) = x
+unwrap (Err e) = error "Std.Result.unwrap: Err ${show e}"
+
+unwrapErr : Result e a -> e
+unwrapErr (Err e) = e
+unwrapErr (Ok _) = error "Std.Result.unwrapErr: Ok"
+
+-- Case analysis.
+fold : (e -> b) -> (a -> b) -> Result e a -> b
+fold onErr _ (Err e) = onErr e
+fold _ onOk (Ok x) = onOk x
+
+mapBoth : (e -> f) -> (a -> b) -> Result e a -> Result f b
+mapBoth f _ (Err e) = Err (f e)
+mapBoth _ g (Ok x) = Ok (g x)
+
+-- Map with a function that may perform effects.
+mapResult : (a -> b) -> Result e a -> Result e b
+mapResult f (Ok x) = Ok (f x)
+mapResult _ (Err e) = Err e
+
+map2 : (a -> b -> c) -> Result e a -> Result e b -> Result e c
+map2 f (Ok a) (Ok b) = Ok (f a b)
+map2 _ (Err e) _ = Err e
+map2 _ _ (Err e) = Err e
+
+-- Recover from an error.
+orElse : (e -> Result f a) -> Result e a -> Result f a
+orElse _ (Ok x) = Ok x
+orElse f (Err e) = f e
+
+toOption : Result e a -> Option a
+toOption (Ok x) = Some x
+toOption (Err _) = None
+
+errToOption : Result e a -> Option e
+errToOption (Err e) = Some e
+errToOption (Ok _) = None
+
+fromOption : e -> Option a -> Result e a
+fromOption _ (Some x) = Ok x
+fromOption e None = Err e
+
+-- Fail with the error message, for use inside `runFail` and tests.
+orFail : Result String a -> <Fail> a
+orFail (Ok x) = x
+orFail (Err e) = fail e
+
+-- Collect all values, or every error.
+combineAll : List (Result e a) -> Result (List e) (List a)
+combineAll rs = match foldr (\r (es, as) -> match r with
+    Ok a -> (es, a :: as)
+    Err e -> (e :: es, as)) ([], []) rs with
+  ([], as) -> Ok as
+  (es, _) -> Err es
