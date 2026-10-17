@@ -1,0 +1,144 @@
+-- Generators as an algebraic effect. A generator is any computation that
+-- performs `yield`; consumers decide how many values to pull, so infinite
+-- generators are fine as long as the consumer stops.
+--
+--   import Std.Gen
+--   naturals : Unit -> <Yield Int> a
+--   naturals () = iterateGen (+ 1) 0
+--
+--   takeGen 3 (\_ -> filterGen even naturals)   -- [0, 2, 4]
+module Std.Gen
+
+effect Yield a where
+  yield : a -> Unit
+
+-- ===================================================================
+-- Producers
+-- ===================================================================
+
+-- Yield every element of a list.
+yieldAll : List a -> <Yield a> Unit
+yieldAll xs = forEach xs yield
+
+-- Yield the integers from a to b inclusive.
+rangeGen : Int -> Int -> <Yield Int> Unit
+rangeGen a b
+  | a > b = ()
+  | otherwise =
+      yield a
+      rangeGen (a + 1) b
+
+-- Yield x, f x, f (f x), ... forever.
+iterateGen : (a -> <> a) -> a -> <Yield a> b
+iterateGen f x =
+  yield x
+  iterateGen f (f x)
+
+-- Yield the same value forever.
+repeatGen : a -> <Yield a> b
+repeatGen x =
+  yield x
+  repeatGen x
+
+-- ===================================================================
+-- Consumers
+-- ===================================================================
+
+-- Run a generator to completion and collect everything it yields.
+collect : (Unit -> <Yield a | e> r) -> <e> List a
+collect gen =
+  let run = handle gen () with
+    return _ -> \acc -> reverse acc
+    yield x k -> \acc -> k () (x :: acc)
+  run []
+
+-- Collect everything a generator yields, together with its result.
+collectWith : (Unit -> <Yield a | e> r) -> <e> (r, List a)
+collectWith gen =
+  let run = handle gen () with
+    return r -> \acc -> (r, reverse acc)
+    yield x k -> \acc -> k () (x :: acc)
+  run []
+
+-- The first n values; the generator is abandoned after the n-th.
+takeGen : Int -> (Unit -> <Yield a | e> r) -> <e> List a
+takeGen n gen
+  | n <= 0 = []
+  | otherwise =
+      let run = handle gen () with
+        return _ -> \(_, acc) -> reverse acc
+        yield x k -> \(m, acc) -> match m <= 1 with
+          True -> reverse (x :: acc)
+          False -> k () (m - 1, x :: acc)
+      run (n, [])
+
+-- The first value satisfying p, if the generator yields one.
+findGen : (a -> Bool) -> (Unit -> <Yield a | e> r) -> <e> Option a
+findGen p gen =
+  handle gen () with
+    return _ -> None
+    yield x k -> match p x with
+      True -> Some x
+      False -> k ()
+
+-- Fold over the yielded values.
+foldGen : (b -> a -> b) -> b -> (Unit -> <Yield a | e> r) -> <e> b
+foldGen f z gen =
+  let run = handle gen () with
+    return _ -> \acc -> acc
+    yield x k -> \acc -> k () (f acc x)
+  run z
+
+-- Run an action for every yielded value and return the generator's result.
+forEachGen : (Unit -> <Yield a | e> r) -> (a -> <e> Unit) -> <e> r
+forEachGen gen f =
+  handle gen () with
+    yield x k ->
+      f x
+      k ()
+
+countGen : (Unit -> <Yield a | e> r) -> <e> Int
+countGen gen = foldGen (\n _ -> n + 1) 0 gen
+
+-- ===================================================================
+-- Transformers
+-- ===================================================================
+
+-- Transform each yielded value.
+mapGen : (a -> b) -> (Unit -> <Yield a, Yield b | e> r) -> <Yield b | e> r
+mapGen f gen =
+  handle gen () with
+    yield x k ->
+      yield (f x)
+      k ()
+
+-- Keep the yielded values satisfying p.
+filterGen : (a -> Bool) -> (Unit -> <Yield a, Yield a | e> r) -> <Yield a | e> r
+filterGen p gen =
+  handle gen () with
+    yield x k ->
+      match p x with
+        True -> yield x
+        False -> ()
+      k ()
+
+-- Yield the values while they satisfy p, then stop the generator.
+takeWhileGen : (a -> Bool) -> (Unit -> <Yield a, Yield a | e> r) -> <Yield a | e> Unit
+takeWhileGen p gen =
+  handle gen () with
+    return _ -> ()
+    yield x k -> match p x with
+      True ->
+        yield x
+        k ()
+      False -> ()
+
+-- Pair every yielded value with its index.
+indexedGen : (Unit -> <Yield a, Yield (Int, a) | e> r) -> <Yield (Int, a) | e> r
+indexedGen gen =
+  let run = handle gen () with
+    return r -> \_ -> r
+    yield x k -> \i ->
+      yield (i, x)
+      k () (i + 1)
+  run 0

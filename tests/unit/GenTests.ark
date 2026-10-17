@@ -1,0 +1,47 @@
+-- Unit tests for Std.Gen.
+module GenTests
+
+import Std.Gen
+import Std.State
+
+naturals : Unit -> <Yield Int> a
+naturals () = iterateGen (+ 1) 0
+
+test "producers and collect" =
+  assertEq (collect (\_ -> yieldAll ['a', 'b'])) ['a', 'b']
+  assertEq (collect (\_ -> rangeGen 1 5)) [1, 2, 3, 4, 5]
+  assertEq (collectWith (\_ ->
+    yield 1
+    yield 2
+    "done")) ("done", [1, 2])
+
+test "infinite generators with takeGen" =
+  assertEq (takeGen 4 naturals) [0, 1, 2, 3]
+  assertEq (takeGen 3 (\_ -> repeatGen 'x')) ['x', 'x', 'x']
+  assertEq (takeGen 0 naturals) []
+  assertEq (takeGen 10 (\_ -> rangeGen 1 3)) [1, 2, 3]
+
+test "findGen stops early" =
+  assertEq (findGen (\n -> n * n > 50) naturals) (Some 8)
+  assertEq (findGen (\n -> n > 9) (\_ -> rangeGen 1 3)) None
+
+test "folding and counting" =
+  assertEq (foldGen (+) 0 (\_ -> rangeGen 1 100)) 5050
+  assertEq (countGen (\_ -> yieldAll [(), (), ()])) 3
+
+test "forEachGen performs effects" =
+  let (r, total) = runState 0 (\_ -> forEachGen (\_ ->
+    rangeGen 1 4
+    "end") (\x -> modify (+ x)))
+  assertEq (r, total) ("end", 10)
+
+test "transformers compose" =
+  assertEq (takeGen 3 (\_ -> filterGen even naturals)) [0, 2, 4]
+  assertEq (takeGen 3 (\_ -> mapGen show naturals)) ["0", "1", "2"]
+  assertEq (collect (\_ -> takeWhileGen (\n -> n < 4) naturals)) [0, 1, 2, 3]
+  assertEq (takeGen 2 (\_ -> indexedGen (\_ -> yieldAll ['a', 'b', 'c']))) [(0, 'a'), (1, 'b')]
+  assertEq (collect (\_ -> mapGen (* 10) (\_ -> filterGen odd (\_ -> rangeGen 1 6)))) [10, 30, 50]
+
+test "primes with a generator pipeline" =
+  let isPrime n = n > 1 && all (\d -> n % d != 0) (takeWhile (\d -> d * d <= n) [2 .. n])
+  assertEq (takeGen 8 (\_ -> filterGen isPrime naturals)) [2, 3, 5, 7, 11, 13, 17, 19]
