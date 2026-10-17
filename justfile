@@ -15,11 +15,11 @@ default:
 
 # Build the ark command into bin/ark.
 build:
-    go build -o bin/ark ./cmd/ark
+    go build -o bin/ark ./bootstrap/cmd/ark
 
 # Install the ark command into $GOBIN.
 install:
-    go install ./cmd/ark
+    go install ./bootstrap/cmd/ark
 
 # Run the tests (compiler, golden programs, unit tests, self-hosted compiler).
 test:
@@ -32,12 +32,12 @@ check:
     files=$(gofmt -l .)
     if [ -n "$files" ]; then echo "not gofmt'ed:"; echo "$files"; exit 1; fi
     go vet ./...
-    go run ./cmd/ark fmt -check {{ark_sources}}
+    go run ./bootstrap/cmd/ark fmt -check {{ark_sources}}
 
 # Format the Go and Arkadia sources.
 fmt:
     gofmt -w .
-    go run ./cmd/ark fmt {{ark_sources}}
+    go run ./bootstrap/cmd/ark fmt {{ark_sources}}
 
 # Build the self-hosted compiler (selfhost/) into bin/arkc.
 selfhost: build
