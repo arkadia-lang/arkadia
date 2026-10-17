@@ -39,7 +39,7 @@ repl root ver =
       Err _ -> []
     None -> []
   let r = Repl root (newRef []) (newRef []) dir paths (newRef 0)
-  println "Arkadia ${ver} REPL (self-hosted) — :help for commands"
+  println "Arkadia ${ver} REPL — :help for commands"
   replLoop r
 
 private replLoop : Repl -> <IO> Int

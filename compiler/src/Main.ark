@@ -1,4 +1,4 @@
--- arkc: the Arkadia compiler, written in Arkadia.
+-- ark: the Arkadia compiler, written in Arkadia.
 module Main
 
 import Ark.Util
@@ -21,10 +21,10 @@ version = "0.1.0"
 
 usage : String
 usage = """
-arkc — the Arkadia compiler, written in Arkadia
+Arkadia — a strict functional language with algebraic effects
 
 Usage:
-  arkc <command> [arguments]
+  ark <command> [arguments]
 
 Commands:
   build [file.ark]   compile the project (or a single file) to a native executable
@@ -45,7 +45,7 @@ Options of build and run:
   -work <dir>        directory to keep the generated Go module in
 
 The standard library and the Go runtime are looked up in $ARKADIA_ROOT, or
-in a parent directory of the arkc executable.
+in a parent directory of the ark executable.
 """
 
 main () =
@@ -75,12 +75,12 @@ cli argv = match argv with
     "-h" -> helpCmd ()
     "--help" -> helpCmd ()
     _ ->
-      eprint "arkc: unknown command ${show cmd}\n\n${usage}"
+      eprint "ark: unknown command ${show cmd}\n\n${usage}"
       2
 
 private versionCmd : Unit -> <IO> Int
 versionCmd () =
-  println "arkc ${version} (self-hosted)"
+  println "ark ${version}"
   0
 
 private helpCmd : Unit -> <IO> Int
@@ -319,14 +319,14 @@ cmdDoc root argv = match argv with
           0
         None -> failMsg "unknown module ${name}"
   _ ->
-    eprintln "usage: arkc doc <Module>"
+    eprintln "usage: ark doc <Module>"
     2
 
 -- ================================================================ fmt
 
 fmtUsage : String
 fmtUsage = """
-usage: arkc fmt [-check] [file.ark | dir | -]...
+usage: ark fmt [-check] [file.ark | dir | -]...
   -check
     	list the files that are not formatted instead of rewriting them; exit status 1 if there are any
 """
@@ -482,8 +482,8 @@ cmdNew argv = match argv with
       match foldl (\acc f -> write f acc) (Ok ()) files with
         Err e -> failMsg e
         Ok _ ->
-          println "created project ${name}\n\n  cd ${dir}\n  arkc run\n  arkc test"
+          println "created project ${name}\n\n  cd ${dir}\n  ark run\n  ark test"
           0
   _ ->
-    eprintln "usage: arkc new <name>"
+    eprintln "usage: ark new <name>"
     2

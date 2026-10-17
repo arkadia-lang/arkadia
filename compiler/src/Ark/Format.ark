@@ -1,4 +1,4 @@
--- The source formatter (`arkc fmt`).
+-- The source formatter (`ark fmt`).
 --
 -- It works on the token stream rather than the syntax tree, so it keeps
 -- comments, literals and the author's line breaks exactly. It

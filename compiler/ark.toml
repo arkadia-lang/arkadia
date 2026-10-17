@@ -1,4 +1,4 @@
 [package]
-name = "arkc"
+name = "ark"
 version = "0.1.0"
 description = "The Arkadia compiler, written in Arkadia"

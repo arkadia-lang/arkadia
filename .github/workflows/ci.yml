@@ -14,7 +14,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - name: Check (gofmt, go vet, ark fmt)
         run: nix develop --command just check
-      - name: Test (compiler, golden programs, examples, Arkadia unit tests, self-hosted compiler)
+      - name: Test (bootstrap fixpoint, golden programs, examples, compile errors, formatter, Arkadia unit tests)
         run: nix develop --command just test
-      - name: Build the ark command
+      - name: Bootstrap the ark command
         run: nix develop --command just build && bin/ark version
