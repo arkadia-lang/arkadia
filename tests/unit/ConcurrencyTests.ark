@@ -114,6 +114,8 @@ test "race returns the first result and cancels the rest" =
 
 test "timeout" =
   assertEq (Task.timeout 0.01 (\_ -> forever 0)) None
+  -- recursion that is not a loop is cancelled too (fib 50 takes hours)
+  assertEq (Task.timeout 0.01 (\_ -> fib 50)) None
   assertEq (Task.timeout 0.01 (\_ -> Task.sleep 1000.0)) None
   assertEq (Task.timeout 10.0 (\_ -> 42)) (Some 42)
   -- the computation may use the effects of the caller

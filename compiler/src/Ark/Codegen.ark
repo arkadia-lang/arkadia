@@ -304,7 +304,9 @@ genFunction g out (Func s ps body ts) =
   let c0 = newCtx g
   let c = withSelf c0 (Some (SelfInfo s "" (length ps) used ts))
   writeRef (ctxIndent c) 2
-  let pro = prologue (bindParams c ps ts) 1
+  -- every call is a cancellation point (Std.Task), so that recursion
+  -- without loops or effects can be cancelled too
+  let pro = prologue ("rt.Poll()" :: bindParams c ps ts) 1
   genStmt c body DRet
   match readRef used with
     True -> emitOut out "func ${name}(${params (length ps) "a"}) rt.Value {\n${pro}\tfor {\n${ctxBody c}\t}\n}\n\n"
@@ -496,7 +498,11 @@ lambdaBody c (Lam ps body ts) selfName =
   writeRef (ctxIndent s) (match selfInfo with
     Some _ -> ind + 2
     None -> ind + 1)
-  let pro = prologue (bindParams s ps ts) (ind + 1)
+  -- a named local function may recurse: its calls are cancellation points
+  let polls = match selfInfo with
+    Some _ -> ["rt.Poll()"]
+    None -> []
+  let pro = prologue (polls ++ bindParams s ps ts) (ind + 1)
   genStmt s body DRet
   let text = ctxBody s
   match selfInfo with
