@@ -1,5 +1,5 @@
-f x =
-  x + y
-  where y = 2
-
-main () = println (show (f 1))
+main () =
+  let f = \x ->
+    x + y
+    where y = 2
+  println (show (f 1))

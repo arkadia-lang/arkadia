@@ -1,1 +1,1 @@
-a `where` clause must be indented less than the body it belongs to
+a `where` clause belongs to an equation; it cannot end this block

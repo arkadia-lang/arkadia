@@ -16,6 +16,11 @@ type parser struct {
 	// set when the last parsed operand ended with an unparenthesized
 	// lambda/match/handle, which extends as far as possible
 	trailingBlock bool
+	// whereOK is set while parsing the body of an equation: a block that
+	// starts then may end with the equation's `where` clause, which is
+	// left in pendingWhere
+	whereOK      bool
+	pendingWhere []*Bind
 }
 
 type bailout struct{ err *diag.Error }
@@ -346,11 +351,46 @@ func (p *parser) funBind() *Bind {
 	default:
 		p.unexpected("declaration")
 	}
-	rhs := p.rhs(EQUALS)
+	saved := p.pendingWhere
+	p.pendingWhere = nil
+	rhs := p.equationRhs()
 	if p.at(KwWhere) {
+		if p.pendingWhere != nil {
+			p.fail(p.peek().Pos, "an equation can have only one `where` clause")
+		}
 		rhs.Where = p.whereBinds()
+	} else {
+		rhs.Where = p.pendingWhere
 	}
+	p.pendingWhere = saved
 	return &Bind{P: t.Pos, Name: name, Clauses: []*Clause{{P: t.Pos, Params: params, Rhs: rhs}}}
+}
+
+// equationRhs parses the right-hand side of an equation; its body blocks
+// may end with the equation's where clause.
+func (p *parser) equationRhs() *Rhs {
+	if p.at(BAR) {
+		var gs []*Guard
+		for p.at(BAR) && p.pendingWhere == nil {
+			pos := p.next().Pos
+			cond := p.expr()
+			p.expect(EQUALS)
+			gs = append(gs, &Guard{P: pos, Cond: cond, Body: p.equationBody()})
+		}
+		return &Rhs{Guards: gs}
+	}
+	p.expect(EQUALS)
+	return &Rhs{Body: p.equationBody()}
+}
+
+// equationBody parses a body of an equation; when it is an indented block,
+// the block may end with the equation's where clause.
+func (p *parser) equationBody() Expr {
+	if p.at(INDENT) {
+		p.whereOK = true
+		return p.block()
+	}
+	return p.body()
 }
 
 // whereBinds parses `where` followed by local bindings, either on the same
@@ -1104,6 +1144,8 @@ func (p *parser) inlineBlockFrom(first Expr) Expr {
 
 func (p *parser) block() Expr {
 	pos := p.expect(INDENT).Pos
+	whereOK := p.whereOK
+	p.whereOK = false
 	var stmts []Stmt
 	for {
 		if p.at(KwLet) {
@@ -1121,7 +1163,14 @@ func (p *parser) block() Expr {
 		}
 		if p.accept(NEWLINE) || p.accept(SEMI) {
 			if p.at(KwWhere) {
-				p.fail(p.peek().Pos, "a `where` clause must be indented less than the body it belongs to")
+				if !whereOK {
+					p.fail(p.peek().Pos, "a `where` clause belongs to an equation; it cannot end this block")
+				}
+				// `where` at the column of the equation's body ends it
+				p.pendingWhere = p.whereBinds()
+				p.accept(NEWLINE)
+				p.expect(DEDENT)
+				break
 			}
 			if p.at(DEDENT) {
 				p.next()

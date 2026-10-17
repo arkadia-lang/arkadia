@@ -140,7 +140,18 @@ collatz n = go n 0
         _ -> 3 * k + 1
 ```
 
-- `where` は本体より浅く（等式の頭より深く）字下げします。束縛が一つなら同じ行に書けます（`where y = x * 2`、`;` で複数）。
+- `where` は等式の頭より深く字下げします。本体がブロックのときは、本体と同じ桁に書いてブロックを終えることもできます（下の例）。束縛が一つなら同じ行に書けます（`where y = x * 2`、`;` で複数）。
+- `where` の束縛から本体の `let` は見えません（束縛は本体より先に評価されます）。
+
+```haskell
+report xs =
+  println "total ${total}"
+  println "mean ${total / count}"
+  where
+    total = sum xs
+    count = length xs
+```
+
 - 束縛は `let` 文と同じ規則で、等式に一致した後、本体やガードより先に **書いた順に** 評価されます（正格評価）。
 - 関数・値・パターン束縛（`where (q, r) = quotRem a b`）を書けます。
 

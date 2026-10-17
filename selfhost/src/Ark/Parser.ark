@@ -10,22 +10,30 @@ import Std.Map as Map
 
 -- tokens, number of tokens, index, pending layout tokens absorbed while
 -- parsing a type, set when the last operand ended with an unparenthesized
--- lambda/match/handle (which extends as far as possible)
-type P = P (Arr.Array Token) Int (Ref Int) (Ref Int) (Ref Bool)
+-- lambda/match/handle (which extends as far as possible), set while
+-- parsing the body of an equation (a block starting then may end with the
+-- equation's where clause), and that where clause
+type P = P (Arr.Array Token) Int (Ref Int) (Ref Int) (Ref Bool) (Ref Bool) (Ref (Option (List Bind)))
 
 newParser : List Token -> <IO> P
 newParser toks =
   let arr = Arr.fromList toks
-  P arr (Arr.length arr) (newRef 0) (newRef 0) (newRef False)
+  P arr (Arr.length arr) (newRef 0) (newRef 0) (newRef False) (newRef False) (newRef None)
 
 pIndex : P -> Ref Int
-pIndex (P _ _ i _ _) = i
+pIndex (P _ _ i _ _ _ _) = i
 
 pTypeIndent : P -> Ref Int
-pTypeIndent (P _ _ _ t _) = t
+pTypeIndent (P _ _ _ t _ _ _) = t
 
 pTrailing : P -> Ref Bool
-pTrailing (P _ _ _ _ b) = b
+pTrailing (P _ _ _ _ b _ _) = b
+
+pWhereOK : P -> Ref Bool
+pWhereOK (P _ _ _ _ _ w _) = w
+
+pPending : P -> Ref (Option (List Bind))
+pPending (P _ _ _ _ _ _ w) = w
 
 -- ================================================================ entry points
 
@@ -42,10 +50,10 @@ parseModule file src = match lex file src with
 -- ================================================================ token helpers
 
 peek : P -> <IO> Token
-peek (P toks _ i _ _) = Arr.at (readRef i) toks
+peek (P toks _ i _ _ _ _) = Arr.at (readRef i) toks
 
 peekN : P -> Int -> <IO> Token
-peekN (P toks n i _ _) k = match readRef i + k < n with
+peekN (P toks n i _ _ _ _) k = match readRef i + k < n with
   True -> Arr.at (readRef i + k) toks
   False -> Arr.at (n - 1) toks
 
@@ -61,7 +69,7 @@ atOp p op =
   tokKind t == OP && tokText t == op && tokQual t == ""
 
 next : P -> <IO> Token
-next (P toks n i _ _) =
+next (P toks n i _ _ _ _) =
   let j = readRef i
   let t = Arr.at j toks
   match j < n - 1 with
@@ -329,11 +337,43 @@ funBind p =
           skip p
           (tokText t, paramPatterns p)
       | otherwise -> unexpected p "declaration"
-  let r = rhs p EQUALS
-  let r2 = match at p KwWhere with
-    True -> RWhere r (whereBinds p)
-    False -> r
+  let saved = readRef (pPending p)
+  writeRef (pPending p) None
+  let r = equationRhs p
+  let r2 = match (at p KwWhere, readRef (pPending p)) with
+    (True, Some _) -> fail (tokPos (peek p)) "an equation can have only one `where` clause"
+    (True, None) -> RWhere r (whereBinds p)
+    (False, Some bs) -> RWhere r bs
+    (False, None) -> r
+  writeRef (pPending p) saved
   mkBind (tokPos t) name None [Clause (tokPos t) params r2] None
+
+-- The right-hand side of an equation; its body blocks may end with the
+-- equation's where clause.
+equationRhs : P -> <Exn Diag, IO> Rhs
+equationRhs p = match at p BAR with
+  True ->
+    let loop acc = match at p BAR && isNone (readRef (pPending p)) with
+      True ->
+        let pos = tokPos (next p)
+        let cond = expr p
+        expect_ p EQUALS
+        let b = equationBody p
+        loop (Guard pos cond b :: acc)
+      False -> reverse acc
+    RGuards (loop [])
+  False ->
+    expect_ p EQUALS
+    RBody (equationBody p)
+
+-- A body of an equation; when it is an indented block, the block may end
+-- with the equation's where clause.
+equationBody : P -> <Exn Diag, IO> Expr
+equationBody p = match at p INDENT with
+  True ->
+    writeRef (pWhereOK p) True
+    block p
+  False -> body p
 
 -- `where` followed by local bindings, either on the same line (separated
 -- by ';') or as an indented block. A signature may be written on its own
@@ -997,6 +1037,8 @@ inlineBlockFrom p first = EBlock (exprPos first) (moreStmts p [SExpr first])
 block : P -> <Exn Diag, IO> Expr
 block p =
   let pos = tokPos (expect p INDENT)
+  let whereOK = readRef (pWhereOK p)
+  writeRef (pWhereOK p) False
   let loop acc =
     let s = match at p KwLet with
       True ->
@@ -1010,7 +1052,14 @@ block p =
       False -> SExpr (expr p)
     match accept p NEWLINE || accept p SEMI with
       True
-        | at p KwWhere -> fail (tokPos (peek p)) "a `where` clause must be indented less than the body it belongs to"
+        | at p KwWhere -> match whereOK with
+            False -> fail (tokPos (peek p)) "a `where` clause belongs to an equation; it cannot end this block"
+            True ->
+              -- `where` at the column of the equation's body ends it
+              writeRef (pPending p) (Some (whereBinds p))
+              let _ = accept p NEWLINE
+              expect_ p DEDENT
+              reverse (s :: acc)
         | otherwise -> match at p DEDENT with
             True ->
               skip p

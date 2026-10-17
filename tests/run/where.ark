@@ -70,6 +70,15 @@ alternate xs = (evens xs, odds xs)
     odds [] = []
     odds (_ :: ys) = evens ys
 
+-- `where` may also stand at the column of a block body
+report : List Int -> <IO> Unit
+report xs =
+  println "total ${total}"
+  println "mean ${total / count}"
+  where
+    total = sum xs
+    count = length xs
+
 main () =
   println (show (hypot 3.0 4.0))
   println (show (map classify [1, 50, 1000, 5000]))
@@ -79,3 +88,4 @@ main () =
   println (show (map parity [10, 7]))
   println (show (alternate [1, 2, 3, 4, 5]))
   println (show (alternate ["a", "b"]))
+  report [3, 4, 8]
