@@ -1,0 +1,302 @@
+-- Backtracking parser combinators built on algebraic effects. A parser is a
+-- computation that reads the input with the `ParseInput` effect and reports
+-- errors with `Fail`; a failed alternative restores the input it consumed.
+--
+--   import Std.Parser
+--
+--   numbers : Unit -> <ParseInput, Fail> List Int
+--   numbers () =
+--     between (\_ -> symbol "[") (\_ -> symbol "]") (\_ -> sepBy (\_ -> lexeme integer) (\_ -> symbol ","))
+--
+--   runParser numbers "[1, -2, 3]"   -- Ok [1, -2, 3]
+--
+-- Combinators take parsers as thunks (`\_ -> p`). See tests/unit/ParserTests.ark
+-- for an expression calculator built with chainl1 / chainr1.
+module Std.Parser
+
+effect ParseInput where
+  remaining : Unit -> List Char
+  setRemaining : List Char -> Unit
+
+-- Run a parser on the whole input. Errors carry the line and column where
+-- the failing parser stopped.
+runParser : (Unit -> <ParseInput, Fail | e> a) -> String -> <e> Result String a
+runParser p text =
+  let input = chars text
+  match parsePrefix (\_ ->
+    let x = p ()
+    eof ()
+    x) input with
+    (Ok x, _) -> Ok x
+    (Err msg, rest) -> Err "${position input rest}: ${msg}"
+
+-- Run a parser on a prefix of the input; returns the result and the rest.
+parsePrefix : (Unit -> <ParseInput, Fail | e> a) -> List Char -> <e> (Result String a, List Char)
+parsePrefix p input =
+  let run = handle runFail p with
+    return r -> \s -> (r, s)
+    remaining () k -> \s -> k s s
+    setRemaining s2 k -> \_ -> k () s2
+  run input
+
+private position : List Char -> List Char -> String
+position input rest =
+  let consumed = take (length input - length rest) input
+  let line = 1 + length (filter (\c -> c == '\n') consumed)
+  let col = 1 + length (takeWhile (\c -> c != '\n') (reverse consumed))
+  "line ${line}, column ${col}"
+
+-- ===================================================================
+-- Characters
+-- ===================================================================
+
+-- The next character without consuming it.
+peekChar : Unit -> <ParseInput> Option Char
+peekChar () = head (remaining ())
+
+-- Succeeds only at the end of the input.
+eof : Unit -> <ParseInput, Fail> Unit
+eof () = match remaining () with
+  [] -> ()
+  c :: _ -> fail "expected end of input, found '${c}'"
+
+anyChar : Unit -> <ParseInput, Fail> Char
+anyChar () = match remaining () with
+  [] -> fail "unexpected end of input"
+  c :: cs ->
+    setRemaining cs
+    c
+
+-- A character satisfying p; `what` names it in the error message.
+satisfy : String -> (Char -> <> Bool) -> <ParseInput, Fail> Char
+satisfy what p = match remaining () with
+  c :: cs | p c ->
+    setRemaining cs
+    c
+  c :: _ -> fail "expected ${what}, found '${c}'"
+  [] -> fail "expected ${what}, found end of input"
+
+char : Char -> <ParseInput, Fail> Char
+char c = satisfy (show c) (\d -> d == c)
+
+-- The exact string.
+string : String -> <ParseInput, Fail> String
+string s = match stripChars (chars s) (remaining ()) with
+  Some rest ->
+    setRemaining rest
+    s
+  None -> fail "expected ${show s}"
+
+private stripChars : List Char -> List Char -> Option (List Char)
+stripChars [] ys = Some ys
+stripChars (x :: xs) (y :: ys)
+  | x == y = stripChars xs ys
+stripChars _ _ = None
+
+oneOf : String -> <ParseInput, Fail> Char
+oneOf cs = satisfy "one of ${show cs}" (\c -> elem c (chars cs))
+
+noneOf : String -> <ParseInput, Fail> Char
+noneOf cs = satisfy "none of ${show cs}" (\c -> not (elem c (chars cs)))
+
+digit : Unit -> <ParseInput, Fail> Char
+digit () = satisfy "a digit" isDigit
+
+letter : Unit -> <ParseInput, Fail> Char
+letter () = satisfy "a letter" isAlpha
+
+-- The longest prefix of characters satisfying p (possibly empty).
+takeWhileP : (Char -> <> Bool) -> <ParseInput> String
+takeWhileP p =
+  let input = remaining ()
+  let taken = takeWhile p input
+  setRemaining (drop (length taken) input)
+  fromChars taken
+
+-- Like takeWhileP, but at least one character.
+takeWhile1P : String -> (Char -> <> Bool) -> <ParseInput, Fail> String
+takeWhile1P what p =
+  let c = satisfy what p
+  charToString c ++ takeWhileP p
+
+-- Skip whitespace.
+spaces : Unit -> <ParseInput> Unit
+spaces () =
+  let _ = takeWhileP isSpace
+  ()
+
+-- ===================================================================
+-- Combinators
+-- ===================================================================
+
+-- Try p; if it fails, restore the input and run q.
+alt : (Unit -> <ParseInput, Fail | e> a) -> (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> a
+alt p q =
+  let saved = remaining ()
+  match runFail p with
+    Ok x -> x
+    Err _ ->
+      setRemaining saved
+      q ()
+
+-- The first parser that succeeds.
+choice : String -> List (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> a
+choice what [] = fail "expected ${what}"
+choice what (p :: ps) = alt p (\_ -> choice what ps)
+
+-- Run p, restoring the input on failure; None if it failed.
+optional : (Unit -> <ParseInput, Fail | e> a) -> <ParseInput | e> Option a
+optional p =
+  let saved = remaining ()
+  match runFail p with
+    Ok x -> Some x
+    Err _ ->
+      setRemaining saved
+      None
+
+-- Zero or more repetitions.
+many : (Unit -> <ParseInput, Fail | e> a) -> <ParseInput | e> List a
+many p = manyAcc p []
+
+private manyAcc : (Unit -> <ParseInput, Fail | e> a) -> List a -> <ParseInput | e> List a
+manyAcc p acc =
+  let before = remaining ()
+  match optional p with
+    -- stop if p succeeded without consuming input, which would loop forever
+    Some x | length (remaining ()) < length before -> manyAcc p (x :: acc)
+    Some x -> reverse (x :: acc)
+    None -> reverse acc
+
+-- One or more repetitions.
+many1 : (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> List a
+many1 p =
+  let first = p ()
+  first :: many p
+
+-- Skip zero or more repetitions.
+skipMany : (Unit -> <ParseInput, Fail | e> a) -> <ParseInput | e> Unit
+skipMany p =
+  let _ = many p
+  ()
+
+-- Zero or more p separated by sep.
+sepBy : (Unit -> <ParseInput, Fail | e> a) -> (Unit -> <ParseInput, Fail | e> s) -> <ParseInput | e> List a
+sepBy p sep = withDefault [] (optional (\_ -> sepBy1 p sep))
+
+-- One or more p separated by sep.
+sepBy1 : (Unit -> <ParseInput, Fail | e> a) -> (Unit -> <ParseInput, Fail | e> s) -> <ParseInput, Fail | e> List a
+sepBy1 p sep =
+  let first = p ()
+  first :: many (\_ ->
+    let _ = sep ()
+    p ())
+
+-- p between an opening and a closing parser.
+between : (Unit -> <ParseInput, Fail | e> o) -> (Unit -> <ParseInput, Fail | e> c) -> (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> a
+between open close p =
+  let _ = open ()
+  let x = p ()
+  let _ = close ()
+  x
+
+-- Left-associative chain: chainl1 term addOp parses `t1 op t2 op t3`.
+chainl1 : (Unit -> <ParseInput, Fail | e> a) -> (Unit -> <ParseInput, Fail | e> (a -> a -> a)) -> <ParseInput, Fail | e> a
+chainl1 p op = chainRest p op (p ())
+
+private chainRest : (Unit -> <ParseInput, Fail | e> a) -> (Unit -> <ParseInput, Fail | e> (a -> a -> a)) -> a -> <ParseInput, Fail | e> a
+chainRest p op acc = match optional (\_ ->
+    let f = op ()
+    f acc (p ())) with
+  Some acc2 -> chainRest p op acc2
+  None -> acc
+
+-- Right-associative chain, e.g. for `^`.
+chainr1 : (Unit -> <ParseInput, Fail | e> a) -> (Unit -> <ParseInput, Fail | e> (a -> a -> a)) -> <ParseInput, Fail | e> a
+chainr1 p op =
+  let x = p ()
+  match optional op with
+    Some f -> f x (chainr1 p op)
+    None -> x
+
+-- Replace the error message of p.
+label : String -> (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> a
+label what p = match runFail p with
+  Ok x -> x
+  Err _ -> fail "expected ${what}"
+
+-- Run p without consuming input.
+lookAhead : (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> a
+lookAhead p =
+  let saved = remaining ()
+  let x = p ()
+  setRemaining saved
+  x
+
+-- Succeeds (consuming nothing) when p fails.
+notFollowedBy : (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> Unit
+notFollowedBy p =
+  let saved = remaining ()
+  match runFail p with
+    Ok _ ->
+      setRemaining saved
+      fail "unexpected input"
+    Err _ -> ()
+
+-- ===================================================================
+-- Tokens
+-- ===================================================================
+
+-- Run p and skip the whitespace after it.
+lexeme : (Unit -> <ParseInput, Fail | e> a) -> <ParseInput, Fail | e> a
+lexeme p =
+  let x = p ()
+  spaces ()
+  x
+
+-- A string followed by whitespace.
+symbol : String -> <ParseInput, Fail> String
+symbol s =
+  let x = string s
+  spaces ()
+  x
+
+-- A decimal integer with an optional sign.
+integer : Unit -> <ParseInput, Fail> Int
+integer () =
+  let sign = withDefault "" (optional (\_ -> charToString (oneOf "+-")))
+  let ds = takeWhile1P "a digit" isDigit
+  orFail "integer out of range" (parseInt (sign ++ ds))
+
+-- A decimal number with an optional fraction and exponent.
+number : Unit -> <ParseInput, Fail> Float
+number () =
+  let sign = withDefault "" (optional (\_ -> charToString (oneOf "+-")))
+  let whole = takeWhile1P "a digit" isDigit
+  let frac = withDefault "" (optional (\_ ->
+    let _ = char '.'
+    "." ++ takeWhile1P "a digit" isDigit))
+  let ex = withDefault "" (optional (\_ ->
+    let e = oneOf "eE"
+    let s = withDefault "" (optional (\_ -> charToString (oneOf "+-")))
+    charToString e ++ s ++ takeWhile1P "a digit" isDigit))
+  orFail "invalid number" (parseFloat (sign ++ whole ++ frac ++ ex))
+
+-- An identifier: a letter or '_' followed by letters, digits or '_'.
+identifier : Unit -> <ParseInput, Fail> String
+identifier () =
+  let first = satisfy "an identifier" (\c -> isAlpha c || c == '_')
+  charToString first ++ takeWhileP (\c -> isAlpha c || isDigit c || c == '_')
+
+-- A double-quoted string literal with \" \\ \n \t escapes.
+stringLiteral : Unit -> <ParseInput, Fail> String
+stringLiteral () =
+  let _ = char '"'
+  let body = many (\_ -> alt (\_ ->
+    let _ = char '\\'
+    match anyChar () with
+      'n' -> '\n'
+      't' -> '\t'
+      'r' -> '\r'
+      c -> c) (\_ -> noneOf "\"\\"))
+  let _ = label "closing '\"'" (\_ -> char '"')
+  fromChars body

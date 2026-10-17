@@ -1,0 +1,86 @@
+-- Unit tests for Std.Parser.
+module ParserTests
+
+import Std.Parser
+
+-- Arithmetic with precedence, parentheses and right-associative '^'.
+expr : Unit -> <ParseInput, Fail> Int
+expr () = chainl1 term (\_ -> alt (\_ -> op "+" (+)) (\_ -> op "-" (-)))
+
+term : Unit -> <ParseInput, Fail> Int
+term () = chainl1 power (\_ -> alt (\_ -> op "*" (*)) (\_ -> op "/" (/)))
+
+power : Unit -> <ParseInput, Fail> Int
+power () = chainr1 atom (\_ -> op "^" (\a b -> foldl (*) 1 (replicate b a)))
+
+atom : Unit -> <ParseInput, Fail> Int
+atom () = label "a number or '('" (\_ -> alt (\_ -> lexeme integer) (\_ -> between (\_ -> symbol "(") (\_ -> symbol ")") expr))
+
+op : String -> (Int -> Int -> Int) -> <ParseInput, Fail> (Int -> Int -> Int)
+op s f =
+  let _ = symbol s
+  f
+
+calc : String -> Result String Int
+calc s = runParser (\_ ->
+  spaces ()
+  expr ()) s
+
+test "characters and strings" =
+  assertEq (runParser (\_ -> char 'a') "a") (Ok 'a')
+  assertEq (runParser (\_ -> string "let") "let") (Ok "let")
+  assertEq (runParser (\_ -> many1 digit) "123") (Ok ['1', '2', '3'])
+  assertEq (runParser (\_ -> takeWhileP isAlpha) "") (Ok "")
+
+test "error messages carry positions" =
+  assertEq (runParser (\_ -> char 'a') "b") (Err "line 1, column 1: expected 'a', found 'b'")
+  assertEq (runParser (\_ -> string "ab") "a\nb") (Err "line 1, column 1: expected \"ab\"")
+  assertEq (runParser (\_ -> many (\_ -> oneOf "x\n")) "x\nxy") (Err "line 2, column 2: expected end of input, found 'y'")
+
+test "alternatives backtrack" =
+  let kw = \_ -> alt (\_ -> string "letrec") (\_ -> string "let")
+  assertEq (runParser kw "let") (Ok "let")
+  assertEq (runParser (\_ -> choice "a keyword" [\_ -> string "if", \_ -> string "in"]) "in") (Ok "in")
+  assertEq (runParser (\_ -> choice "a keyword" [\_ -> string "if"]) "x") (Err "line 1, column 1: expected a keyword")
+  assertEq (runParser (\_ -> optional (\_ -> char 'x')) "") (Ok None)
+
+test "repetition and separators" =
+  let list = \_ -> between (\_ -> symbol "[") (\_ -> symbol "]") (\_ -> sepBy (\_ -> lexeme integer) (\_ -> symbol ","))
+  assertEq (runParser list "[1, -2, 3]") (Ok [1, -2, 3])
+  assertEq (runParser list "[ ]") (Ok [])
+  assert (isErr (runParser list "[1,]")) "dangling separator"
+  assertEq (runParser (\_ -> many (\_ -> optional digit)) "") (Ok [None])
+
+test "tokens" =
+  assertEq (runParser number "-12.5e2") (Ok -1250.0)
+  assertEq (runParser number "7") (Ok 7.0)
+  assertEq (runParser identifier "_foo42") (Ok "_foo42")
+  assertEq (runParser stringLiteral "\"a\\\"b\\n\"") (Ok "a\"b\n")
+  assertEq (runParser stringLiteral "\"abc") (Err "line 1, column 5: expected closing '\"'")
+
+test "lookahead" =
+  assertEq (runParser (\_ ->
+    let c = lookAhead anyChar
+    let s = takeWhileP isAlpha
+    (c, s)) "abc") (Ok ('a', "abc"))
+  let keyword = \_ ->
+    let k = string "if"
+    notFollowedBy (\_ -> satisfy "identifier char" isAlpha)
+    k
+  assertEq (runParser keyword "if") (Ok "if")
+  assert (isErr (runParser keyword "iffy")) "keyword prefix"
+
+test "expression calculator" =
+  assertEq (calc "1 + 2 * 3") (Ok 7)
+  assertEq (calc " (1 + 2) * 3 ") (Ok 9)
+  assertEq (calc "10 - 3 - 2") (Ok 5)
+  assertEq (calc "2 ^ 3 ^ 2") (Ok 512)
+  assertEq (calc "1 +") (Err "line 1, column 3: expected end of input, found '+'")
+  assertEq (calc "*") (Err "line 1, column 1: expected a number or '('")
+
+test "parsePrefix returns the rest" =
+  assertEq (parsePrefix (\_ -> many1 digit) (chars "12ab")) (Ok ['1', '2'], ['a', 'b'])
+
+isErr : Result e a -> Bool
+isErr (Err _) = True
+isErr _ = False
