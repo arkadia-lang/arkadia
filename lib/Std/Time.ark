@@ -18,9 +18,56 @@ foreign formatLocal : String -> Float -> String = "rt.FormatTimeLocal"
 -- (year, month, day, hour, minute, second) in UTC.
 foreign toUtcParts : Float -> (Int, Int, Int, Int, Int, Int) = "rt.TimeParts"
 
+-- Parse with a Go layout string, as UTC or local time.
+foreign parseUtc : String -> String -> Option Float = "rt.TimeParseUTC"
+foreign parseLocal : String -> String -> Option Float = "rt.TimeParseLocal"
+-- Parse RFC 3339: "2026-10-17T09:30:00Z", "2026-10-17T18:30:00.5+09:00".
+foreign parseIso : String -> Option Float = "rt.TimeParseIso"
+-- The time of (year, month, day, hour, minute, second) in UTC. Values out
+-- of range are normalized: month 13 is January of the next year.
+foreign fromUtcParts : (Int, Int, Int, Int, Int, Int) -> Float = "rt.TimeFromParts"
+-- The day of the week in UTC, from 0 (Sunday) to 6 (Saturday).
+foreign weekday : Float -> Int = "rt.TimeWeekday"
+-- The day of the year in UTC, from 1.
+foreign dayOfYear : Float -> Int = "rt.TimeDayOfYear"
+-- The offset of the local time zone from UTC, in seconds, at a time.
+foreign localOffset : Float -> Int = "rt.TimeLocalOffset"
+-- Add calendar months in UTC (Jan 31 + 1 month is Mar 2 or 3).
+foreign addMonths : Int -> Float -> Float = "rt.TimeAddMonths"
+
 -- RFC 3339 in UTC: "2026-10-17T09:30:00Z"
 formatIso : Float -> String
 formatIso t = formatUtc "2006-01-02T15:04:05Z07:00" t
+
+-- The date in UTC: "2026-10-17"
+formatDate : Float -> String
+formatDate t = formatUtc "2006-01-02" t
+
+-- The time of a date at midnight UTC.
+date : Int -> Int -> Int -> Float
+date y m d = fromUtcParts (y, m, d, 0, 0, 0)
+
+-- Midnight UTC of the day of a time.
+startOfDay : Float -> Float
+startOfDay t =
+  let (y, m, d, _, _, _) = toUtcParts t
+  date y m d
+
+minute : Float
+minute = 60.0
+
+hour : Float
+hour = 3600.0
+
+day : Float
+day = 86400.0
+
+addDays : Int -> Float -> Float
+addDays n t = t + toFloat n * day
+
+-- Whole days from one time to another.
+daysBetween : Float -> Float -> Int
+daysBetween a b = floor ((startOfDay b - startOfDay a) / day + 0.5)
 
 -- Run a computation and return its result with the elapsed seconds.
 measure : (Unit -> <IO | e> a) -> <IO | e> (a, Float)

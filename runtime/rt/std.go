@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Runtime support for Std.Regex, Std.MArray, Std.HashMap, Std.BigInt and
@@ -611,4 +612,46 @@ func ParseIntBase(base, s Value) Value {
 		return None
 	}
 	return Some(n)
+}
+
+// ---------------------------------------------------------------- dates and times
+
+func unixOf(t time.Time) Value { return float64(t.UnixNano()) / 1e9 }
+
+func parseTime(layout, s string, loc *time.Location) Value {
+	t, err := time.ParseInLocation(layout, s, loc)
+	if err != nil {
+		return None
+	}
+	return Some(unixOf(t))
+}
+
+func TimeParseUTC(layout, s Value) Value { return parseTime(layout.(string), s.(string), time.UTC) }
+func TimeParseLocal(layout, s Value) Value {
+	return parseTime(layout.(string), s.(string), time.Local)
+}
+
+// TimeParseIso parses RFC 3339 (with an optional fraction of a second).
+func TimeParseIso(s Value) Value { return parseTime(time.RFC3339Nano, s.(string), time.UTC) }
+
+// TimeFromParts builds a time from (year, month, day, hour, minute,
+// second) in UTC; out-of-range values are normalized (month 13 is January
+// of the next year).
+func TimeFromParts(parts Value) Value {
+	p := parts.(*DN).F
+	n := func(i int) int { return int(p[i].(int64)) }
+	return unixOf(time.Date(n(0), time.Month(n(1)), n(2), n(3), n(4), n(5), 0, time.UTC))
+}
+
+func TimeWeekday(secs Value) Value   { return int64(timeOf(secs).UTC().Weekday()) }
+func TimeDayOfYear(secs Value) Value { return int64(timeOf(secs).UTC().YearDay()) }
+
+// TimeLocalOffset is the offset of local time from UTC in seconds.
+func TimeLocalOffset(secs Value) Value {
+	_, off := timeOf(secs).Local().Zone()
+	return int64(off)
+}
+
+func TimeAddMonths(n, secs Value) Value {
+	return unixOf(timeOf(secs).UTC().AddDate(0, int(n.(int64)), 0))
 }

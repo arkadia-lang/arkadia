@@ -171,7 +171,7 @@ effect Yield a where
 | `ark build [file]` | ネイティブバイナリを生成（`-o` で出力先） |
 | `ark run [file] [-- args]` | ビルドして実行 |
 | `ark check [file]` | 型検査のみ |
-| `ark test [file]` | `test "名前" = ...` 宣言を実行（`Fail` エフェクトで失敗を報告） |
+| `ark test [file]` | `test "名前" = ...` 宣言を実行（`Fail` エフェクトで失敗を報告）。`-run 文字列` で名前による絞り込み |
 | `ark doc <Module>` | モジュールの公開 API を、宣言直前の `--` コメント（ドキュメント）付きで表示 |
 | `ark repl` | 対話環境（式の評価、定義の追加、`:t` で型表示） |
 | `ark emit [file]` | 生成された Go コードを表示 |
@@ -225,7 +225,7 @@ bin/arkc run examples/lisp.ark
 | `Std.String` / `Std.Char` | 文字列（`splitOnce`, `stripPrefix`, `wrap` …）、文字の分類と変換 |
 | `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
 | `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照。`ToJson` / `FromJson` クラスと `deriving (ToJson, FromJson)` によるレコード等との自動変換（失敗箇所付きのエラー） |
-| `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻と計測、可変参照 |
+| `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻（RFC 3339 などの書式化と解析、日付の構築、曜日、日・月の加算）と計測、可変参照 |
 | `Std.Http` | HTTP サーバ（ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie）と HTTP クライアント |
 | `Std.Net` / `Std.Url` | TCP ソケット・名前解決、URL のパース・パーセントエンコード・クエリ文字列 |
 | `Std.Regex` | 正規表現（RE2 構文）。一致・キャプチャ・名前付きグループ・置換（関数による置換も可）・分割 |
