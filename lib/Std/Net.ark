@@ -1,0 +1,78 @@
+-- TCP sockets and host names.
+--
+--   import Std.Net as Net
+--   -- an echo server, one connection at a time
+--   echo l = match Net.accept l with
+--     Ok conn ->
+--       Net.forEachLine conn (\line -> Net.writeLine conn line)
+--       Net.close conn
+--       echo l
+--     Err e -> eprintln e
+--
+--   main () = match Net.listen "127.0.0.1:7000" with
+--     Ok l -> echo l
+--     Err e -> eprintln e
+--
+-- Reads block the whole program; a server handles one connection at a time.
+-- For HTTP, use Std.Http, which reads requests concurrently.
+module Std.Net
+
+type Listener
+type Conn
+
+-- Listen on "host:port" (":8080" for every interface, port 0 for any free port).
+foreign listen : String -> <IO> Result String Listener = "rt.NetListen"
+-- Wait for the next connection.
+foreign accept : Listener -> <IO> Result String Conn = "rt.NetAccept"
+-- The address actually bound, e.g. "127.0.0.1:43521".
+foreign listenerAddress : Listener -> <IO> String = "rt.NetListenerAddr"
+foreign closeListener : Listener -> <IO> Unit = "rt.NetCloseListener"
+
+-- Connect to "host:port", giving up after the timeout in seconds.
+foreign connectTimeout : String -> Float -> <IO> Result String Conn = "rt.NetConnect"
+
+-- Read up to n bytes as they arrive; "" means the peer closed the connection.
+foreign read : Conn -> Int -> <IO> Result String String = "rt.NetRead"
+-- Read until the peer closes the connection.
+foreign readAll : Conn -> <IO> Result String String = "rt.NetReadAll"
+-- Read a line without its line ending; None at end of input.
+foreign readLine : Conn -> <IO> Result String (Option String) = "rt.NetReadLine"
+foreign write : Conn -> String -> <IO> Result String Unit = "rt.NetWrite"
+foreign close : Conn -> <IO> Unit = "rt.NetClose"
+-- Stop sending (the peer reads end of input) but keep reading.
+foreign closeWrite : Conn -> <IO> Unit = "rt.NetCloseWrite"
+-- Fail reads and writes that take longer than this many seconds from now; 0 removes the limit.
+foreign setTimeout : Conn -> Float -> <IO> Unit = "rt.NetSetTimeout"
+foreign localAddress : Conn -> <IO> String = "rt.NetLocalAddr"
+foreign remoteAddress : Conn -> <IO> String = "rt.NetRemoteAddr"
+
+-- The addresses of a host name.
+foreign lookupHost : String -> <IO> Result String (List String) = "rt.NetLookupHost"
+-- "example.com:80" -> ("example.com", "80"); handles "[::1]:80".
+foreign splitHostPort : String -> Result String (String, String) = "rt.NetSplitHostPort"
+foreign joinHostPort : String -> String -> String = "rt.NetJoinHostPort"
+
+-- Connect with a 30 second timeout.
+connect : String -> <IO> Result String Conn
+connect addr = connectTimeout addr 30.0
+
+writeLine : Conn -> String -> <IO> Result String Unit
+writeLine conn s = write conn (s ++ "\n")
+
+-- Call f on every line until the peer closes the connection or f fails.
+forEachLine : Conn -> (String -> <IO | e> Result String Unit) -> <IO | e> Result String Unit
+forEachLine conn f = match readLine conn with
+  Err e -> Err e
+  Ok None -> Ok ()
+  Ok (Some line) -> match f line with
+    Ok () -> forEachLine conn f
+    Err e -> Err e
+
+-- Connect, run f with the connection and close it again.
+withConnection : String -> (Conn -> <IO | e> a) -> <IO | e> Result String a
+withConnection addr f = match connect addr with
+  Err e -> Err e
+  Ok conn ->
+    let result = f conn
+    close conn
+    Ok result

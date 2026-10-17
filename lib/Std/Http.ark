@@ -1,0 +1,547 @@
+-- HTTP servers with routing, and an HTTP client.
+--
+--   import Std.Http
+--   import Std.Json as Json
+--
+--   hello : Handler e
+--   hello req = text "Hello, ${withDefault "world" (query "name" req)}!"
+--
+--   user : Handler e
+--   user req =
+--     let id = parseInt (param "id" req) |> orHalt (badRequest "id must be a number")
+--     json (Json.object [("id", Json.int id)])
+--
+--   main () = serve ":8080" (logRequests (router
+--     [ get "/" hello
+--     , get "/users/:id" user
+--     , staticDir "/assets" "public"
+--     ]))
+--
+-- Requests are read concurrently, but handlers run one at a time, so they
+-- may use any effect (State, Ref, ...) without locking. A handler that
+-- fails (`fail`, a runtime error) answers 500; `halt` answers early with
+-- any response.
+module Std.Http
+
+import Std.String as S
+import Std.Url as Url
+import Std.Json as Json
+import Std.Path as Path
+import Std.IO as IO
+import Std.Time as Time
+
+-- ===================================================================
+-- Requests
+-- ===================================================================
+
+type Server
+type Exchange
+
+-- exchange, method, path, query parameters, headers, body, remote address,
+-- path parameters (filled by the router)
+type Request = Request Exchange String String (List (String, String)) (List (String, String)) String String (List (String, String))
+
+-- "GET", "POST", ...
+method : Request -> String
+method (Request _ m _ _ _ _ _ _) = m
+
+-- The decoded path, without the query: "/users/42"
+path : Request -> String
+path (Request _ _ p _ _ _ _ _) = p
+
+-- All query parameters, in order.
+queryParams : Request -> List (String, String)
+queryParams (Request _ _ _ q _ _ _ _) = q
+
+-- The first value of a query parameter: query "page" for "/items?page=2"
+query : String -> Request -> Option String
+query name req = lookup name (queryParams req)
+
+-- All headers, sorted by name (names in canonical form: "Content-Type").
+headers : Request -> List (String, String)
+headers (Request _ _ _ _ hs _ _ _) = hs
+
+-- A header, by case-insensitive name.
+header : String -> Request -> Option String
+header name req = lookupHeader name (headers req)
+
+body : Request -> String
+body (Request _ _ _ _ _ b _ _) = b
+
+-- The client address, "ip:port".
+remoteAddress : Request -> String
+remoteAddress (Request _ _ _ _ _ _ r _) = r
+
+-- All path parameters bound by the route pattern.
+params : Request -> List (String, String)
+params (Request _ _ _ _ _ _ _ ps) = ps
+
+-- A path parameter: param "id" for the pattern "/users/:id" ("" if the
+-- pattern has no such parameter).
+param : String -> Request -> String
+param name req = withDefault "" (lookup name (params req))
+
+-- The body parsed as JSON.
+jsonBody : Request -> Result String Json.Json
+jsonBody req = Json.parse (body req)
+
+-- The fields of a form body (application/x-www-form-urlencoded).
+formParams : Request -> List (String, String)
+formParams req = Url.parseQuery (body req)
+
+formParam : String -> Request -> Option String
+formParam name req = lookup name (formParams req)
+
+-- Cookies sent by the client.
+cookies : Request -> List (String, String)
+cookies req = match header "Cookie" req with
+  None -> []
+  Some line -> line |> split ";" |> mapList trim |> filter (\c -> c != "") |> mapList cookiePair
+
+private cookiePair : String -> (String, String)
+cookiePair c = match S.splitOnce "=" c with
+  Some (k, v) -> (k, v)
+  None -> (c, "")
+
+cookie : String -> Request -> Option String
+cookie name req = lookup name (cookies req)
+
+private lookupHeader : String -> List (String, String) -> Option String
+lookupHeader name hs = map snd (find (\(k, _) -> S.equalIgnoringCase k name) hs)
+
+-- A request built in the program, for testing handlers without a server:
+-- request "POST" "/users?debug=1" "{\"name\": \"a\"}"
+request : String -> String -> String -> Request
+request m target b =
+  let (p, q) = withDefault (target, "") (S.splitOnce "?" target)
+  Request primNoExchange m p (Url.parseQuery q) [] b "127.0.0.1:0" []
+
+-- Add a header to a request (for testing).
+withRequestHeader : String -> String -> Request -> Request
+withRequestHeader k v (Request ex m p q hs b r ps) = Request ex m p q (append hs [(k, v)]) b r ps
+
+private withParams : List (String, String) -> Request -> Request
+withParams ps (Request ex m p q hs b r _) = Request ex m p q hs b r ps
+
+-- ===================================================================
+-- Responses
+-- ===================================================================
+
+-- status, headers, body
+type Response = Response Int (List (String, String)) String
+  deriving (Eq, Show)
+
+status : Response -> Int
+status (Response s _ _) = s
+
+responseHeaders : Response -> List (String, String)
+responseHeaders (Response _ hs _) = hs
+
+responseHeader : String -> Response -> Option String
+responseHeader name resp = lookupHeader name (responseHeaders resp)
+
+responseBody : Response -> String
+responseBody (Response _ _ b) = b
+
+-- A 2xx status.
+isSuccess : Response -> Bool
+isSuccess resp = status resp >= 200 && status resp < 300
+
+-- A response with a status and a body, without headers.
+response : Int -> String -> Response
+response s b = Response s [] b
+
+-- 200 with a plain text body.
+text : String -> Response
+text s = Response 200 [("Content-Type", "text/plain; charset=utf-8")] s
+
+-- 200 with an HTML body.
+html : String -> Response
+html s = Response 200 [("Content-Type", "text/html; charset=utf-8")] s
+
+-- 200 with a JSON body.
+json : Json.Json -> Response
+json v = Response 200 [("Content-Type", "application/json")] (Json.render v)
+
+withStatus : Int -> Response -> Response
+withStatus s (Response _ hs b) = Response s hs b
+
+-- Set a header, replacing any header of the same name.
+withHeader : String -> String -> Response -> Response
+withHeader k v (Response s hs b) = Response s (append (filter (\(n, _) -> not (S.equalIgnoringCase n k)) hs) [(k, v)]) b
+
+-- Add a header, keeping others of the same name (e.g. Set-Cookie).
+addHeader : String -> String -> Response -> Response
+addHeader k v (Response s hs b) = Response s (append hs [(k, v)]) b
+
+withContentType : String -> Response -> Response
+withContentType ct resp = withHeader "Content-Type" ct resp
+
+-- Set a cookie for the whole site: setCookie "session" "abc" resp
+setCookie : String -> String -> Response -> Response
+setCookie name value resp = setCookieWith name value "Path=/; HttpOnly; SameSite=Lax" resp
+
+-- Set a cookie with explicit attributes: "Path=/; Max-Age=3600; Secure"
+setCookieWith : String -> String -> String -> Response -> Response
+setCookieWith name value attrs resp = addHeader "Set-Cookie" (name ++ "=" ++ value ++ "; " ++ attrs) resp
+
+-- A plain text response for an error status, e.g. "404 Not Found".
+errorResponse : Int -> String -> Response
+errorResponse s msg = withStatus s (text msg)
+
+noContent : Response
+noContent = Response 204 [] ""
+
+-- 302 Found.
+redirect : String -> Response
+redirect url = Response 302 [("Location", url)] ""
+
+-- 301 Moved Permanently.
+redirectPermanent : String -> Response
+redirectPermanent url = Response 301 [("Location", url)] ""
+
+badRequest : String -> Response
+badRequest msg = errorResponse 400 msg
+
+unauthorized : Response
+unauthorized = errorResponse 401 "401 Unauthorized"
+
+forbidden : Response
+forbidden = errorResponse 403 "403 Forbidden"
+
+notFound : Response
+notFound = errorResponse 404 "404 Not Found"
+
+methodNotAllowed : List String -> Response
+methodNotAllowed allowed = withHeader "Allow" (joinWith ", " allowed) (errorResponse 405 "405 Method Not Allowed")
+
+internalError : Response
+internalError = errorResponse 500 "500 Internal Server Error"
+
+-- The reason phrase of a status code.
+statusText : Int -> String
+statusText 100 = "Continue"
+statusText 101 = "Switching Protocols"
+statusText 200 = "OK"
+statusText 201 = "Created"
+statusText 202 = "Accepted"
+statusText 204 = "No Content"
+statusText 206 = "Partial Content"
+statusText 301 = "Moved Permanently"
+statusText 302 = "Found"
+statusText 303 = "See Other"
+statusText 304 = "Not Modified"
+statusText 307 = "Temporary Redirect"
+statusText 308 = "Permanent Redirect"
+statusText 400 = "Bad Request"
+statusText 401 = "Unauthorized"
+statusText 403 = "Forbidden"
+statusText 404 = "Not Found"
+statusText 405 = "Method Not Allowed"
+statusText 406 = "Not Acceptable"
+statusText 409 = "Conflict"
+statusText 410 = "Gone"
+statusText 413 = "Content Too Large"
+statusText 415 = "Unsupported Media Type"
+statusText 422 = "Unprocessable Content"
+statusText 429 = "Too Many Requests"
+statusText 500 = "Internal Server Error"
+statusText 501 = "Not Implemented"
+statusText 502 = "Bad Gateway"
+statusText 503 = "Service Unavailable"
+statusText 504 = "Gateway Timeout"
+statusText _ = ""
+
+-- ===================================================================
+-- Handlers
+-- ===================================================================
+
+-- Stop handling the request and answer with a response.
+effect Halt where
+  halt : Response -> a
+
+-- A request handler. Handlers may fail (answered with 500), halt with a
+-- response, and use any other effect e handled around the server.
+alias Handler e = Request -> <IO, Fail, Halt | e> Response
+
+-- The value of an option, or halt with the response.
+orHalt : Response -> Option a -> <Halt> a
+orHalt resp None = halt resp
+orHalt _ (Some x) = x
+
+-- The value of a result, or halt with a response built from the error.
+orHaltWith : (err -> <> Response) -> Result err a -> <Halt> a
+orHaltWith f (Err e) = halt (f e)
+orHaltWith _ (Ok x) = x
+
+-- The response of a computation, or the one it halted with. Middleware uses
+-- this to see every response.
+catchHalt : (Unit -> <Halt | e> Response) -> <e> Response
+catchHalt action = handle action () with
+  halt resp _ -> resp
+
+-- Run a handler on a request: Fail and runtime errors become 500, halt
+-- gives its response.
+runHandler : Handler e -> Request -> <IO | e> Response
+runHandler h req =
+  let attempt () = runFail (\_ -> catchHalt (\_ -> h req))
+  match primCatchError attempt with
+    Ok (Ok resp) -> resp
+    Ok (Err msg) -> handlerFailed req msg
+    Err msg -> handlerFailed req msg
+
+private handlerFailed : Request -> String -> <IO> Response
+handlerFailed req msg =
+  eprintln "${method req} ${path req}: ${msg}"
+  internalError
+
+-- ===================================================================
+-- Routing
+-- ===================================================================
+
+type Segment = Lit String | Capture String | Rest String
+  deriving (Eq, Show)
+
+-- method ("*" for any), pattern, handler
+type Route e = Route String (List Segment) (Handler e)
+
+-- A route for a method and a pattern. Pattern segments are literal text,
+-- ":name" (one segment, read with `param "name"`) or, last, "*name" (the
+-- rest of the path, possibly empty).
+route : String -> String -> Handler e -> Route e
+route m pattern h = Route m (parsePattern pattern) h
+
+get : String -> Handler e -> Route e
+get pattern h = route "GET" pattern h
+
+post : String -> Handler e -> Route e
+post pattern h = route "POST" pattern h
+
+put : String -> Handler e -> Route e
+put pattern h = route "PUT" pattern h
+
+patch : String -> Handler e -> Route e
+patch pattern h = route "PATCH" pattern h
+
+delete : String -> Handler e -> Route e
+delete pattern h = route "DELETE" pattern h
+
+-- A route for every method.
+anyMethod : String -> Handler e -> Route e
+anyMethod pattern h = route "*" pattern h
+
+-- Put routes under a path prefix: scope "/api" [get "/users" users]
+scope : String -> List (Route e) -> List (Route e)
+scope prefix routes = mapList (\(Route m pat h) -> Route m (append (parsePattern prefix) pat) h) routes
+
+parsePattern : String -> List Segment
+parsePattern pattern = mapList parseSegment (pathSegments pattern)
+
+private parseSegment : String -> Segment
+parseSegment s = match S.stripPrefix ":" s with
+  Some name -> Capture name
+  None -> match S.stripPrefix "*" s with
+    Some name -> Rest name
+    None -> Lit s
+
+-- The non-empty segments of a path: "/a//b/" -> ["a", "b"]
+pathSegments : String -> List String
+pathSegments p = filter (\s -> s != "") (split "/" p)
+
+-- Dispatch to the first route whose pattern and method match. Answers 404
+-- when no pattern matches and 405 when only the method is wrong. HEAD
+-- requests are served by GET routes.
+router : List (Route e) -> Handler e
+router routes req = dispatch (method req) (pathSegments (path req)) req [] routes
+
+private dispatch : String -> List String -> Request -> List String -> List (Route e) -> <IO, Fail, Halt | e> Response
+dispatch _ _ _ [] [] = notFound
+dispatch _ _ _ allowed [] = methodNotAllowed (nub (reverse allowed))
+dispatch m segs req allowed (Route rm pat h :: rest) = match matchSegments pat segs [] with
+  None -> dispatch m segs req allowed rest
+  Some ps
+    | methodMatches rm m -> h (withParams ps req)
+    | otherwise -> dispatch m segs req (rm :: allowed) rest
+
+private methodMatches : String -> String -> Bool
+methodMatches "*" _ = True
+methodMatches "GET" "HEAD" = True
+methodMatches a b = a == b
+
+private matchSegments : List Segment -> List String -> List (String, String) -> Option (List (String, String))
+matchSegments [] [] acc = Some (reverse acc)
+matchSegments [Rest name] segs acc = Some (reverse ((name, joinWith "/" segs) :: acc))
+matchSegments (Lit s :: ps) (x :: xs) acc
+  | s == x = matchSegments ps xs acc
+matchSegments (Capture name :: ps) (x :: xs) acc = matchSegments ps xs ((name, x) :: acc)
+matchSegments _ _ _ = None
+
+-- ===================================================================
+-- Middleware
+-- ===================================================================
+
+-- Print one line per request: "GET /users/1 200 1.20ms"
+logRequests : Handler e -> Handler e
+logRequests h req =
+  let start = clock ()
+  let resp = catchHalt (\_ -> h req)
+  println "${method req} ${path req} ${status resp} ${Time.formatDuration (clock () - start)}"
+  resp
+
+-- Allow cross-origin requests from an origin ("*" for any) and answer
+-- CORS preflight requests.
+withCors : String -> Handler e -> Handler e
+withCors origin h req = match method req with
+  "OPTIONS" ->
+    let allowHeaders = withDefault "Content-Type" (header "Access-Control-Request-Headers" req)
+    withHeader "Access-Control-Allow-Origin" origin (withHeader "Access-Control-Allow-Methods" "GET, POST, PUT, PATCH, DELETE, OPTIONS" (withHeader "Access-Control-Allow-Headers" allowHeaders noContent))
+  _ -> withHeader "Access-Control-Allow-Origin" origin (catchHalt (\_ -> h req))
+
+-- Add a header to every response.
+withResponseHeader : String -> String -> Handler e -> Handler e
+withResponseHeader k v h req = withHeader k v (catchHalt (\_ -> h req))
+
+-- ===================================================================
+-- Static files
+-- ===================================================================
+
+-- Serve the files under a directory: staticDir "/assets" "public" serves
+-- public/app.js at /assets/app.js and public/index.html at /assets.
+staticDir : String -> String -> Route e
+staticDir prefix dir = Route "GET" (append (parsePattern prefix) [Rest "file"]) (\req -> serveFrom dir (param "file" req))
+
+private serveFrom : String -> String -> <IO> Response
+serveFrom dir file
+  | any (\s -> s == ".." || startsWith "." s) (split "/" file) = notFound
+  | otherwise =
+      let full = Path.normalize (dir ++ "/" ++ file)
+      match IO.isDirectory full with
+        True -> fileResponse (full ++ "/index.html")
+        False -> fileResponse full
+
+-- A file with a Content-Type from its extension, or 404.
+fileResponse : String -> <IO> Response
+fileResponse file = match IO.isDirectory file with
+  True -> notFound
+  False -> match readFile file with
+    Ok content -> Response 200 [("Content-Type", contentTypeFor file)] content
+    Err _ -> notFound
+
+-- The MIME type for a file name.
+contentTypeFor : String -> String
+contentTypeFor file = match toLower (Path.extension file) with
+  ".html" -> "text/html; charset=utf-8"
+  ".htm" -> "text/html; charset=utf-8"
+  ".css" -> "text/css; charset=utf-8"
+  ".js" -> "text/javascript; charset=utf-8"
+  ".mjs" -> "text/javascript; charset=utf-8"
+  ".json" -> "application/json"
+  ".txt" -> "text/plain; charset=utf-8"
+  ".md" -> "text/markdown; charset=utf-8"
+  ".csv" -> "text/csv; charset=utf-8"
+  ".xml" -> "application/xml"
+  ".svg" -> "image/svg+xml"
+  ".png" -> "image/png"
+  ".jpg" -> "image/jpeg"
+  ".jpeg" -> "image/jpeg"
+  ".gif" -> "image/gif"
+  ".webp" -> "image/webp"
+  ".ico" -> "image/x-icon"
+  ".wasm" -> "application/wasm"
+  ".pdf" -> "application/pdf"
+  ".woff" -> "font/woff"
+  ".woff2" -> "font/woff2"
+  _ -> "application/octet-stream"
+
+-- ===================================================================
+-- Servers
+-- ===================================================================
+
+-- Start listening on "host:port" (":8080" for every interface, port 0 for
+-- any free port).
+foreign listen : String -> <IO> Result String Server = "rt.HttpListen"
+-- The address actually bound, e.g. "[::]:8080".
+foreign serverAddress : Server -> <IO> String = "rt.HttpServerAddr"
+-- Stop accepting requests; `accept` returns None and `serveOn` returns.
+foreign closeServer : Server -> <IO> Unit = "rt.HttpClose"
+
+foreign primNext : Server -> <IO> Option (Exchange, String, String, String, List (String, String), String, String) = "rt.HttpNext"
+foreign primRespond : Exchange -> Int -> List (String, String) -> String -> <IO> Unit = "rt.HttpRespond"
+foreign primNoExchange : Exchange = "rt.HttpNoExchange"
+foreign primCatchError : (Unit -> <e> a) -> <e> Result String a = "rt.CatchError"
+
+-- Wait for the next request; None once the server is closed.
+accept : Server -> <IO> Option Request
+accept srv = match primNext srv with
+  None -> None
+  Some (ex, m, p, q, hs, b, r) -> Some (Request ex m p (Url.parseQuery q) hs b r [])
+
+-- Send the response to a request (only the first response counts).
+respond : Request -> Response -> <IO> Unit
+respond (Request ex _ _ _ _ _ _ _) (Response s hs b) = primRespond ex s hs b
+
+-- Answer requests with a handler until the server is closed.
+serveOn : Server -> Handler e -> <IO | e> Unit
+serveOn srv h = match accept srv with
+  None -> ()
+  Some req ->
+    respond req (runHandler h req)
+    serveOn srv h
+
+-- Listen on an address and answer requests forever. Exits with status 1 if
+-- the address cannot be used.
+serve : String -> Handler e -> <IO | e> Unit
+serve addr h = match listen addr with
+  Err e ->
+    eprintln "cannot listen on ${addr}: ${e}"
+    exit 1
+  Ok srv ->
+    println "Listening on http://${displayAddress (serverAddress srv)}"
+    serveOn srv h
+
+private displayAddress : String -> String
+displayAddress addr = match S.lastIndexOf ":" addr with
+  None -> addr
+  Some i ->
+    let host = substring 0 i addr
+    let port = S.drop (i + 1) addr
+    match host with
+      "" -> "localhost:" ++ port
+      "[::]" -> "localhost:" ++ port
+      "0.0.0.0" -> "localhost:" ++ port
+      _ -> addr
+
+-- ===================================================================
+-- Client
+-- ===================================================================
+
+foreign primFetch : String -> String -> List (String, String) -> String -> Float -> <IO> Result String (Int, List (String, String), String) = "rt.HttpFetch"
+
+-- Send a request: fetch method url headers body. Redirects are followed;
+-- any status is Ok, Err is for network failures. Times out after 30 s.
+fetch : String -> String -> List (String, String) -> String -> <IO> Result String Response
+fetch m url hs b = fetchWithTimeout 30.0 m url hs b
+
+-- fetch with a timeout in seconds (0 for none).
+fetchWithTimeout : Float -> String -> String -> List (String, String) -> String -> <IO> Result String Response
+fetchWithTimeout t m url hs b = match primFetch m url hs b t with
+  Ok (s, rhs, rb) -> Ok (Response s rhs rb)
+  Err e -> Err e
+
+httpGet : String -> <IO> Result String Response
+httpGet url = fetch "GET" url [] ""
+
+-- httpPost url contentType body
+httpPost : String -> String -> String -> <IO> Result String Response
+httpPost url ct b = fetch "POST" url [("Content-Type", ct)] b
+
+postJson : String -> Json.Json -> <IO> Result String Response
+postJson url v = httpPost url "application/json" (Json.render v)
+
+-- GET a URL and parse the body as JSON; a non-2xx status is an error.
+getJson : String -> <IO> Result String Json.Json
+getJson url = match httpGet url with
+  Err e -> Err e
+  Ok resp
+    | isSuccess resp -> Json.parse (responseBody resp)
+    | otherwise -> Err "HTTP ${status resp} ${statusText (status resp)}"

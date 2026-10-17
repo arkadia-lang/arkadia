@@ -1,0 +1,109 @@
+-- URLs: parsing, percent-encoding and query strings.
+--
+--   import Std.Url as Url
+--   Url.parseQuery "q=arkadia+lang&page=2"   -- [("q", "arkadia lang"), ("page", "2")]
+--   Url.withQuery "https://example.com/search" [("q", "a&b")]
+--     -- "https://example.com/search?q=a%26b"
+module Std.Url
+
+import Std.String as S
+
+-- scheme, user info, host, port, path, raw query, fragment
+type Url = Url String String String String String String String
+  deriving (Eq, Show)
+
+-- Percent-encode for a query component ("a b&c" -> "a+b%26c").
+foreign encode : String -> String = "rt.UrlQueryEscape"
+-- Decode a query component; None for malformed escapes.
+foreign decode : String -> Option String = "rt.UrlQueryUnescape"
+-- Percent-encode for a path segment ("a b/c" -> "a%20b%2Fc").
+foreign encodePath : String -> String = "rt.UrlPathEscape"
+foreign decodePath : String -> Option String = "rt.UrlPathUnescape"
+-- Resolve a reference against a base: resolve "http://h/a/b" "../c" == Ok "http://h/c"
+foreign resolve : String -> String -> Result String String = "rt.UrlResolve"
+
+foreign parseParts : String -> Result String (String, String, String, String, String, String, String) = "rt.UrlParse"
+
+parse : String -> Result String Url
+parse s = match parseParts s with
+  Ok (scheme, user, host, port, path, query, fragment) -> Ok (Url scheme user host port path query fragment)
+  Err e -> Err e
+
+scheme : Url -> String
+scheme (Url s _ _ _ _ _ _) = s
+
+userInfo : Url -> String
+userInfo (Url _ u _ _ _ _ _) = u
+
+host : Url -> String
+host (Url _ _ h _ _ _ _) = h
+
+-- The explicit port, or None.
+port : Url -> Option Int
+port (Url _ _ _ p _ _ _) = parseInt p
+
+path : Url -> String
+path (Url _ _ _ _ p _ _) = p
+
+rawQuery : Url -> String
+rawQuery (Url _ _ _ _ _ q _) = q
+
+fragment : Url -> String
+fragment (Url _ _ _ _ _ _ f) = f
+
+-- The decoded query parameters, in order.
+queryParams : Url -> List (String, String)
+queryParams u = parseQuery (rawQuery u)
+
+-- The URL as text again.
+render : Url -> String
+render (Url sch user h p pth q frag) =
+  let authority = withPrefix user "@" ++ h ++ prefixed ":" p
+  let base = match sch with
+    "" -> authority
+    _ -> sch ++ "://" ++ authority
+  base ++ pth ++ prefixed "?" q ++ prefixed "#" frag
+
+private withPrefix : String -> String -> String
+withPrefix "" _ = ""
+withPrefix s suffix = s ++ suffix
+
+private prefixed : String -> String -> String
+prefixed _ "" = ""
+prefixed pre s = pre ++ s
+
+-- ===================================================================
+-- Query strings
+-- ===================================================================
+
+-- Decode "a=1&b=x+y&flag" into [("a", "1"), ("b", "x y"), ("flag", "")].
+parseQuery : String -> List (String, String)
+parseQuery "" = []
+parseQuery q = q |> split "&" |> filter (\p -> p != "") |> mapList queryPair
+
+private queryPair : String -> (String, String)
+queryPair p = match S.splitOnce "=" p with
+  Some (k, v) -> (decodeLenient k, decodeLenient v)
+  None -> (decodeLenient p, "")
+
+private decodeLenient : String -> String
+decodeLenient s = withDefault s (decode s)
+
+-- Encode pairs as a query string (without the leading "?").
+renderQuery : List (String, String) -> String
+renderQuery kvs = joinWith "&" (mapList (\(k, v) -> encode k ++ "=" ++ encode v) kvs)
+
+-- Append query parameters to a URL.
+withQuery : String -> List (String, String) -> String
+withQuery u [] = u
+withQuery u kvs
+  | contains "?" u = u ++ "&" ++ renderQuery kvs
+  | otherwise = u ++ "?" ++ renderQuery kvs
+
+-- The first value of a parameter.
+lookupParam : String -> List (String, String) -> Option String
+lookupParam name kvs = lookup name kvs
+
+-- Every value of a repeated parameter: "tag=a&tag=b".
+lookupAll : String -> List (String, String) -> List String
+lookupAll name kvs = kvs |> filter (\(k, _) -> k == name) |> mapList snd

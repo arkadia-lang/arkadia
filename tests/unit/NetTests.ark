@@ -1,0 +1,171 @@
+-- Unit tests for Std.Url, Std.Net and Std.Http.
+module NetTests
+
+import Std.Url as Url
+import Std.Net as Net
+import Std.Http as Http
+import Std.Http (Handler, Response(..), get, post, delete, router, scope, text, json, param, query, halt, orHalt, badRequest)
+import Std.Json as Json
+import Std.State as St
+import Std.IO as IO
+
+ok : Result String a -> <Fail> a
+ok (Ok x) = x
+ok (Err e) = fail e
+
+test "url encoding" =
+  assertEq (Url.encode "a b&c=d/é") "a+b%26c%3Dd%2F%C3%A9"
+  assertEq (Url.decode "a+b%26c%3Dd%2F%C3%A9") (Some "a b&c=d/é")
+  assertEq (Url.decode "%zz") None
+  assertEq (Url.encodePath "a b/c") "a%20b%2Fc"
+  assertEq (Url.decodePath "a%20b") (Some "a b")
+
+test "query strings" =
+  assertEq (Url.parseQuery "q=arkadia+lang&page=2&flag&&tag=a&tag=b") [("q", "arkadia lang"), ("page", "2"), ("flag", ""), ("tag", "a"), ("tag", "b")]
+  assertEq (Url.parseQuery "") []
+  assertEq (Url.renderQuery [("q", "a&b"), ("n", "1 2")]) "q=a%26b&n=1+2"
+  assertEq (Url.withQuery "https://h/s" [("q", "x")]) "https://h/s?q=x"
+  assertEq (Url.withQuery "https://h/s?a=1" [("q", "x")]) "https://h/s?a=1&q=x"
+  assertEq (Url.lookupAll "tag" (Url.parseQuery "tag=a&x=1&tag=b")) ["a", "b"]
+
+test "parsing urls" =
+  let u = ok (Url.parse "https://user@example.com:8443/a/b?x=1&y=2#top")
+  assertEq (Url.scheme u, Url.userInfo u, Url.host u, Url.port u) ("https", "user", "example.com", Some 8443)
+  assertEq (Url.path u, Url.rawQuery u, Url.fragment u) ("/a/b", "x=1&y=2", "top")
+  assertEq (Url.queryParams u) [("x", "1"), ("y", "2")]
+  assertEq (Url.render u) "https://user@example.com:8443/a/b?x=1&y=2#top"
+  assertEq (Url.port (ok (Url.parse "http://example.com/"))) None
+  assertEq (Url.resolve "http://h/a/b" "../c?d") (Ok "http://h/c?d")
+
+-- ===================================================================
+-- Routing, with requests built in the program
+-- ===================================================================
+
+showUser : Handler e
+showUser req =
+  let id = parseInt (param "id" req) |> orHalt (badRequest "bad id")
+  json (Json.object [("id", Json.int id)])
+
+app : Handler e
+app = router (
+  [ get "/" (\_ -> text "home")
+  , get "/users/:id" showUser
+  , post "/users" (\req -> Http.withStatus 201 (text "created ${Http.body req}"))
+  , delete "/users/:id" (\req -> text "deleted ${param "id" req}")
+  , get "/files/*rest" (\req -> text "file ${param "rest" req}")
+  , get "/search" (\req -> text (withDefault "-" (query "q" req)))
+  , get "/fail" (\_ -> fail "boom")
+  , get "/crash" (\_ -> text (show (1 / 0)))
+  ] ++ scope "/api/v1" [get "/ping" (\_ -> text "pong")])
+
+call : String -> String -> String -> <IO> Response
+call m target b = Http.runHandler app (Http.request m target b)
+
+test "routing" =
+  assertEq (Http.responseBody (call "GET" "/" "")) "home"
+  assertEq (call "GET" "/users/42" "") (Response 200 [("Content-Type", "application/json")] "{\"id\":42}")
+  assertEq (Http.status (call "GET" "/users/abc" "")) 400
+  assertEq (Http.status (call "POST" "/users" "bob"), Http.responseBody (call "POST" "/users" "bob")) (201, "created bob")
+  assertEq (Http.responseBody (call "DELETE" "/users/7" "")) "deleted 7"
+  assertEq (Http.responseBody (call "GET" "/files/a/b.txt" "")) "file a/b.txt"
+  assertEq (Http.responseBody (call "GET" "/files" "")) "file "
+  assertEq (Http.responseBody (call "GET" "/search?q=a+b" "")) "a b"
+  assertEq (Http.responseBody (call "GET" "/api/v1/ping/" "")) "pong"
+  assertEq (Http.status (call "HEAD" "/" "")) 200
+
+test "unmatched routes and failures" =
+  assertEq (Http.status (call "GET" "/nope" "")) 404
+  let r = call "PUT" "/users/1" ""
+  assertEq (Http.status r, Http.responseHeader "allow" r) (405, Some "GET, DELETE")
+  assertEq (Http.status (call "GET" "/fail" "")) 500
+  assertEq (Http.status (call "GET" "/crash" "")) 500
+
+counting _ =
+  St.put (St.get () + 1)
+  text "n=${St.get ()}"
+
+test "handlers can use effects around the server" =
+  let (last, n) = St.runState 0 (\_ ->
+    let _ = Http.runHandler counting (Http.request "GET" "/" "")
+    Http.runHandler counting (Http.request "GET" "/" ""))
+  assertEq (Http.responseBody last, n) ("n=2", 2)
+
+test "request accessors" =
+  let req = Http.request "POST" "/login?next=%2Fhome" "user=ann&pass=a+b"
+    |> Http.withRequestHeader "Cookie" "a=1; session=xyz"
+    |> Http.withRequestHeader "Content-Type" "application/x-www-form-urlencoded"
+  assertEq (Http.method req, Http.path req, query "next" req) ("POST", "/login", Some "/home")
+  assertEq (Http.formParam "pass" req, Http.formParam "none" req) (Some "a b", None)
+  assertEq (Http.cookie "session" req, Http.cookies req) (Some "xyz", [("a", "1"), ("session", "xyz")])
+  assertEq (Http.header "content-type" req) (Some "application/x-www-form-urlencoded")
+  let jreq = Http.request "POST" "/" "{\"n\": 3}"
+  assertEq (map (Json.field "n") (Http.jsonBody jreq)) (Ok (Some (Json.JNumber 3.0)))
+
+test "responses" =
+  let r = text "hi" |> Http.withHeader "X-A" "1" |> Http.withHeader "x-a" "2" |> Http.setCookie "s" "v"
+  assertEq (Http.responseHeaders r) [("Content-Type", "text/plain; charset=utf-8"), ("x-a", "2"), ("Set-Cookie", "s=v; Path=/; HttpOnly; SameSite=Lax")]
+  assertEq (Http.redirect "/x") (Response 302 [("Location", "/x")] "")
+  assertEq (Http.statusText 404, Http.statusText 418) ("Not Found", "")
+  assert (Http.isSuccess (Http.withStatus 204 r) && not (Http.isSuccess Http.notFound)) "isSuccess"
+  let tagged = Http.runHandler (Http.withResponseHeader "X-App" "1" app) (Http.request "GET" "/users/abc" "")
+  assertEq (Http.status tagged, Http.responseHeader "X-App" tagged) (400, Some "1")
+  let cors = Http.withCors "*" app
+  assertEq (Http.status (Http.runHandler cors (Http.request "OPTIONS" "/" "")), Http.responseHeader "Access-Control-Allow-Origin" (Http.runHandler cors (Http.request "GET" "/" ""))) (204, Some "*")
+
+test "static files" =
+  let dir = ".ark-http-test"
+  let _ = IO.makeDir (dir ++ "/css")
+  let _ = writeFile (dir ++ "/index.html") "<h1>hi</h1>"
+  let _ = writeFile (dir ++ "/css/site.css") "body {}"
+  let _ = writeFile (dir ++ "/.secret") "no"
+  let files = router [Http.staticDir "/static" dir]
+  let fetchFile p = Http.runHandler files (Http.request "GET" p "")
+  let css = fetchFile "/static/css/site.css"
+  assertEq (Http.responseBody css, Http.responseHeader "Content-Type" css) ("body {}", Some "text/css; charset=utf-8")
+  assertEq (Http.responseBody (fetchFile "/static")) "<h1>hi</h1>"
+  assertEq (mapList (\p -> Http.status (fetchFile p)) ["/static/missing", "/static/../NetTests.ark", "/static/.secret", "/static/css"]) [404, 404, 404, 404]
+  let _ = IO.removeAll dir
+  ()
+
+-- ===================================================================
+-- Sockets and a real server
+-- ===================================================================
+
+test "tcp" =
+  let l = ok (Net.listen "127.0.0.1:0")
+  let client = ok (Net.connect (Net.listenerAddress l))
+  ok (Net.write client "hello\r\nworld\n")
+  Net.closeWrite client
+  let server = ok (Net.accept l)
+  assertEq (ok (Net.readLine server), ok (Net.readLine server), ok (Net.readLine server)) (Some "hello", Some "world", None)
+  ok (Net.writeLine server "bye")
+  Net.close server
+  assertEq (ok (Net.readAll client)) "bye\n"
+  Net.close client
+  Net.closeListener l
+  assertEq (Net.splitHostPort "[::1]:80", Net.joinHostPort "::1" "80") (Ok ("::1", "80"), "[::1]:80")
+
+test "http server over a socket" =
+  let srv = ok (Http.listen "127.0.0.1:0")
+  let conn = ok (Net.connect (Http.serverAddress srv))
+  ok (Net.write conn "POST /users HTTP/1.1\r\nHost: example\r\nContent-Length: 3\r\nConnection: close\r\n\r\nann")
+  let req = Http.accept srv |> orFail "no request"
+  assertEq (Http.method req, Http.path req, Http.body req, Http.header "host" req) ("POST", "/users", "ann", Some "example")
+  Http.respond req (Http.runHandler app req)
+  let raw = ok (Net.readAll conn)
+  assert (startsWith "HTTP/1.1 201 Created\r\n" raw) raw
+  assert (endsWith "\r\n\r\ncreated ann" raw) raw
+  Net.close conn
+  Http.closeServer srv
+  assertEq (Http.accept srv |> isNone) True
+
+test "http client errors" =
+  let l = ok (Net.listen "127.0.0.1:0")
+  let addr = Net.listenerAddress l
+  Net.closeListener l
+  assert (isErr (Http.httpGet "http://${addr}/")) "connection refused"
+  assert (isErr (Http.httpGet "not a url")) "bad url"
+
+isErr : Result e a -> Bool
+isErr (Err _) = True
+isErr (Ok _) = False

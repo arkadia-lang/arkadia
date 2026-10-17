@@ -6,11 +6,13 @@ build:
 install:
 	go install ./cmd/ark
 
+# Generated programs are built without cgo; build and test the runtime the
+# same way (its net package would otherwise need a C compiler).
 test:
-	go test ./...
+	CGO_ENABLED=0 go test ./...
 
 check:
-	gofmt -l . && go vet ./...
+	gofmt -l . && CGO_ENABLED=0 go vet ./...
 
 # The self-hosted compiler (selfhost/), built by the Go implementation.
 selfhost: build
