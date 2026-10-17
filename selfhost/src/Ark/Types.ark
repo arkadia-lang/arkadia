@@ -441,6 +441,8 @@ type Checker = Checker
   (Ref (List MatchSite))                  -- match sites (reversed)
   (Ref (List Decl))                       -- declarations (including derived instances)
   (Ref (List FieldWanted))                -- pending field constraints
+  (Ref (List LitWanted))                  -- integer literals whose type is open
+  (Ref (Map.Map Int Bool))                -- type variables of integer literals (by id)
 
 -- A pending field constraint: position, record type, field name, the
 -- field's type (access) or the new value's type (update), all fields named
@@ -448,50 +450,65 @@ type Checker = Checker
 -- the slot receiving the record type's name.
 type FieldWanted = FieldWanted Pos Type String Type (List String) String (Ref String)
 
+-- An integer literal whose type is not known yet: position, the slot set
+-- when it becomes a Float, its type.
+type LitWanted = LitWanted Pos (Ref Bool) Type
+
 newChecker : Global -> String -> <IO> Checker
-newChecker g modName = Checker g modName (newScope ()) (newExports modName) (newRef []) (newRef 0) (newRef []) (newRef [[]]) (newRef []) (newRef 0) (newRef Map.empty) (newRef []) (newRef []) (newRef [])
+newChecker g modName = Checker g modName (newScope ()) (newExports modName) (newRef []) (newRef 0) (newRef []) (newRef [[]]) (newRef []) (newRef 0) (newRef Map.empty) (newRef []) (newRef []) (newRef []) (newRef []) (newRef Map.empty)
 
 cG : Checker -> Global
-cG (Checker g _ _ _ _ _ _ _ _ _ _ _ _ _) = g
+cG (Checker g _ _ _ _ _ _ _ _ _ _ _ _ _ _ _) = g
 
 cMod : Checker -> String
-cMod (Checker _ m _ _ _ _ _ _ _ _ _ _ _ _) = m
+cMod (Checker _ m _ _ _ _ _ _ _ _ _ _ _ _ _ _) = m
 
 cScope : Checker -> Scope
-cScope (Checker _ _ s _ _ _ _ _ _ _ _ _ _ _) = s
+cScope (Checker _ _ s _ _ _ _ _ _ _ _ _ _ _ _ _) = s
 
 cExports : Checker -> Exports
-cExports (Checker _ _ _ e _ _ _ _ _ _ _ _ _ _) = e
+cExports (Checker _ _ _ e _ _ _ _ _ _ _ _ _ _ _ _) = e
 
 cErrs : Checker -> Ref (List Diag)
-cErrs (Checker _ _ _ _ e _ _ _ _ _ _ _ _ _) = e
+cErrs (Checker _ _ _ _ e _ _ _ _ _ _ _ _ _ _ _) = e
 
 cLevelRef : Checker -> Ref Int
-cLevelRef (Checker _ _ _ _ _ l _ _ _ _ _ _ _ _) = l
+cLevelRef (Checker _ _ _ _ _ l _ _ _ _ _ _ _ _ _ _) = l
 
 cLocals : Checker -> Ref (List (String, LocalVar))
-cLocals (Checker _ _ _ _ _ _ l _ _ _ _ _ _ _) = l
+cLocals (Checker _ _ _ _ _ _ l _ _ _ _ _ _ _ _ _) = l
 
 cWanted : Checker -> Ref (List (List Wanted))
-cWanted (Checker _ _ _ _ _ _ _ w _ _ _ _ _ _) = w
+cWanted (Checker _ _ _ _ _ _ _ w _ _ _ _ _ _ _ _) = w
 
 cGivens : Checker -> Ref (List Given)
-cGivens (Checker _ _ _ _ _ _ _ _ g _ _ _ _ _) = g
+cGivens (Checker _ _ _ _ _ _ _ _ g _ _ _ _ _ _ _) = g
 
 cNextLoc : Checker -> Ref Int
-cNextLoc (Checker _ _ _ _ _ _ _ _ _ n _ _ _ _) = n
+cNextLoc (Checker _ _ _ _ _ _ _ _ _ n _ _ _ _ _ _) = n
 
 cSigs : Checker -> Ref (Map.Map String Sig)
-cSigs (Checker _ _ _ _ _ _ _ _ _ _ s _ _ _) = s
+cSigs (Checker _ _ _ _ _ _ _ _ _ _ s _ _ _ _ _) = s
 
 cMatches : Checker -> Ref (List MatchSite)
-cMatches (Checker _ _ _ _ _ _ _ _ _ _ _ m _ _) = m
+cMatches (Checker _ _ _ _ _ _ _ _ _ _ _ m _ _ _ _) = m
 
 cDecls : Checker -> Ref (List Decl)
-cDecls (Checker _ _ _ _ _ _ _ _ _ _ _ _ d _) = d
+cDecls (Checker _ _ _ _ _ _ _ _ _ _ _ _ d _ _ _) = d
 
 cFields : Checker -> Ref (List FieldWanted)
-cFields (Checker _ _ _ _ _ _ _ _ _ _ _ _ _ f) = f
+cFields (Checker _ _ _ _ _ _ _ _ _ _ _ _ _ f _ _) = f
+
+cLits : Checker -> Ref (List LitWanted)
+cLits (Checker _ _ _ _ _ _ _ _ _ _ _ _ _ _ l _) = l
+
+cLitMetas : Checker -> Ref (Map.Map Int Bool)
+cLitMetas (Checker _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ m) = m
+
+-- Mark the type variable of an integer literal: it can only become Int or
+-- Float.
+markLit : Checker -> Meta -> <IO> Unit
+markLit c m = modifyRef (cLitMetas c) (Map.insert (metaId m) True)
 
 level : Checker -> <IO> Int
 level c = readRef (cLevelRef c)
@@ -610,6 +627,20 @@ bindMeta m t =
   occursAdjust m t
   writeRef (metaRef m) (Some t)
 
+-- Bind a type variable, keeping the type of an integer literal Int or
+-- Float.
+bindMetaC : Checker -> Meta -> Type -> <Exn String, IO> Unit
+bindMetaC c m t = match Map.member (metaId m) (readRef (cLitMetas c)) with
+  False -> bindMeta m t
+  True -> match prune t with
+    TMeta n ->
+      markLit c n
+      bindMeta m t
+    TCon n _ | n == tIntName || n == tFloatName -> bindMeta m t
+    _ ->
+      writeRef (metaRef m) (Some (tInt c))
+      throw ""
+
 isRow : Type -> <IO> Bool
 isRow t = match prune t with
   TRowEmpty -> True
@@ -626,8 +657,8 @@ unify c a0 b0 =
   match sameVar a b with
     True -> ()
     False -> match (a, b) with
-      (TMeta ma, TMeta mb) | readRef (metaLevelRef mb) > readRef (metaLevelRef ma) -> bindMeta mb a
-      (TMeta ma, _) -> bindMeta ma b
+      (TMeta ma, TMeta mb) | readRef (metaLevelRef mb) > readRef (metaLevelRef ma) -> bindMetaC c mb a
+      (TMeta ma, _) -> bindMetaC c ma b
       (_, TMeta _) -> unify c b a
       _ | isRow a || isRow b -> unifyRows c a b
       (TCon x _, TCon y _) | x == y -> ()
@@ -1314,7 +1345,7 @@ applyArgs c name head k args env = match args with
 
 -- The checker with another scope (for alias expansion).
 withScope : Checker -> Scope -> Checker
-withScope (Checker g m _ e errs l locals w gv n sigs ms ds fs) s = Checker g m s e errs l locals w gv n sigs ms ds fs
+withScope (Checker g m _ e errs l locals w gv n sigs ms ds fs ls lm) s = Checker g m s e errs l locals w gv n sigs ms ds fs ls lm
 
 -- Convert the type of a definition. Along the spine of a curried
 -- function type, unannotated intermediate arrows (partial application) get

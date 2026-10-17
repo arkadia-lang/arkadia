@@ -1324,7 +1324,10 @@ atomBase p =
       expect_ p BAR
       let fs = fieldInits p
       EUpdate (tokPos t) rec fs (newRef "")
-    k | k == INT || k == FLOAT || k == STRING || k == CHAR ->
+    INT ->
+      skip p
+      mkNum (tokPos t) (withDefault 0 (parseIntLit (tokText t)))
+    k | k == FLOAT || k == STRING || k == CHAR ->
       skip p
       ELit (tokPos t) (litFromToken t)
     INTERP ->

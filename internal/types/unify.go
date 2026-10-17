@@ -60,6 +60,21 @@ func (c *Checker) occursAdjust(m *Meta, t Type) error {
 }
 
 func (c *Checker) bindMeta(m *Meta, t Type) error {
+	if c.litMetas[m] {
+		// the type of an integer literal: Int or Float
+		switch t := Prune(t).(type) {
+		case *Meta:
+			c.markLit(t)
+		case *TCon:
+			if t.Name != TInt && t.Name != TFloat {
+				m.Ref = c.tInt()
+				return &unifyError{""}
+			}
+		default:
+			m.Ref = c.tInt()
+			return &unifyError{""}
+		}
+	}
 	if err := c.occursAdjust(m, t); err != nil {
 		return err
 	}

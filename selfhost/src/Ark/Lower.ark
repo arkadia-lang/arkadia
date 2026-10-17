@@ -244,6 +244,9 @@ ctorOf r = match readRef r with
 lowerExpr : L -> Expr -> <IO> CExpr
 lowerExpr l e = match e with
   ELit _ lit -> CLit (litVal lit)
+  ENum _ n isFloat -> match readRef isFloat with
+    True -> CLit (VFloat (toFloat n))
+    False -> CLit (VInt n)
   EVar _ _ _ _ _ -> varRef l e
   ECon _ _ _ conRef -> ctorValue l (ctorOf conRef)
   EApp _ (ECon _ _ _ conRef) args _ ->

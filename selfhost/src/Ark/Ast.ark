@@ -711,6 +711,7 @@ type Expr
   | EFieldFn Pos String                          -- `.name` (removed by fixity resolution)
   | ERecord Pos String String (List FieldInit) (Ref (Option CtorInfo))
   | EUpdate Pos Expr (List FieldInit) (Ref String)
+  | ENum Pos Int (Ref Bool)                      -- an integer literal; set when the checker makes it a Float
 
 -- `name = value` in a record construction or update.
 type FieldInit = FieldInit Pos String Expr
@@ -739,10 +740,15 @@ exprPos e = match e with
   EFieldFn p _ -> p
   ERecord p _ _ _ _ -> p
   EUpdate p _ _ _ -> p
+  ENum p _ _ -> p
 
 -- A fresh variable reference node.
 mkVar : Pos -> String -> String -> <IO> Expr
 mkVar p qual name = EVar p qual name (newRef None) (newRef [])
+
+-- An integer literal in an expression.
+mkNum : Pos -> Int -> <IO> Expr
+mkNum p n = ENum p n (newRef False)
 
 mkCon : Pos -> String -> String -> <IO> Expr
 mkCon p qual name = ECon p qual name (newRef None)

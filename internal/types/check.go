@@ -21,7 +21,10 @@ type Checker struct {
 	wanted  *wantedScope
 	givens  []*given
 	fields  []*fieldWanted
-	nextLoc int
+	lits    []*litWanted
+	// type variables of integer literals: they can only become Int or Float
+	litMetas map[*Meta]bool
+	nextLoc  int
 
 	// declarations by kind
 	sigs     map[string]*syntax.DSig

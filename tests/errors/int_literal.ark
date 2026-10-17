@@ -1,0 +1,4 @@
+name : String
+name = 42
+
+main () = println name

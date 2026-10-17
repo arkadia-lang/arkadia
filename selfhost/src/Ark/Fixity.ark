@@ -198,7 +198,7 @@ reduceAll stack out = match stack with
 
 desugarNeg : Pos -> Expr -> <IO> Expr
 desugarNeg p x = match x with
-  ELit _ (LInt n) -> ELit p (LInt (negate n))
+  ENum _ n _ -> mkNum p (negate n)
   ELit _ (LFloat f) -> ELit p (LFloat (negate f))
   _ ->
     let neg = mkVar p "#Prelude" "negate"
@@ -209,6 +209,7 @@ isSimple e = match e with
   EVar _ _ _ _ _ -> True
   ECon _ _ _ _ -> True
   ELit _ _ -> True
+  ENum _ _ _ -> True
   EUnit _ -> True
   _ -> False
 

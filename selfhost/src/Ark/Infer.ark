@@ -184,7 +184,7 @@ flushRoot c =
     r :: _ -> reverse r
     [] -> []
   writeRef (cWanted c) [[]]
-  settleFields c (-1)
+  settle c (-1)
   forEach (solve c root) (defaultAmbiguous c)
 
 -- ================================================================ generalization
@@ -227,7 +227,7 @@ generalize c monos ws canGen = match canGen with
     floatWanted c ws
     (mapList mono monos, [])
   True ->
-    settleFields c (level c)
+    settle c (level c)
     let residual = solve c ws
     let monoMetas = metasOfMany monos
     let lvl = level c
@@ -284,6 +284,9 @@ checkExpr : Checker -> Expr -> Type -> Type -> String -> <IO> Unit
 checkExpr c e t eff what =
   let done = match e with
     ELam _ params body -> checkLam c params body t
+    ENum p _ isFloat ->
+      checkIntLit c p isFloat t what
+      True
     _ -> False
   match done with
     True -> ()
@@ -294,6 +297,7 @@ checkExpr c e t eff what =
 inferExpr : Checker -> Expr -> Type -> <IO> Type
 inferExpr c e eff = match e with
   ELit _ l -> litType c l
+  ENum p _ isFloat -> inferIntLit c p isFloat
   EVar _ _ _ _ _ -> inferVar c e
   ECon p q n con -> match lookupCtor c p q n with
     None -> freshType c
@@ -774,6 +778,59 @@ recordPatArgs c p name ci fields = match ctorFieldNames ci with
     let (ok, _) = foldl check (True, []) fields
     ok
 
+-- ================================================================ integer literals
+--
+-- An integer literal is an Int, or a Float where a Float is expected
+-- (`x * 2` with x : Float). When its type is not known yet, the decision
+-- waits like a field constraint: it is retried before the enclosing
+-- binding is generalized, and a literal whose type is still open then
+-- becomes an Int. So inferred types are the same as if literals were
+-- always Int, except where that would be a type error.
+
+private inferIntLit : Checker -> Pos -> Ref Bool -> <IO> Type
+inferIntLit c p isFloat =
+  let m = newMetaV c KStar
+  markLit c m
+  let t = TMeta m
+  modifyRef (cLits c) (\ls -> snoc ls (LitWanted p isFloat t))
+  t
+
+-- Check a literal against an expected type.
+private checkIntLit : Checker -> Pos -> Ref Bool -> Type -> String -> <IO> Unit
+checkIntLit c p isFloat t what = match prune t with
+  TMeta m ->
+    markLit c m
+    modifyRef (cLits c) (\ls -> snoc ls (LitWanted p isFloat t))
+  TCon n _ | n == tFloatName -> writeRef isFloat True
+  _ -> unifyAt c p t (tInt c) what
+
+-- Retry the deferred decisions (fields, then literals) whose types may
+-- have become known; see settleFields for lvl.
+settle : Checker -> Int -> <IO> Unit
+settle c lvl =
+  settleFields c lvl
+  settleLits c lvl
+
+private settleLits : Checker -> Int -> <IO> Unit
+settleLits c lvl =
+  let rest = filterMap (\w ->
+    let LitWanted p isFloat t = w
+    match prune t with
+      TMeta m
+        | readRef (metaLevelRef m) > lvl ->
+            unifyAt c p t (tInt c) "this integer literal"
+            None
+        | otherwise -> Some w
+      TCon n _
+        | n == tFloatName ->
+            writeRef isFloat True
+            None
+        | n == tIntName -> None
+      _ ->
+        unifyAt c p t (tInt c) "this integer literal"
+        None) (readRef (cLits c))
+  writeRef (cLits c) rest
+
 -- ================================================================ records
 --
 -- Field access and update are resolved by the type of the record: `e.f`
@@ -1009,6 +1066,7 @@ isSyntacticValue b = match bindArity b > 0 with
       EVar _ _ _ _ _ -> True
       ECon _ _ _ _ -> True
       ELit _ _ -> True
+      ENum _ _ _ -> True
       EUnit _ -> True
       _ -> False
     _ -> False
@@ -1084,7 +1142,7 @@ checkAgainst c b (Scheme kinds snames preds st) fixed skipFirst eff =
     Some e -> checkClauses c b t e
   let ws = popWanted c
   let lvl = level c
-  settleFields c (lvl - 1)
+  settle c (lvl - 1)
   forEach (solve c ws) (\w ->
     let Wanted _ ty _ _ = w
     let local = allOf (\m -> readRef (metaLevelRef m) >= lvl) (metasOf ty)

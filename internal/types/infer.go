@@ -82,6 +82,10 @@ func (c *Checker) checkExpr(e syntax.Expr, t Type, eff Type, what string) {
 	if lam, ok := e.(*syntax.ELam); ok && c.checkLam(lam, t) {
 		return
 	}
+	if l, ok := e.(*syntax.ELit); ok && l.Kind == syntax.LitInt {
+		c.checkIntLit(l, t, what)
+		return
+	}
 	actual := c.inferExpr(e, eff)
 	c.unifyAt(e.EPos(), t, actual, what)
 }
@@ -89,6 +93,9 @@ func (c *Checker) checkExpr(e syntax.Expr, t Type, eff Type, what string) {
 func (c *Checker) inferExpr(e syntax.Expr, eff Type) Type {
 	switch e := e.(type) {
 	case *syntax.ELit:
+		if e.Kind == syntax.LitInt {
+			return c.inferIntLit(e)
+		}
 		return c.litType(e)
 	case *syntax.EVar:
 		return c.inferVar(e)

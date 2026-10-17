@@ -390,7 +390,7 @@ deriveOrd p ctors =
     [_] -> simpleBind p "compare" ["x$", "y$"] (EMatch p (pairScrut p) arms)
     _ ->
       let idxArms = mapList (\(i, CtorDecl _ name fields _) ->
-        Arm p (mkPCon p "" name (mapList (\_ -> PWild p) fields)) (RBody (ELit p (LInt i)))) (indexed ctors)
+        Arm p (mkPCon p "" name (mapList (\_ -> PWild p) fields)) (RBody (mkNum p i))) (indexed ctors)
       let idx = EMatch p (ev p "v$") idxArms
       let fallback = Arm p (PWild p) (RBody (appE (pv "compare") [appE (ev p "idx$") [ev p "x$"], appE (ev p "idx$") [ev p "y$"]]))
       let m = EMatch p (pairScrut p) (snoc arms fallback)
@@ -490,8 +490,8 @@ deriveFromJson p typeName ctors =
       | isEmpty fields -> resultChain p [] name
       | not multi && length fields == 1 -> resultChain p [appE (jv p "fromJson") [ev p "j$"]] name
       | otherwise ->
-          let results = mapList (\i -> appE (jv p "elemOf") [ELit p (LInt i), ev p "vs$"]) (range 0 (length fields))
-          let scrut = appE (jv p "valuesOf") [ELit p (LInt (length fields)), ev p "j$"]
+          let results = mapList (\i -> appE (jv p "elemOf") [mkNum p i, ev p "vs$"]) (range 0 (length fields))
+          let scrut = appE (jv p "valuesOf") [mkNum p (length fields), ev p "j$"]
           let err = errArm p
           let okArm = Arm p (okPat p (mkPVar p "vs$")) (RBody (resultChain p results name))
           EMatch p scrut [err, okArm]
@@ -791,7 +791,7 @@ checkTests c tests = match tests with
         checkExpr c body (tUnit c) row "this test"
         let ws = popWanted c
         decLevel c
-        settleFields c (level c)
+        settle c (level c)
         forEach (solve c ws) (defaultAmbiguous c)
         modifyRef (gTests g) (\ts -> TestInfo name id (cMod c) :: ts)
       _ -> ())
