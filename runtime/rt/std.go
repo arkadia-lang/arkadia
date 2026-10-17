@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -120,9 +121,19 @@ func RegexQuote(s Value) Value { return regexp.QuoteMeta(s.(string)) }
 
 // ---------------------------------------------------------------- mutable arrays
 
-type MArray struct{ S []Value }
+// MArray is a mutable array. Each operation holds its lock, so tasks may
+// share an array; a sequence of operations is not atomic.
+type MArray struct {
+	mu sync.Mutex
+	S  []Value
+}
 
-func marr(v Value) *MArray { return v.(*MArray) }
+// lockArr locks a mutable array and returns its elements.
+func lockArr(v Value) (*MArray, []Value) {
+	m := v.(*MArray)
+	m.mu.Lock()
+	return m, m.S
+}
 
 func outOfRange(i int64, n int) {
 	panic(&ArkError{Msg: fmt.Sprintf("index %d out of range for a mutable array of length %d", i, n)})
@@ -138,82 +149,126 @@ func MArrayMake(n, v Value) Value {
 
 func MArrayNew(_ Value) Value      { return &MArray{} }
 func MArrayFromList(l Value) Value { return &MArray{S: ListToSlice(l)} }
-func MArrayToList(a Value) Value   { return SliceToList(marr(a).S) }
-func MArrayLength(a Value) Value   { return int64(len(marr(a).S)) }
-func MArrayFreeze(a Value) Value   { return &Array{S: append([]Value(nil), marr(a).S...)} }
 func MArrayThaw(a Value) Value     { return &MArray{S: append([]Value(nil), a.(*Array).S...)} }
-func MArrayCopy(a Value) Value     { return &MArray{S: append([]Value(nil), marr(a).S...)} }
-func MArrayClear(a Value) Value    { marr(a).S = nil; return Unit }
-func MArrayPush(v, a Value) Value  { m := marr(a); m.S = append(m.S, v); return Unit }
+
+// snapshot copies the elements of a mutable array.
+func snapshot(a Value) []Value {
+	m, s := lockArr(a)
+	c := append([]Value(nil), s...)
+	m.mu.Unlock()
+	return c
+}
+
+func MArrayToList(a Value) Value { return SliceToList(snapshot(a)) }
+func MArrayFreeze(a Value) Value { return &Array{S: snapshot(a)} }
+func MArrayCopy(a Value) Value   { return &MArray{S: snapshot(a)} }
+
+func MArrayLength(a Value) Value {
+	m, s := lockArr(a)
+	n := len(s)
+	m.mu.Unlock()
+	return int64(n)
+}
+
+func MArrayClear(a Value) Value {
+	m, _ := lockArr(a)
+	m.S = nil
+	m.mu.Unlock()
+	return Unit
+}
+
+func MArrayPush(v, a Value) Value {
+	m, _ := lockArr(a)
+	m.S = append(m.S, v)
+	m.mu.Unlock()
+	return Unit
+}
+
 func MArrayAppendList(l, a Value) Value {
-	m := marr(a)
-	m.S = append(m.S, ListToSlice(l)...)
+	xs := ListToSlice(l)
+	m, _ := lockArr(a)
+	m.S = append(m.S, xs...)
+	m.mu.Unlock()
 	return Unit
 }
 
 func MArrayGet(i, a Value) Value {
-	s := marr(a).S
+	m, s := lockArr(a)
 	n := i.(int64)
 	if n < 0 || n >= int64(len(s)) {
+		m.mu.Unlock()
 		return None
 	}
-	return Some(s[n])
+	v := s[n]
+	m.mu.Unlock()
+	return Some(v)
 }
 
 func MArrayAt(i, a Value) Value {
-	s := marr(a).S
+	m, s := lockArr(a)
 	n := i.(int64)
 	if n < 0 || n >= int64(len(s)) {
+		m.mu.Unlock()
 		outOfRange(n, len(s))
 	}
-	return s[n]
+	v := s[n]
+	m.mu.Unlock()
+	return v
 }
 
 func MArraySet(i, v, a Value) Value {
-	s := marr(a).S
+	m, s := lockArr(a)
 	n := i.(int64)
 	if n < 0 || n >= int64(len(s)) {
+		m.mu.Unlock()
 		outOfRange(n, len(s))
 	}
 	s[n] = v
+	m.mu.Unlock()
 	return Unit
 }
 
 func MArrayPop(a Value) Value {
-	m := marr(a)
-	if len(m.S) == 0 {
+	m, s := lockArr(a)
+	if len(s) == 0 {
+		m.mu.Unlock()
 		return None
 	}
-	v := m.S[len(m.S)-1]
-	m.S[len(m.S)-1] = nil
-	m.S = m.S[:len(m.S)-1]
+	v := s[len(s)-1]
+	s[len(s)-1] = nil
+	m.S = s[:len(s)-1]
+	m.mu.Unlock()
 	return Some(v)
 }
 
 func MArraySwap(i, j, a Value) Value {
-	s := marr(a).S
+	m, s := lockArr(a)
 	x, y := i.(int64), j.(int64)
-	if x < 0 || x >= int64(len(s)) {
-		outOfRange(x, len(s))
-	}
-	if y < 0 || y >= int64(len(s)) {
-		outOfRange(y, len(s))
+	for _, k := range [2]int64{x, y} {
+		if k < 0 || k >= int64(len(s)) {
+			m.mu.Unlock()
+			outOfRange(k, len(s))
+		}
 	}
 	s[x], s[y] = s[y], s[x]
+	m.mu.Unlock()
 	return Unit
 }
 
 func MArrayReverse(a Value) Value {
-	s := marr(a).S
+	m, s := lockArr(a)
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
 		s[i], s[j] = s[j], s[i]
 	}
+	m.mu.Unlock()
 	return Unit
 }
 
-// MArraySortBy sorts in place (stably) with a comparison function.
+// MArraySortBy sorts in place (stably) with a comparison function. The
+// comparison is pure, so it cannot use the array while it is locked.
 func MArraySortBy(cmp, a Value) Value {
-	s := marr(a).S
+	m, s := lockArr(a)
+	defer m.mu.Unlock()
 	sortStable(s, func(x, y Value) bool { return TagOf(Apply2(cmp, x, y)) == 0 })
 	return Unit
 }
@@ -346,21 +401,34 @@ type hmEntry struct {
 	prev, next *hmEntry
 }
 
-// HashMap is a mutable hash map that remembers insertion order.
+// HashMap is a mutable hash map that remembers insertion order. Each
+// operation holds its lock, so tasks may share a map.
 type HashMap struct {
+	mu          sync.Mutex
 	m           map[any]*hmEntry
 	first, last *hmEntry
 }
 
-func hmap(v Value) *HashMap { return v.(*HashMap) }
+// lockMap locks a hash map; the caller unlocks it.
+func lockMap(v Value) *HashMap {
+	h := v.(*HashMap)
+	h.mu.Lock()
+	return h
+}
 
 func HashMapNew(_ Value) Value { return &HashMap{m: map[any]*hmEntry{}} }
 
-func HashMapSize(h Value) Value { return int64(len(hmap(h).m)) }
+func HashMapSize(h Value) Value {
+	m := lockMap(h)
+	n := len(m.m)
+	m.mu.Unlock()
+	return int64(n)
+}
 
 func HashMapInsert(k, v, h Value) Value {
-	m := hmap(h)
 	key := hashKey(k)
+	m := lockMap(h)
+	defer m.mu.Unlock()
 	if e, ok := m.m[key]; ok {
 		e.val = v
 		return Unit
@@ -377,20 +445,32 @@ func HashMapInsert(k, v, h Value) Value {
 }
 
 func HashMapLookup(k, h Value) Value {
-	if e, ok := hmap(h).m[hashKey(k)]; ok {
-		return Some(e.val)
+	key := hashKey(k)
+	m := lockMap(h)
+	e, ok := m.m[key]
+	var v Value
+	if ok {
+		v = e.val
+	}
+	m.mu.Unlock()
+	if ok {
+		return Some(v)
 	}
 	return None
 }
 
 func HashMapMember(k, h Value) Value {
-	_, ok := hmap(h).m[hashKey(k)]
+	key := hashKey(k)
+	m := lockMap(h)
+	_, ok := m.m[key]
+	m.mu.Unlock()
 	return ok
 }
 
 func HashMapRemove(k, h Value) Value {
-	m := hmap(h)
 	key := hashKey(k)
+	m := lockMap(h)
+	defer m.mu.Unlock()
 	e, ok := m.m[key]
 	if !ok {
 		return Unit
@@ -410,35 +490,30 @@ func HashMapRemove(k, h Value) Value {
 }
 
 func HashMapClear(h Value) Value {
-	m := hmap(h)
+	m := lockMap(h)
 	m.m = map[any]*hmEntry{}
 	m.first, m.last = nil, nil
+	m.mu.Unlock()
 	return Unit
 }
 
+// entries lists the entries of a map in insertion order.
+func entries(h Value, f func(e *hmEntry) Value) Value {
+	m := lockMap(h)
+	out := make([]Value, 0, len(m.m))
+	for e := m.first; e != nil; e = e.next {
+		out = append(out, f(e))
+	}
+	m.mu.Unlock()
+	return SliceToList(out)
+}
+
 func HashMapToList(h Value) Value {
-	var out []Value
-	for e := hmap(h).first; e != nil; e = e.next {
-		out = append(out, tuple2(e.key, e.val))
-	}
-	return SliceToList(out)
+	return entries(h, func(e *hmEntry) Value { return tuple2(e.key, e.val) })
 }
 
-func HashMapKeys(h Value) Value {
-	var out []Value
-	for e := hmap(h).first; e != nil; e = e.next {
-		out = append(out, e.key)
-	}
-	return SliceToList(out)
-}
-
-func HashMapValues(h Value) Value {
-	var out []Value
-	for e := hmap(h).first; e != nil; e = e.next {
-		out = append(out, e.val)
-	}
-	return SliceToList(out)
-}
+func HashMapKeys(h Value) Value   { return entries(h, func(e *hmEntry) Value { return e.key }) }
+func HashMapValues(h Value) Value { return entries(h, func(e *hmEntry) Value { return e.val }) }
 
 // ---------------------------------------------------------------- big integers
 

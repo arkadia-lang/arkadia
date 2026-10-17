@@ -20,18 +20,23 @@ import (
 // CatchError calls f () and turns a runtime error raised inside it into
 // Err message. Other panics (exit, effect control flow) pass through.
 func CatchError(f Value) (result Value) {
-	saved := cur
+	fb := peekFiber()
+	var saved *frame
+	if fb != nil {
+		saved = fb.cur
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			switch e := r.(type) {
 			case *ArkError:
-				cur = saved
 				result = Err(e.Msg)
 			case runtime.Error:
-				cur = saved
 				result = Err(e.Error())
 			default:
 				panic(r)
+			}
+			if fb != nil {
+				fb.cur = saved
 			}
 		}
 	}()

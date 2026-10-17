@@ -92,7 +92,7 @@ writeGoModule root dir mainSrc natives = match makeDir (pathJoin dir "rt") with
       Err _ -> ()
     let rtDir = pathJoin root "runtime/rt"
     let rtFiles = match listDir rtDir with
-      Ok names -> filterMap (\n -> match endsWith ".go" n && not (endsWith "_test.go" n) with
+      Ok names -> filterMap (\n -> match (endsWith ".go" n || endsWith ".s" n) && not (endsWith "_test.go" n) with
         True -> match readFile (pathJoin rtDir n) with
           Ok src -> Some ("rt/" ++ n, src)
           Err _ -> None

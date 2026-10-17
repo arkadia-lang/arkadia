@@ -35,10 +35,10 @@ func RunTests(failEff int, tests []TestCase) {
 		msg := runOne(failEff, t)
 		if msg == "" {
 			passed++
-			fmt.Fprintf(stdout, "%s✓%s %s%s ›%s %s\n", green, reset, dim, t.Module, reset, t.Name)
+			printOut("%s✓%s %s%s ›%s %s\n", green, reset, dim, t.Module, reset, t.Name)
 		} else {
 			failed++
-			fmt.Fprintf(stdout, "%s✗ %s › %s%s\n    %s\n", red, t.Module, t.Name, reset, msg)
+			printOut("%s✗ %s › %s%s\n    %s\n", red, t.Module, t.Name, reset, msg)
 		}
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
@@ -47,20 +47,21 @@ func RunTests(failEff int, tests []TestCase) {
 		skip = fmt.Sprintf(", %d skipped", skipped)
 	}
 	if failed > 0 {
-		fmt.Fprintf(stdout, "\n%s%d failed%s, %d passed%s (%s)\n", red, failed, reset, passed, skip, elapsed)
+		printOut("\n%s%d failed%s, %d passed%s (%s)\n", red, failed, reset, passed, skip, elapsed)
 		panic(&ExitSignal{Code: 1})
 	}
 	if passed == 0 {
-		fmt.Fprintf(stdout, "no tests match %q\n", filter)
+		printOut("no tests match %q\n", filter)
 		return
 	}
-	fmt.Fprintf(stdout, "\n%sall %d tests passed%s%s (%s)\n", green, passed, reset, skip, elapsed)
+	printOut("\n%sall %d tests passed%s%s (%s)\n", green, passed, reset, skip, elapsed)
 }
 
 func runOne(failEff int, t TestCase) (msg string) {
-	saved := cur
+	fb := peekFiber()
+	saved := fb.cur
 	defer func() {
-		cur = saved
+		fb.cur = saved
 		if r := recover(); r != nil {
 			switch e := r.(type) {
 			case *testFailure:

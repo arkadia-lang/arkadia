@@ -10,6 +10,7 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -26,11 +27,35 @@ func (e *ArkError) Error() string { return e.Msg }
 // ExitSignal requests program termination with a status code.
 type ExitSignal struct{ Code int }
 
-var stdout = bufio.NewWriterSize(os.Stdout, 64*1024)
-var stdin = bufio.NewReader(os.Stdin)
+// Standard output is buffered and shared by all tasks: each write holds
+// outMu, so the output of one print is never interleaved with another.
+var (
+	outMu  sync.Mutex
+	stdout = bufio.NewWriterSize(os.Stdout, 64*1024)
+	inMu   sync.Mutex
+	stdin  = bufio.NewReader(os.Stdin)
+)
 
 // Flush flushes buffered standard output.
-func Flush() { stdout.Flush() }
+func Flush() {
+	outMu.Lock()
+	stdout.Flush()
+	outMu.Unlock()
+}
+
+// printOut formats to standard output.
+func printOut(format string, args ...any) {
+	outMu.Lock()
+	fmt.Fprintf(stdout, format, args...)
+	outMu.Unlock()
+}
+
+// exitProgram ends the program, from any goroutine.
+func exitProgram(code int) {
+	Flush()
+	pprof.StopCPUProfile()
+	os.Exit(code)
+}
 
 // Main runs the program entry point and reports runtime errors.
 func Main(entry func()) {
@@ -45,13 +70,13 @@ func Main(entry func()) {
 			defer pprof.StopCPUProfile()
 		}
 	}
-	code := run(entry)
-	Flush()
-	pprof.StopCPUProfile()
-	os.Exit(code)
+	exitProgram(run(entry))
 }
 
+// run runs the entry point as the root task.
 func run(entry func()) (code int) {
+	fb := registerFiber(&fiber{task: newTask(nil)})
+	defer unregisterFiber(fb)
 	defer func() {
 		if r := recover(); r != nil {
 			Flush()
@@ -323,25 +348,33 @@ func ShowArg(s Value) Value {
 // ---------------------------------------------------------------- IO
 
 func Print(s Value) Value {
+	outMu.Lock()
 	stdout.WriteString(s.(string))
+	outMu.Unlock()
 	return Unit
 }
 
 func Println(s Value) Value {
+	outMu.Lock()
 	stdout.WriteString(s.(string))
 	stdout.WriteByte('\n')
+	outMu.Unlock()
 	return Unit
 }
 
 func Eprintln(s Value) Value {
-	Flush()
+	outMu.Lock()
+	stdout.Flush()
 	fmt.Fprintln(os.Stderr, s.(string))
+	outMu.Unlock()
 	return Unit
 }
 
 func ReadLine(_ Value) Value {
 	Flush()
+	inMu.Lock()
 	line, err := stdin.ReadString('\n')
+	inMu.Unlock()
 	if err != nil && line == "" {
 		return None
 	}
@@ -350,7 +383,9 @@ func ReadLine(_ Value) Value {
 
 func ReadAll(_ Value) Value {
 	Flush()
+	inMu.Lock()
 	data, _ := io.ReadAll(stdin)
+	inMu.Unlock()
 	return string(data)
 }
 
@@ -393,7 +428,9 @@ var startTime = time.Now()
 func Clock(_ Value) Value { return time.Since(startTime).Seconds() }
 
 func Trace(msg, v Value) Value {
-	Flush()
+	outMu.Lock()
+	stdout.Flush()
 	fmt.Fprintln(os.Stderr, "trace:", msg.(string))
+	outMu.Unlock()
 	return v
 }

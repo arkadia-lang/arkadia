@@ -4,5 +4,5 @@ package runtime
 
 import "embed"
 
-//go:embed rt/*.go
+//go:embed rt/*.go rt/*.s
 var FS embed.FS

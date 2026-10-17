@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -299,22 +300,41 @@ func resultOf(s string, err error) Value {
 // ---------------------------------------------------------------- references
 
 // Ref is a mutable cell.
-type Ref struct{ V Value }
+// Ref is a mutable reference. Its value is read and written atomically,
+// so tasks may share references: a value is never seen half-written.
+type Ref struct{ p atomic.Pointer[Value] }
 
-func RefNew(v Value) Value    { return &Ref{V: v} }
-func RefGet(r Value) Value    { return r.(*Ref).V }
-func RefSet(r, v Value) Value { r.(*Ref).V = v; return Unit }
+func ref(r Value) *Ref { return r.(*Ref) }
+
+func RefNew(v Value) Value {
+	r := &Ref{}
+	r.p.Store(&v)
+	return r
+}
+
+func RefGet(r Value) Value    { return *ref(r).p.Load() }
+func RefSet(r, v Value) Value { ref(r).p.Store(&v); return Unit }
+func RefSwap(r, v Value) Value { return *ref(r).p.Swap(&v) }
+
+// RefAtomicUpdate applies f to the value of r: f returns (new value,
+// result). If another task changes r meanwhile, f is applied again to the
+// new value, so f must be pure.
+func RefAtomicUpdate(r, f Value) Value {
+	p := &ref(r).p
+	for {
+		old := p.Load()
+		res := Apply1(f, *old).(*D2)
+		nv := res.A
+		if p.CompareAndSwap(old, &nv) {
+			return res.B
+		}
+	}
+}
 
 // ---------------------------------------------------------------- time
 
 func UnixTime(_ Value) Value   { return float64(time.Now().UnixNano()) / 1e9 }
 func UnixMillis(_ Value) Value { return time.Now().UnixMilli() }
-func Sleep(secs Value) Value {
-	Flush()
-	time.Sleep(time.Duration(secs.(float64) * float64(time.Second)))
-	return Unit
-}
-
 func timeOf(secs Value) time.Time {
 	f := secs.(float64)
 	sec := math.Floor(f)
