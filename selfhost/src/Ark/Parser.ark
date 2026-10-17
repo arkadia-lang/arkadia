@@ -434,10 +434,34 @@ derivingClause p =
 ctorDecl : P -> <Exn Diag, IO> CtorDecl
 ctorDecl p =
   let t = expect p UIDENT
-  let loop acc = match startsTypeAtom p && not (atWord p "deriving") with
-    True -> loop (typeAtom p :: acc)
-    False -> reverse acc
-  CtorDecl (tokPos t) (tokText t) (loop [])
+  match accept p LBRACE with
+    True ->
+      -- record constructor: C { f : T, g, h : U }
+      let (types, names) = recordFields p [] []
+      expect_ p RBRACE
+      CtorDecl (tokPos t) (tokText t) types (Some names)
+    False ->
+      let loop acc = match startsTypeAtom p && not (atWord p "deriving") with
+        True -> loop (typeAtom p :: acc)
+        False -> reverse acc
+      CtorDecl (tokPos t) (tokText t) (loop []) None
+
+-- Field declarations `f, g : T, h : U` up to the closing brace.
+recordFields : P -> List TypeExpr -> List String -> <Exn Diag, IO> (List TypeExpr, List String)
+recordFields p types names = match at p RBRACE with
+  True -> (types, names)
+  False ->
+    let loop acc = match accept p COMMA with
+      True -> loop (snoc acc (tokText (expect p LIDENT)))
+      False -> acc
+    let group = loop [tokText (expect p LIDENT)]
+    expect_ p COLON
+    let ty = typeTop p
+    let types2 = types ++ mapList (\_ -> ty) group
+    let names2 = names ++ group
+    match accept p COMMA with
+      True -> recordFields p types2 names2
+      False -> (types2, names2)
 
 aliasDecl : P -> <Exn Diag, IO> Decl
 aliasDecl p =
@@ -758,11 +782,34 @@ patApp p =
   match tokKind t with
     UIDENT ->
       skip p
-      let loop acc = match startsPatAtom p with
-        True -> loop (patAtom p :: acc)
-        False -> reverse acc
-      mkPCon (tokPos t) (tokQual t) (tokText t) (loop [])
+      match at p LBRACE with
+        True -> recordPat p t
+        False ->
+          let loop acc = match startsPatAtom p with
+            True -> loop (patAtom p :: acc)
+            False -> reverse acc
+          mkPCon (tokPos t) (tokQual t) (tokText t) (loop [])
     _ -> patAtom p
+
+-- `{ f = p, g }` after a constructor; a bare field name binds a variable
+-- of the same name.
+recordPat : P -> Token -> <Exn Diag, IO> Pattern
+recordPat p t =
+  expect_ p LBRACE
+  let loop acc = match at p RBRACE with
+    True -> reverse acc
+    False ->
+      let n = expect p LIDENT
+      let pat = match accept p EQUALS with
+        True -> pattern p
+        False -> mkPVar (tokPos n) (tokText n)
+      let acc2 = (tokText n, pat) :: acc
+      match accept p COMMA with
+        True -> loop acc2
+        False -> reverse acc2
+  let fields = loop []
+  expect_ p RBRACE
+  PRec (tokPos t) (tokQual t) (tokText t) fields (newRef None)
 
 litFromToken : Token -> <Exn Diag> Lit
 litFromToken t = match tokKind t with
@@ -786,7 +833,9 @@ patAtom p =
         False -> mkPVar (tokPos t) (tokText t)
     UIDENT ->
       skip p
-      mkPCon (tokPos t) (tokQual t) (tokText t) []
+      match at p LBRACE with
+        True -> recordPat p t
+        False -> mkPCon (tokPos t) (tokQual t) (tokText t) []
     UNDERSCORE ->
       skip p
       PWild (tokPos t)
@@ -1079,6 +1128,8 @@ startsAtom p = match peekKind p with
   CHAR -> True
   LPAREN -> True
   LBRACKET -> True
+  LBRACE -> True
+  FIELDFN -> True
   _ -> False
 
 app : P -> <Exn Diag, IO> Expr
@@ -1096,8 +1147,37 @@ app p =
     [] -> f
     args -> mkApp (exprPos f) f args
 
+-- An atomic expression followed by any field accesses.
 atom : P -> <Exn Diag, IO> Expr
 atom p =
+  let loop e = match at p FIELD with
+    True ->
+      let t = next p
+      loop (EField (tokPos t) e (tokText t) (newRef ""))
+    False -> e
+  loop (atomBase p)
+
+-- `f = e, g, ...` up to the closing brace; a bare field name stands for
+-- the variable of the same name.
+fieldInits : P -> <Exn Diag, IO> List FieldInit
+fieldInits p =
+  let loop acc = match at p RBRACE with
+    True -> reverse acc
+    False ->
+      let n = expect p LIDENT
+      let value = match accept p EQUALS with
+        True -> body p
+        False -> mkVar (tokPos n) "" (tokText n)
+      let acc2 = FieldInit (tokPos n) (tokText n) value :: acc
+      match accept p COMMA with
+        True -> loop acc2
+        False -> reverse acc2
+  let fs = loop []
+  expect_ p RBRACE
+  fs
+
+atomBase : P -> <Exn Diag, IO> Expr
+atomBase p =
   let t = peek p
   match tokKind t with
     LIDENT ->
@@ -1105,7 +1185,20 @@ atom p =
       mkVar (tokPos t) (tokQual t) (tokText t)
     UIDENT ->
       skip p
-      mkCon (tokPos t) (tokQual t) (tokText t)
+      match accept p LBRACE with
+        True ->
+          let fs = fieldInits p
+          ERecord (tokPos t) (tokQual t) (tokText t) fs (newRef None)
+        False -> mkCon (tokPos t) (tokQual t) (tokText t)
+    FIELDFN ->
+      skip p
+      EFieldFn (tokPos t) (tokText t)
+    LBRACE ->
+      skip p
+      let rec = expr p
+      expect_ p BAR
+      let fs = fieldInits p
+      EUpdate (tokPos t) rec fs (newRef "")
     k | k == INT || k == FLOAT || k == STRING || k == CHAR ->
       skip p
       ELit (tokPos t) (litFromToken t)

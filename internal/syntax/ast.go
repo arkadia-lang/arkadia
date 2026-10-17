@@ -84,6 +84,10 @@ type PCon struct {
 	Name string
 	Args []Pattern
 	Con  any // *types.CtorInfo, resolved by the checker
+	// Record patterns `C { f = p, g }` list the field names of Args; the
+	// checker reorders them into positional arguments.
+	Record bool
+	Fields []string
 }
 type PTuple struct {
 	P     Pos
@@ -255,6 +259,39 @@ type EAnnot struct {
 	Type *SchemeE
 }
 
+// EField is the field access `e.name`; a nil E is the accessor function
+// `.name` (removed by fixity resolution).
+type EField struct {
+	P    Pos
+	E    Expr
+	Name string
+	Rec  any // *types.TypeInfo, resolved by the checker
+}
+
+// FieldInit is `name = value` in a record construction or update.
+type FieldInit struct {
+	P     Pos
+	Name  string
+	Value Expr
+}
+
+// ERecord is the record construction `C { f = e, ... }`.
+type ERecord struct {
+	P      Pos
+	Qual   string
+	Name   string
+	Fields []*FieldInit
+	Con    any // *types.CtorInfo
+}
+
+// EUpdate is the record update `{ e | f = v, ... }`.
+type EUpdate struct {
+	P      Pos
+	E      Expr
+	Fields []*FieldInit
+	Rec    any // *types.TypeInfo
+}
+
 func (e *ELit) EPos() Pos     { return e.P }
 func (e *EVar) EPos() Pos     { return e.P }
 func (e *ECon) EPos() Pos     { return e.P }
@@ -273,6 +310,9 @@ func (e *ENeg) EPos() Pos     { return e.P }
 func (e *ESection) EPos() Pos { return e.P }
 func (e *EInterp) EPos() Pos  { return e.P }
 func (e *EAnnot) EPos() Pos   { return e.P }
+func (e *EField) EPos() Pos   { return e.P }
+func (e *ERecord) EPos() Pos  { return e.P }
+func (e *EUpdate) EPos() Pos  { return e.P }
 
 type Stmt interface{ SPos() Pos }
 

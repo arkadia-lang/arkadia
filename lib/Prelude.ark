@@ -373,6 +373,11 @@ showCon : String -> List String -> String
 showCon name [] = name
 showCon name args = name ++ " " ++ joinWith " " args
 
+-- used by `deriving Show` for record constructors
+showRecord : String -> List (String, String) -> String
+showRecord name [] = name ++ " {}"
+showRecord name fields = name ++ " { " ++ joinWith ", " (mapList (\(f, v) -> f ++ " = " ++ v) fields) ++ " }"
+
 -- ===================================================================
 -- Semigroup / Monoid
 -- ===================================================================

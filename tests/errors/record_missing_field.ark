@@ -1,0 +1,5 @@
+type User = User { name : String, age : Int }
+
+main () =
+  let u = User { name = "ann" }
+  println u.name

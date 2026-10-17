@@ -356,7 +356,7 @@ func printDoc(w io.Writer, ex *types.Exports) {
 			}
 			var ctors []string
 			for _, c := range t.Ctors {
-				ctors = append(ctors, c.Short)
+				ctors = append(ctors, types.CtorString(c))
 			}
 			fmt.Fprintf(w, "\ntype %s", strings.Join(append([]string{n}, t.Params...), " "))
 			if len(ctors) > 0 {

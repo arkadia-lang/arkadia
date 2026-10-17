@@ -1,0 +1,88 @@
+-- Records: named fields, construction, access, update and patterns.
+
+type User = User { name : String, age : Int, tags : List String }
+  deriving (Show, Eq, Ord)
+
+type Pet = Pet { name : String, owner : User }
+  deriving Show
+
+-- a field shared by every constructor can be read and updated
+type Shape
+  = Circle { x, y : Float, r : Float }
+  | Rect
+      { x, y : Float
+      , w : Float
+      , h : Float
+      }
+  deriving Show
+
+type Box a = Box { value : a, label : String }
+
+type Empty = Empty {}
+  deriving Show
+
+greet : User -> String
+greet u = "hi ${u.name} (${u.age})"
+
+birthday : User -> User
+birthday u = { u | age = u.age + 1 }
+
+describe : User -> String
+describe (User { name, age = a }) = "${name}/${a}"
+
+-- no signature: the record type is found from the fields
+moveX d s = { s | x = s.x + d }
+
+area s = match s with
+  Circle { r } -> 3.0 * r * r
+  Rect { w, h } -> w * h
+
+relabel : String -> Box a -> Box a
+relabel l b = { b | label = l }
+
+trace : String -> a -> <IO> a
+trace msg v =
+  println msg
+  v
+
+main () =
+  let ann = User { name = "ann", age = 30, tags = ["admin"] }
+  println (greet ann)
+  println (show (birthday ann))
+  println (describe ann)
+  println (show (ann == birthday ann, ann < birthday ann))
+  -- punning: a bare field name takes the variable of the same name
+  let name = "bob"
+  let age = 25
+  let bob = User { name, age, tags = [] }
+  println (show bob)
+  -- accessor functions and access inside lambdas
+  let users = [ann, bob]
+  println (show (map .name users))
+  println (show (users |> filter (\u -> u.age > 26) |> map .name))
+  println (show (sum (map (\u -> u.age) users)))
+  -- nested access
+  let pet = Pet { name = "rex", owner = bob }
+  println pet.owner.name
+  println (show { pet | owner = { pet.owner | age = 26 } })
+  -- fields in any order; values are evaluated in source order
+  let u = User { tags = trace "tags" [], age = trace "age" 1, name = trace "name" "c" }
+  println u.name
+  let v = { u | age = trace "new age" 2, name = trace "new name" "d" }
+  println (show v)
+  -- several constructors
+  let c = Circle { r = 2.0, x = 0.0, y = 1.0 }
+  println (show (moveX 1.5 c))
+  println (show (moveX 1.0 (Rect { x = 0.0, y = 0.0, w = 2.0, h = 3.0 })))
+  println (show (map area [c, Rect { x = 0.0, y = 0.0, w = 2.0, h = 3.0 }]))
+  -- polymorphic records
+  let b = Box { value = [1, 2], label = "list" }
+  println (show (length b.value))
+  println (relabel "nums" b).label
+  println (show Empty {})
+  -- positional construction and patterns still work
+  let User n a _ = User "dan" 40 []
+  println "${n} ${a}"
+  match ann with
+    User { age } | age >= 18 -> println "adult"
+    _ -> println "minor"

@@ -394,6 +394,21 @@ schemeString (Scheme kinds names preds t) =
     _ -> "(" ++ joinWith ", " ps ++ ") => "
   ctx ++ ptyp pr t 0
 
+-- A constructor for documentation: its name, followed by its fields when
+-- it is a record constructor.
+ctorString : TypeInfo -> CtorInfo -> <IO> String
+ctorString ti ci = match ctorFieldNames ci with
+  None -> ctorShort ci
+  Some [] -> ctorShort ci ++ " {}"
+  Some names ->
+    let pr = newPrinter ()
+    let Printer _ _ _ gen = pr
+    forEach (typeInfoParams ti) (\n ->
+      let v = pfresh pr n False
+      modifyRef gen (\gs -> snoc gs v))
+    let parts = mapList (\(n, t) -> n ++ " : " ++ ptyp pr t 0) (zip names (ctorFields ci))
+    ctorShort ci ++ " { " ++ joinWith ", " parts ++ " }"
+
 -- ================================================================ checker state
 
 -- A local variable: position, unique id, scheme (None when monomorphic),
@@ -425,48 +440,58 @@ type Checker = Checker
   (Ref (Map.Map String Sig))              -- signatures
   (Ref (List MatchSite))                  -- match sites (reversed)
   (Ref (List Decl))                       -- declarations (including derived instances)
+  (Ref (List FieldWanted))                -- pending field constraints
+
+-- A pending field constraint: position, record type, field name, the
+-- field's type (access) or the new value's type (update), all fields named
+-- together with this one, description of the value in mismatch errors, and
+-- the slot receiving the record type's name.
+type FieldWanted = FieldWanted Pos Type String Type (List String) String (Ref String)
 
 newChecker : Global -> String -> <IO> Checker
-newChecker g modName = Checker g modName (newScope ()) (newExports modName) (newRef []) (newRef 0) (newRef []) (newRef [[]]) (newRef []) (newRef 0) (newRef Map.empty) (newRef []) (newRef [])
+newChecker g modName = Checker g modName (newScope ()) (newExports modName) (newRef []) (newRef 0) (newRef []) (newRef [[]]) (newRef []) (newRef 0) (newRef Map.empty) (newRef []) (newRef []) (newRef [])
 
 cG : Checker -> Global
-cG (Checker g _ _ _ _ _ _ _ _ _ _ _ _) = g
+cG (Checker g _ _ _ _ _ _ _ _ _ _ _ _ _) = g
 
 cMod : Checker -> String
-cMod (Checker _ m _ _ _ _ _ _ _ _ _ _ _) = m
+cMod (Checker _ m _ _ _ _ _ _ _ _ _ _ _ _) = m
 
 cScope : Checker -> Scope
-cScope (Checker _ _ s _ _ _ _ _ _ _ _ _ _) = s
+cScope (Checker _ _ s _ _ _ _ _ _ _ _ _ _ _) = s
 
 cExports : Checker -> Exports
-cExports (Checker _ _ _ e _ _ _ _ _ _ _ _ _) = e
+cExports (Checker _ _ _ e _ _ _ _ _ _ _ _ _ _) = e
 
 cErrs : Checker -> Ref (List Diag)
-cErrs (Checker _ _ _ _ e _ _ _ _ _ _ _ _) = e
+cErrs (Checker _ _ _ _ e _ _ _ _ _ _ _ _ _) = e
 
 cLevelRef : Checker -> Ref Int
-cLevelRef (Checker _ _ _ _ _ l _ _ _ _ _ _ _) = l
+cLevelRef (Checker _ _ _ _ _ l _ _ _ _ _ _ _ _) = l
 
 cLocals : Checker -> Ref (List (String, LocalVar))
-cLocals (Checker _ _ _ _ _ _ l _ _ _ _ _ _) = l
+cLocals (Checker _ _ _ _ _ _ l _ _ _ _ _ _ _) = l
 
 cWanted : Checker -> Ref (List (List Wanted))
-cWanted (Checker _ _ _ _ _ _ _ w _ _ _ _ _) = w
+cWanted (Checker _ _ _ _ _ _ _ w _ _ _ _ _ _) = w
 
 cGivens : Checker -> Ref (List Given)
-cGivens (Checker _ _ _ _ _ _ _ _ g _ _ _ _) = g
+cGivens (Checker _ _ _ _ _ _ _ _ g _ _ _ _ _) = g
 
 cNextLoc : Checker -> Ref Int
-cNextLoc (Checker _ _ _ _ _ _ _ _ _ n _ _ _) = n
+cNextLoc (Checker _ _ _ _ _ _ _ _ _ n _ _ _ _) = n
 
 cSigs : Checker -> Ref (Map.Map String Sig)
-cSigs (Checker _ _ _ _ _ _ _ _ _ _ s _ _) = s
+cSigs (Checker _ _ _ _ _ _ _ _ _ _ s _ _ _) = s
 
 cMatches : Checker -> Ref (List MatchSite)
-cMatches (Checker _ _ _ _ _ _ _ _ _ _ _ m _) = m
+cMatches (Checker _ _ _ _ _ _ _ _ _ _ _ m _ _) = m
 
 cDecls : Checker -> Ref (List Decl)
-cDecls (Checker _ _ _ _ _ _ _ _ _ _ _ _ d) = d
+cDecls (Checker _ _ _ _ _ _ _ _ _ _ _ _ d _) = d
+
+cFields : Checker -> Ref (List FieldWanted)
+cFields (Checker _ _ _ _ _ _ _ _ _ _ _ _ _ f) = f
 
 level : Checker -> <IO> Int
 level c = readRef (cLevelRef c)
@@ -1284,7 +1309,7 @@ applyArgs c name head k args env = match args with
 
 -- The checker with another scope (for alias expansion).
 withScope : Checker -> Scope -> Checker
-withScope (Checker g m _ e errs l locals w gv n sigs ms ds) s = Checker g m s e errs l locals w gv n sigs ms ds
+withScope (Checker g m _ e errs l locals w gv n sigs ms ds fs) s = Checker g m s e errs l locals w gv n sigs ms ds fs
 
 -- Convert the type of a definition. Along the spine of a curried
 -- function type, unannotated intermediate arrows (partial application) get

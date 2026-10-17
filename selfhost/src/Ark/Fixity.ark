@@ -110,11 +110,45 @@ rExpr r e = match e with
         mkApp (exprPos x) disp [x]
     EInterp p (mapList wrap (rExprs r parts))
   EAnnot p x s -> EAnnot p (rExpr r x) s
+  EFieldFn _ _ -> accessor r e
+  EField p x name rec -> match accessorRoot x with
+    True -> accessor r e
+    False -> EField p (rExpr r x) name rec
+  ERecord p q name fs con -> ERecord p q name (rFields r fs) con
+  EUpdate p x fs rec ->
+    let x2 = rExpr r x
+    EUpdate p x2 (rFields r fs) rec
   EBinOp p op left right ->
     let l2 = rExpr r left
     EBinOp p op l2 (rExpr r right)
   EOpChain p operands ops -> chain r (rExprs r operands) ops
   _ -> e
+
+rFields : R -> List FieldInit -> <IO> List FieldInit
+rFields r fs = mapList (\(FieldInit p n v) -> FieldInit p n (rExpr r v)) fs
+
+-- Whether a chain of field accesses starts with an accessor `.f`.
+private accessorRoot : Expr -> Bool
+accessorRoot e = match e with
+  EFieldFn _ _ -> True
+  EField _ x _ _ -> accessorRoot x
+  _ -> False
+
+-- `.f.g` becomes \x -> x.f.g
+private accessor : R -> Expr -> <IO> Expr
+accessor (R _ _ counter) e =
+  let n = nextId counter
+  let x = "fld$" ++ show n
+  let rootPos ex = match ex with
+    EField _ inner _ _ -> rootPos inner
+    _ -> exprPos ex
+  let p = rootPos e
+  let replace ex = match ex with
+    EFieldFn fp name -> EField fp (mkVar fp "" x) name (newRef "")
+    EField fp inner name rec -> EField fp (replace inner) name rec
+    _ -> ex
+  let body = replace e
+  ELam p [mkPVar p x] body
 
 -- Resolve an operator chain with a shunting-yard algorithm.
 chain : R -> List Expr -> List Expr -> <IO> Expr

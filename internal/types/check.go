@@ -20,6 +20,7 @@ type Checker struct {
 	locals  *local
 	wanted  *wantedScope
 	givens  []*given
+	fields  []*fieldWanted
 	nextLoc int
 
 	// declarations by kind

@@ -107,7 +107,7 @@ func (lx *lexer) prevEndsExpr() bool {
 		return false
 	}
 	switch lx.toks[len(lx.toks)-1].Kind {
-	case LIDENT, UIDENT, INT, FLOAT, STRING, INTERP, CHAR, RPAREN, RBRACKET, RBRACE, UNDERSCORE:
+	case LIDENT, UIDENT, INT, FLOAT, STRING, INTERP, CHAR, RPAREN, RBRACKET, RBRACE, UNDERSCORE, FIELD, FIELDFN:
 		return true
 	}
 	return false
@@ -440,6 +440,21 @@ func (lx *lexer) punct() {
 	if !isOpChar(r) {
 		lx.next()
 		lx.errorf(p, "unexpected character %q", r)
+		return
+	}
+	// `.name`: field access when glued to the preceding expression,
+	// otherwise a field accessor function
+	if r == '.' && isIdentStart(lx.peekAt(1)) && !unicode.IsUpper(lx.peekAt(1)) && lx.peekAt(1) != '_' {
+		kind := FIELDFN
+		if !lx.sawSpc && lx.prevEndsExpr() {
+			kind = FIELD
+		}
+		lx.next()
+		s := lx.off
+		for isIdentChar(lx.peek()) {
+			lx.next()
+		}
+		lx.emit(Token{Kind: kind, Text: lx.src[s:lx.off], Pos: p})
 		return
 	}
 	s := lx.off

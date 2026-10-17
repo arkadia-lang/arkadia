@@ -98,7 +98,7 @@ addCtors c ti names fields =
   let res = mkAppT (TCon (typeInfoName ti) k) (mapList TGen (range 0 n))
   let total = length names
   forEach (indexed (zip names fields)) (\(i, (name, fs)) ->
-    let ci = CtorInfo (sym c name) name (typeInfoName ti) (typeInfoModule ti) total i (length fs) (ctorSchemeOf (replicate n KStar) fs res) fs (typeInfoPos ti)
+    let ci = CtorInfo (sym c name) name (typeInfoName ti) (typeInfoModule ti) total i (length fs) (ctorSchemeOf (replicate n KStar) fs res) fs (typeInfoPos ti) None
     let TypeInfo _ _ _ ctors _ _ _ = ti
     modifyRef ctors (\cs -> snoc cs ci)
     modifyRef (scopeCtors (cScope c)) (Map.insert name (CEctor ci))
@@ -164,7 +164,7 @@ inferDataKinds c decls =
           let _ = addGen env pn k
           ())
         writeRef (envFixed env) True
-        let fields = mapList (\(CtorDecl _ _ fs) -> mapList (\f -> convStar c f env) fs) ctors
+        let fields = mapList (\(CtorDecl _ _ fs _) -> mapList (\f -> convStar c f env) fs) ctors
         Some (ti, params, ctors, fields, priv)
     _ -> None) decls)
   forEach pending (\(ti, params, ctors, fields, priv) ->
@@ -175,10 +175,32 @@ inferDataKinds c decls =
     let res = mkAppT (TCon tname k) (mapList TGen (range 0 n))
     let pks = paramKinds k n
     let total = length ctors
-    forEach (indexed (zip ctors fields)) (\(i, (CtorDecl cp cname _, fs)) ->
-      let ci = CtorInfo (sym c cname) cname tname (cMod c) total i (length fs) (ctorSchemeOf pks fs res) fs tpos
+    forEach (indexed (zip ctors fields)) (\(i, (CtorDecl cp cname _ named, fs)) ->
+      let ci = CtorInfo (sym c cname) cname tname (cMod c) total i (length fs) (ctorSchemeOf pks fs res) fs tpos named
       modifyRef ctorsRef (\cs -> snoc cs ci)
-      defineCtor c cname ci cp priv))
+      defineCtor c cname ci cp priv)
+    checkFieldDecls c ctors (readRef ctorsRef) (shortName tname))
+
+-- Reject duplicate field names, and a field shared by several
+-- constructors with different types.
+private checkFieldDecls : Checker -> List CtorDecl -> List CtorInfo -> String -> <IO> Unit
+checkFieldDecls c decls ctors tname =
+  let step types (CtorDecl cp _ _ _, ci) =
+    let names = withDefault [] (ctorFieldNames ci)
+    let field (seen, ts) (j, f) = match elem f seen with
+      True ->
+        errorf c cp "field '${f}' is declared twice in constructor ${ctorShort ci}"
+        (seen, ts)
+      False ->
+        let ft = at j (ctorFields ci)
+        match lookup f ts with
+          Some t | not (typesEqual t ft) -> errorf c cp "field '${f}' has different types in the constructors of ${tname}"
+          _ -> ()
+        (f :: seen, (f, ft) :: filter (\(n, _) -> n != f) ts)
+    let (_, types2) = foldl field ([], types) (indexed names)
+    types2
+  let _ = foldl step [] (zip decls ctors)
+  ()
 
 -- ================================================================ effects
 
@@ -310,7 +332,7 @@ deriveInstances c decls = concat (mapList (\d -> match d with
   _ -> []) decls)
 
 private ctorPat : Pos -> CtorDecl -> String -> <IO> (Pattern, List Expr)
-ctorPat p (CtorDecl _ name fields) prefix =
+ctorPat p (CtorDecl _ name fields _) prefix =
   let names = mapList (\i -> prefix ++ show i) (range 0 (length fields))
   let pat = mkPCon p "" name (mapList (mkPVar p) names)
   (pat, mapList (ev p) names)
@@ -348,7 +370,7 @@ deriveOrd p ctors =
   match ctors with
     [_] -> simpleBind p "compare" ["x$", "y$"] (EMatch p (pairScrut p) arms)
     _ ->
-      let idxArms = mapList (\(i, CtorDecl _ name fields) ->
+      let idxArms = mapList (\(i, CtorDecl _ name fields _) ->
         Arm p (mkPCon p "" name (mapList (\_ -> PWild p) fields)) (RBody (ELit p (LInt i)))) (indexed ctors)
       let idx = EMatch p (ev p "v$") idxArms
       let fallback = Arm p (PWild p) (RBody (appE (pv "compare") [appE (ev p "idx$") [ev p "x$"], appE (ev p "idx$") [ev p "y$"]]))
@@ -358,10 +380,15 @@ deriveOrd p ctors =
 
 private deriveShow : Pos -> List CtorDecl -> <IO> Bind
 deriveShow p ctors =
-  let arm (cd@(CtorDecl _ name _)) =
+  let arm (cd@(CtorDecl _ name _ named)) =
     let (pa, va) = ctorPat p cd "a$"
-    let shown = mapList (\v -> appE (pv "showArg") [appE (pv "show") [v]]) va
-    Arm p pa (RBody (appE (pv "showCon") [ELit p (LString name), EList p shown]))
+    match named with
+      Some fs ->
+        let shown = mapList (\(f, v) -> ETuple p [ELit p (LString f), appE (pv "show") [v]]) (zip fs va)
+        Arm p pa (RBody (appE (pv "showRecord") [ELit p (LString name), EList p shown]))
+      None ->
+        let shown = mapList (\v -> appE (pv "showArg") [appE (pv "show") [v]]) va
+        Arm p pa (RBody (appE (pv "showCon") [ELit p (LString name), EList p shown]))
   simpleBind p "show" ["x$"] (EMatch p (ev p "x$") (mapList arm ctors))
 
 -- ================================================================ instances
@@ -500,6 +527,9 @@ collectRefs e acc = match e with
   EBinOp _ op l r -> collectRefs r (collectRefs l (varName op :: acc))
   EInterp _ ps -> foldl (\a x -> collectRefs x a) acc ps
   EAnnot _ x _ -> collectRefs x acc
+  EField _ x _ _ -> collectRefs x acc
+  ERecord _ _ _ fs _ -> foldl (\a (FieldInit _ _ v) -> collectRefs v a) acc fs
+  EUpdate _ x fs _ -> foldl (\a (FieldInit _ _ v) -> collectRefs v a) (collectRefs x acc) fs
   _ -> acc
 
 private rhsRefs : Rhs -> List String -> List String
@@ -686,6 +716,7 @@ checkTests c tests = match tests with
         checkExpr c body (tUnit c) row "this test"
         let ws = popWanted c
         decLevel c
+        settleFields c (level c)
         forEach (solve c ws) (defaultAmbiguous c)
         modifyRef (gTests g) (\ts -> TestInfo name id (cMod c) :: ts)
       _ -> ())

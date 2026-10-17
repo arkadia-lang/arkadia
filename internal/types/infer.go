@@ -169,6 +169,12 @@ func (c *Checker) inferExpr(e syntax.Expr, eff Type) Type {
 		t := c.convStar(e.Type.Type, env)
 		c.checkExpr(e.E, t, eff, "this expression")
 		return t
+	case *syntax.EField:
+		return c.inferField(e, eff)
+	case *syntax.ERecord:
+		return c.inferRecord(e, eff)
+	case *syntax.EUpdate:
+		return c.inferUpdate(e, eff)
 	case *syntax.ENeg, *syntax.ESection, *syntax.EOpChain:
 		panic(fmt.Sprintf("unexpected %T after desugaring", e))
 	}
@@ -610,6 +616,12 @@ func (c *Checker) checkPat(p syntax.Pattern, t Type, seen map[string]bool) {
 			return
 		}
 		p.Con = ci
+		if p.Record && !c.recordPatArgs(p, ci) {
+			for _, a := range p.Args {
+				c.checkPat(a, c.freshType(), seen)
+			}
+			return
+		}
 		if len(p.Args) != ci.Arity {
 			c.errorf(p.P, "constructor '%s' expects %d argument(s), but the pattern has %d", p.Name, ci.Arity, len(p.Args))
 			return

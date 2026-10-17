@@ -25,6 +25,18 @@ type CtorInfo struct {
 	Arity  int
 	Scheme *Scheme // constructor function type
 	Fields []Type  // field types in terms of TGen (type params)
+	// FieldNames names the fields of a record constructor (nil otherwise).
+	FieldNames []string
+}
+
+// FieldIndex returns the position of a named field, or -1.
+func (ci *CtorInfo) FieldIndex(name string) int {
+	for i, n := range ci.FieldNames {
+		if n == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // AliasInfo describes a type alias.

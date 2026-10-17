@@ -493,6 +493,26 @@ func (p *printer) rowAnnot(t Type) string {
 	return p.row(t)
 }
 
+// CtorString renders a constructor for documentation: its name, followed by
+// its fields when it is a record constructor.
+func CtorString(ci *CtorInfo) string {
+	if ci.FieldNames == nil {
+		return ci.Short
+	}
+	p := newPrinter()
+	for _, n := range ci.Type.Params {
+		p.gen = append(p.gen, p.fresh(n, false))
+	}
+	var parts []string
+	for i, n := range ci.FieldNames {
+		parts = append(parts, n+" : "+p.typ(ci.Fields[i], 0))
+	}
+	if len(parts) == 0 {
+		return ci.Short + " {}"
+	}
+	return ci.Short + " { " + strings.Join(parts, ", ") + " }"
+}
+
 // SchemeString renders a scheme.
 func SchemeString(s *Scheme) string {
 	p := newPrinter()

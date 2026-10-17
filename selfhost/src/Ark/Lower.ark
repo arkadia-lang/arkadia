@@ -269,7 +269,67 @@ lowerExpr l e = match e with
       [one] -> one
       _ -> CConcat kept
   EAnnot _ x _ -> lowerExpr l x
+  EField p x name recRef ->
+    -- a match that binds the field in every constructor
+    let v = fresh l "fld"
+    let s = lowerExpr l x
+    let rows = mapList (\ci ->
+      let i = ctorFieldIndex ci name
+      let pats = mapList (\j -> match j == i with
+        True -> CPVar v
+        False -> CPWild) (range 0 (ctorArity ci))
+      Row [CPCon ci pats] (Some (CVar v)) []) (recordCtors l (readRef recRef))
+    CMatch [s] rows (posString p)
+  ERecord _ _ _ fs conRef ->
+    let ci = ctorOf conRef
+    let inOrder = allOf (\(i, FieldInit _ n _) -> ctorFieldIndex ci n == i) (indexed fs)
+    match inOrder with
+      True -> CCon ci (mapList (\(FieldInit _ _ v) -> lowerExpr l v) fs)
+      False ->
+        let (vals, lets) = bindInOrder l fs
+        let names = withDefault [] (ctorFieldNames ci)
+        let args = mapList (\n -> withDefault (CLit VUnit) (lookup n vals)) names
+        wrapLets lets (CCon ci args)
+  EUpdate p x fs recRef ->
+    -- the record is evaluated first, then the new values in source order;
+    -- the record is rebuilt with the same constructor
+    let s0 = lowerExpr l x
+    let (s, lets0) = match isAtom s0 with
+      True -> (s0, [])
+      False ->
+        let name = fresh l "rec"
+        (CVar name, [(name, s0)])
+    let (vals, vlets) = bindInOrder l fs
+    let rows = mapList (\ci ->
+      let parts = mapList (\n -> match lookup n vals with
+        Some v -> (CPWild, v)
+        None ->
+          let f = fresh l "f"
+          (CPVar f, CVar f)) (withDefault [] (ctorFieldNames ci))
+      Row [CPCon ci (map fst parts)] (Some (CCon ci (map snd parts))) []) (recordCtors l (readRef recRef))
+    wrapLets (lets0 ++ vlets) (CMatch [s] rows (posString p))
   _ -> error "lower: unexpected expression"
+
+-- The constructors of a record type.
+recordCtors : L -> String -> <IO> List CtorInfo
+recordCtors l name = match Map.lookup name (readRef (gTypes (lG l))) with
+  Some ti -> typeInfoCtors ti
+  None -> error ("unresolved record type " ++ name)
+
+-- Lower field values in source order, binding those that are not atomic.
+bindInOrder : L -> List FieldInit -> <IO> (List (String, CExpr), List (String, CExpr))
+bindInOrder l fs =
+  let step (vals, lets) (FieldInit _ n v) =
+    let x = lowerExpr l v
+    match isAtom x with
+      True -> (snoc vals (n, x), lets)
+      False ->
+        let name = fresh l "fv"
+        (snoc vals (n, CVar name), snoc lets (name, x))
+  foldl step ([], []) fs
+
+wrapLets : List (String, CExpr) -> CExpr -> CExpr
+wrapLets lets body = foldr (\(n, v) acc -> CLet n v acc) body lets
 
 litVal : Lit -> Val
 litVal lit = match lit with
@@ -495,3 +555,6 @@ lowerPat l p = match p with
     let nil = builtinCtor (lG l) tListName 0
     foldr (\x acc -> CPCon cons [lowerPat l x, acc]) (CPCon nil []) elems
   PCon _ _ _ args conRef -> CPCon (ctorOf conRef) (mapList (lowerPat l) args)
+  PRec pos _ _ fields conRef ->
+    let ci = ctorOf conRef
+    CPCon ci (mapList (lowerPat l) (recordPositional ci fields pos))

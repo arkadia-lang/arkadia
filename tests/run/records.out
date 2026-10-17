@@ -1,0 +1,25 @@
+hi ann (30)
+User { name = "ann", age = 31, tags = ["admin"] }
+ann/30
+(False, True)
+User { name = "bob", age = 25, tags = [] }
+["ann", "bob"]
+["ann"]
+55
+bob
+Pet { name = "rex", owner = User { name = "bob", age = 26, tags = [] } }
+tags
+age
+name
+c
+new age
+new name
+User { name = "d", age = 2, tags = [] }
+Circle { x = 1.5, y = 1.0, r = 2.0 }
+Rect { x = 1.0, y = 0.0, w = 2.0, h = 3.0 }
+[12.0, 6.0]
+2
+nums
+Empty {}
+dan 40
+adult

@@ -348,8 +348,109 @@ func (l *lowerer) expr(e syntax.Expr) Expr {
 		return &Concat{Parts: kept}
 	case *syntax.EAnnot:
 		return l.expr(e.E)
+	case *syntax.EField:
+		return l.field(e)
+	case *syntax.ERecord:
+		return l.record(e)
+	case *syntax.EUpdate:
+		return l.update(e)
 	}
 	panic(fmt.Sprintf("lower: %T", e))
+}
+
+// field lowers `e.f` to a match that binds the field in every constructor.
+func (l *lowerer) field(e *syntax.EField) Expr {
+	ti := e.Rec.(*types.TypeInfo)
+	x := l.fresh("fld")
+	m := &Match{Scruts: []Expr{l.expr(e.E)}, Where: e.P.String()}
+	for _, ci := range ti.Ctors {
+		pc := &PCon{Ctor: ci}
+		for i := 0; i < ci.Arity; i++ {
+			pc.Args = append(pc.Args, &PWild{})
+		}
+		pc.Args[ci.FieldIndex(e.Name)] = &PVar{x}
+		m.Rows = append(m.Rows, &Row{Pats: []Pat{pc}, Body: &Var{x}})
+	}
+	return m
+}
+
+// bindInOrder evaluates the field values in source order, binding those
+// that are not atomic to variables.
+func (l *lowerer) bindInOrder(fs []*syntax.FieldInit) (map[string]Expr, []*Let) {
+	vals := map[string]Expr{}
+	var lets []*Let
+	for _, f := range fs {
+		v := l.expr(f.Value)
+		if !isAtomic(v) {
+			name := l.fresh("fv")
+			lets = append(lets, &Let{Name: name, Val: v})
+			v = &Var{name}
+		}
+		vals[f.Name] = v
+	}
+	return vals, lets
+}
+
+func wrapLets(lets []*Let, body Expr) Expr {
+	for i := len(lets) - 1; i >= 0; i-- {
+		body = &Let{Name: lets[i].Name, Val: lets[i].Val, Body: body}
+	}
+	return body
+}
+
+func (l *lowerer) record(e *syntax.ERecord) Expr {
+	ci := e.Con.(*types.CtorInfo)
+	inOrder := true
+	for i, f := range e.Fields {
+		if ci.FieldIndex(f.Name) != i {
+			inOrder = false
+		}
+	}
+	if inOrder {
+		args := make([]Expr, len(e.Fields))
+		for i, f := range e.Fields {
+			args[i] = l.expr(f.Value)
+		}
+		return &Con{Ctor: ci, Args: args}
+	}
+	vals, lets := l.bindInOrder(e.Fields)
+	args := make([]Expr, ci.Arity)
+	for i, n := range ci.FieldNames {
+		args[i] = vals[n]
+	}
+	return wrapLets(lets, &Con{Ctor: ci, Args: args})
+}
+
+// update lowers `{ e | f = v }`: e is evaluated first, then the new values
+// in source order, then the record is rebuilt with the same constructor.
+func (l *lowerer) update(e *syntax.EUpdate) Expr {
+	ti := e.Rec.(*types.TypeInfo)
+	scrut := l.expr(e.E)
+	var lets []*Let
+	if !isAtomic(scrut) {
+		name := l.fresh("rec")
+		lets = append(lets, &Let{Name: name, Val: scrut})
+		scrut = &Var{name}
+	}
+	vals, vlets := l.bindInOrder(e.Fields)
+	lets = append(lets, vlets...)
+	m := &Match{Scruts: []Expr{scrut}, Where: e.P.String()}
+	for _, ci := range ti.Ctors {
+		pc := &PCon{Ctor: ci}
+		args := make([]Expr, ci.Arity)
+		for i, n := range ci.FieldNames {
+			if v, ok := vals[n]; ok {
+				pc.Args = append(pc.Args, &PWild{})
+				args[i] = v
+				continue
+			}
+			x := l.fresh("f")
+			pc.Args = append(pc.Args, &PVar{x})
+			args[i] = &Var{x}
+		}
+		m.Rows = append(m.Rows, &Row{Pats: []Pat{pc}, Body: &Con{Ctor: ci, Args: args}})
+	}
+	return wrapLets(lets, m)
 }
 
 func isWildLike(p syntax.Pattern) bool {

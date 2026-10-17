@@ -306,7 +306,7 @@ moduleDoc ex =
   let mod = exportsModule ex
   let types = concatStrings (mapList (\(n, t) -> match t with
     TEType ti | startsWith (mod ++ ".") (typeInfoName ti) ->
-      let ctors = mapList ctorShort (typeInfoCtors ti)
+      let ctors = mapList (ctorString ti) (typeInfoCtors ti)
       let ctorText = match ctors with
         [] -> ""
         _ -> " = " ++ joinWith " | " ctors

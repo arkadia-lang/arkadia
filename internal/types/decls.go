@@ -94,11 +94,32 @@ func (c *Checker) inferDataKinds() {
 		}
 		pks := paramKinds(p.ti.Kind, n)
 		for i, cd := range p.d.Ctors {
-			ci := &CtorInfo{Name: c.sym(cd.Name), Short: cd.Name, Type: p.ti, Tag: i, Arity: len(cd.Fields), Fields: p.fields[i]}
+			ci := &CtorInfo{Name: c.sym(cd.Name), Short: cd.Name, Type: p.ti, Tag: i, Arity: len(cd.Fields), Fields: p.fields[i], FieldNames: cd.Named}
 			ci.Scheme = ctorScheme(n, p.fields[i], res)
 			copy(ci.Scheme.Kinds, pks)
 			p.ti.Ctors = append(p.ti.Ctors, ci)
 			c.defineCtor(cd.Name, ci, cd.P, p.d.Private)
+		}
+		c.checkFieldDecls(p.d, p.ti)
+	}
+}
+
+// checkFieldDecls rejects duplicate field names, and a field shared by
+// several constructors with different types.
+func (c *Checker) checkFieldDecls(d *syntax.DType, ti *TypeInfo) {
+	types := map[string]Type{}
+	for i, ci := range ti.Ctors {
+		seen := map[string]bool{}
+		for j, f := range ci.FieldNames {
+			if seen[f] {
+				c.errorf(d.Ctors[i].P, "field '%s' is declared twice in constructor %s", f, ci.Short)
+				continue
+			}
+			seen[f] = true
+			if t, ok := types[f]; ok && !typesEqual(t, ci.Fields[j]) {
+				c.errorf(d.Ctors[i].P, "field '%s' has different types in the constructors of %s", f, d.Name)
+			}
+			types[f] = ci.Fields[j]
 		}
 	}
 }
@@ -377,10 +398,18 @@ func deriveShow(dt *syntax.DType) *syntax.Bind {
 	for _, cd := range dt.Ctors {
 		pa, va := ctorPat(p, cd, "a$")
 		l := &syntax.EList{P: p}
+		name := &syntax.ELit{P: p, Kind: syntax.LitString, Str: cd.Name}
+		if cd.Named != nil {
+			for i, v := range va {
+				l.Elems = append(l.Elems, &syntax.ETuple{P: p, Elems: []syntax.Expr{&syntax.ELit{P: p, Kind: syntax.LitString, Str: cd.Named[i]}, app(pv("show"), v)}})
+			}
+			m.Arms = append(m.Arms, &syntax.Arm{P: p, Pat: pa, Body: &syntax.Rhs{Body: app(pv("showRecord"), name, l)}})
+			continue
+		}
 		for _, v := range va {
 			l.Elems = append(l.Elems, app(pv("showArg"), app(pv("show"), v)))
 		}
-		body := app(pv("showCon"), &syntax.ELit{P: p, Kind: syntax.LitString, Str: cd.Name}, l)
+		body := app(pv("showCon"), name, l)
 		m.Arms = append(m.Arms, &syntax.Arm{P: p, Pat: pa, Body: &syntax.Rhs{Body: body}})
 	}
 	return simpleBind(p, "show", []string{"x$"}, m)

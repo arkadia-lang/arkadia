@@ -184,6 +184,7 @@ flushRoot c =
     r :: _ -> reverse r
     [] -> []
   writeRef (cWanted c) [[]]
+  settleFields c (-1)
   forEach (solve c root) (defaultAmbiguous c)
 
 -- ================================================================ generalization
@@ -226,6 +227,7 @@ generalize c monos ws canGen = match canGen with
     floatWanted c ws
     (mapList mono monos, [])
   True ->
+    settleFields c (level c)
     let residual = solve c ws
     let monoMetas = metasOfMany monos
     let lvl = level c
@@ -348,6 +350,9 @@ inferExpr c e eff = match e with
     let t = convStar c te env
     checkExpr c x t eff "this expression"
     t
+  EField _ _ _ _ -> inferField c e eff
+  ERecord _ _ _ _ _ -> inferRecord c e eff
+  EUpdate _ _ _ _ -> inferUpdate c e eff
   _ -> error "inferExpr: unexpected expression after desugaring"
 
 litType : Checker -> Lit -> <IO> Type
@@ -711,6 +716,13 @@ checkPat c pat t seen = match pat with
     let a = freshType c
     unifyAt c p t (tList c a) "this pattern"
     forEach elems (\x -> checkPat c x a seen)
+  PRec p q name fields conRef -> match lookupCtor c p q name with
+    None -> forEach fields (\(_, x) -> checkPat c x (freshType c) seen)
+    Some ci ->
+      writeRef conRef (Some ci)
+      match recordPatArgs c p name ci fields with
+        False -> forEach fields (\(_, x) -> checkPat c x (freshType c) seen)
+        True -> checkPatCon c p name ci (recordPositional ci fields p) t seen
   PCon p q name args conRef -> match lookupCtor c p q name with
     None -> forEach args (\x -> checkPat c x (freshType c) seen)
     Some ci
@@ -719,15 +731,259 @@ checkPat c pat t seen = match pat with
           errorf c p "constructor '${name}' expects ${ctorArity ci} argument(s), but the pattern has ${length args}"
       | otherwise ->
           writeRef conRef (Some ci)
-          let (ct, _) = instantiate c (ctorScheme ci) p
+          checkPatCon c p name ci args t seen
+
+private checkPatCon : Checker -> Pos -> String -> CtorInfo -> List Pattern -> Type -> Ref (List String) -> <IO> Unit
+checkPatCon c p name ci args t seen =
+  let (ct, _) = instantiate c (ctorScheme ci) p
+  let fieldsOf n ty acc = match n == 0 with
+    True -> (reverse acc, ty)
+    False -> match prune ty with
+      TFun a _ r -> fieldsOf (n - 1) r (a :: acc)
+      _ -> error "checkPat: constructor type"
+  let (fields, res) = fieldsOf (ctorArity ci) ct []
+  unifyAt c p t res "this pattern"
+  forEach (zip args fields) (\(x, ft) -> checkPat c x ft seen)
+
+-- Validate the named sub-patterns of a record pattern.
+private recordPatArgs : Checker -> Pos -> String -> CtorInfo -> List (String, Pattern) -> <IO> Bool
+recordPatArgs c p name ci fields = match ctorFieldNames ci with
+  None ->
+    errorf c p "constructor '${name}' has no named fields"
+    False
+  Some _ ->
+    let check (ok, used) (f, sub) =
+      let j = ctorFieldIndex ci f
+      match j < 0 with
+        True ->
+          errorf c (patPos sub) "constructor '${name}' has no field '${f}'"
+          (False, used)
+        False -> match elem j used with
+          True ->
+            errorf c (patPos sub) "field '${f}' is matched twice"
+            (False, used)
+          False -> (ok, j :: used)
+    let (ok, _) = foldl check (True, []) fields
+    ok
+
+-- ================================================================ records
+--
+-- Field access and update are resolved by the type of the record: `e.f`
+-- needs the type constructor of e. When it is not known yet, the access is
+-- recorded as a pending field constraint and retried before the enclosing
+-- binding is generalized (and before its class constraints are solved). A
+-- constraint whose record type is still unknown at that point is resolved
+-- by the field names: if exactly one record type in scope has them all, it
+-- is used; otherwise the program needs a type annotation.
+
+-- The type of field name (in terms of TGen) if every constructor has it.
+recordField : TypeInfo -> String -> <IO> Option Type
+recordField ti name = match typeInfoCtors ti with
+  [] -> None
+  ctors -> recordFieldAcc ctors name None
+
+private recordFieldAcc : List CtorInfo -> String -> Option Type -> Option Type
+recordFieldAcc ctors name acc = match ctors with
+  [] -> acc
+  ci :: rest ->
+    let i = ctorFieldIndex ci name
+    match i < 0 with
+      True -> None
+      False -> recordFieldAcc rest name (Some (at i (ctorFields ci)))
+
+private hasAnyField : TypeInfo -> String -> <IO> Bool
+hasAnyField ti name = anyOf (\ci -> ctorFieldIndex ci name >= 0) (typeInfoCtors ti)
+
+-- Instantiate the parameters of ti and unify t with the resulting type.
+private recordArgs : Checker -> Pos -> TypeInfo -> Type -> <IO> List Type
+recordArgs c p ti t =
+  let k = typeInfoKind ti
+  let args = mapList (newMeta c) (paramKinds k (length (typeInfoParams ti)))
+  unifyAt c p (mkAppT (TCon (typeInfoName ti) k) args) t "the record"
+  args
+
+-- Resolve field name of a value of type t: False when the head of t is
+-- still unknown, otherwise the record type and the field's type (None
+-- after an error).
+private fieldOf : Checker -> Pos -> Type -> String -> <IO> (Bool, Option (TypeInfo, Type))
+fieldOf c p t name =
+  let (h, _) = headOf t
+  let noField () =
+    errorf c p "type ${typeString (zonk t)} has no field '${name}'"
+    (True, None)
+  match h with
+    TMeta _ -> (False, None)
+    TCon hn _ -> match Map.lookup hn (readRef (gTypes (cG c))) with
+      Some ti -> match recordField ti name with
+        Some ft ->
+          let args = recordArgs c p ti t
+          (True, Some (ti, substGen ft args))
+        None
+          | hasAnyField ti name ->
+              errorf c p "field '${name}' is not present in every constructor of ${typeString (zonk t)}"
+              (True, None)
+          | otherwise -> noField ()
+      None -> noField ()
+    _ -> noField ()
+
+private tryField : Checker -> FieldWanted -> <IO> Bool
+tryField c (FieldWanted p rec name res _ what slot) = match fieldOf c p rec name with
+  (False, _) -> False
+  (True, None) -> True
+  (True, Some (ti, ft)) ->
+    unifyAt c p ft res what
+    writeRef slot (typeInfoName ti)
+    True
+
+private needField : Checker -> FieldWanted -> <IO> Unit
+needField c w = match tryField c w with
+  True -> ()
+  False -> modifyRef (cFields c) (\ws -> snoc ws w)
+
+-- Retry the pending field constraints. Those whose record type is a
+-- variable above level lvl (about to be generalized) are resolved by their
+-- field names; the others stay pending at level lvl.
+settleFields : Checker -> Int -> <IO> Unit
+settleFields c lvl =
+  let (progress, rest) = retryFields c (readRef (cFields c)) False []
+  writeRef (cFields c) rest
+  match progress with
+    True -> settleFields c lvl
+    False ->
+      let (progress2, keep) = fallbackField c lvl rest []
+      writeRef (cFields c) keep
+      match progress2 with
+        True -> settleFields c lvl
+        False -> forEach keep (\(FieldWanted _ rec _ res _ _ _) ->
+          lowerLevels rec lvl
+          lowerLevels res lvl)
+
+private retryFields : Checker -> List FieldWanted -> Bool -> List FieldWanted -> <IO> (Bool, List FieldWanted)
+retryFields c ws progress acc = match ws with
+  [] -> (progress, reverse acc)
+  w :: more -> match tryField c w with
+    True -> retryFields c more True acc
+    False -> retryFields c more progress (w :: acc)
+
+-- Resolve the first constraint whose record type is about to be
+-- generalized by its field names.
+private fallbackField : Checker -> Int -> List FieldWanted -> List FieldWanted -> <IO> (Bool, List FieldWanted)
+fallbackField c lvl ws acc = match ws with
+  [] -> (False, reverse acc)
+  w :: more ->
+    let FieldWanted _ rec _ _ _ _ _ = w
+    match prune rec with
+      TMeta m | readRef (metaLevelRef m) > lvl ->
+        fieldByName c w
+        (True, reverse acc ++ more)
+      _ -> fallbackField c lvl more (w :: acc)
+
+-- Resolve a constraint by the unique record type in scope that has all
+-- the fields of its group.
+private fieldByName : Checker -> FieldWanted -> <IO> Unit
+fieldByName c w =
+  let FieldWanted p rec name _ group _ _ = w
+  let cands = filterMap (\(n, te) -> match te with
+    TEType ti -> match allOf (\f -> isSome (recordField ti f)) group with
+      True -> Some (n, ti)
+      False -> None
+    _ -> None) (Map.toList (readRef (scopeTypes (cScope c))))
+  match cands with
+    [] -> errorf c p "no record type in scope has the field '${name}'"
+    [(_, ti)] ->
+      let _ = recordArgs c p ti rec
+      let _ = tryField c w
+      ()
+    _ -> errorf c p "cannot tell which record the field '${name}' belongs to (${joinNames (mapList fst cands)} have it); add a type annotation"
+
+private inferField : Checker -> Expr -> Type -> <IO> Type
+inferField c e eff = match e with
+  EField p x name slot ->
+    let t = inferExpr c x eff
+    let r = freshType c
+    needField c (FieldWanted p t name r [name] "the field" slot)
+    record c p ("." ++ name) (Some r) None noPos "field"
+    r
+  _ -> error "inferField"
+
+private checkDupFields : Checker -> List FieldInit -> <IO> Unit
+checkDupFields c fs =
+  let step seen (FieldInit p n _) =
+    match elem n seen with
+      True -> errorf c p "field '${n}' is given twice"
+      False -> ()
+    n :: seen
+  let _ = foldl step [] fs
+  ()
+
+private inferUpdate : Checker -> Expr -> Type -> <IO> Type
+inferUpdate c e eff = match e with
+  EUpdate _ x fs slot ->
+    let t = inferExpr c x eff
+    checkDupFields c fs
+    let group = mapList (\(FieldInit _ n _) -> n) fs
+    let (h, _) = headOf t
+    match isMeta h with
+      False ->
+        -- the record type is known: check the new values against the fields
+        forEach fs (\(FieldInit fp n v) -> match fieldOf c fp t n with
+          (_, Some (ti, ft)) ->
+            writeRef slot (typeInfoName ti)
+            checkExpr c v ft eff "the value of field '${n}'"
+          _ ->
+            let _ = inferExpr c v eff
+            ())
+        t
+      True ->
+        forEach fs (\(FieldInit fp n v) ->
+          let vt = inferExpr c v eff
+          needField c (FieldWanted fp t n vt group "the value of field '${n}'" slot))
+        t
+  _ -> error "inferUpdate"
+
+private inferRecord : Checker -> Expr -> Type -> <IO> Type
+inferRecord c e eff = match e with
+  ERecord p q name fs conRef -> match lookupCtor c p q name with
+    None ->
+      forEach fs (\(FieldInit _ _ v) ->
+        let _ = inferExpr c v eff
+        ())
+      freshType c
+    Some ci ->
+      writeRef conRef (Some ci)
+      match ctorFieldNames ci with
+        None ->
+          errorf c p "constructor '${name}' has no named fields"
+          forEach fs (\(FieldInit _ _ v) ->
+            let _ = inferExpr c v eff
+            ())
+          freshType c
+        Some names ->
+          let (ct0, _) = instantiate c (ctorScheme ci) p
           let fieldsOf n ty acc = match n == 0 with
             True -> (reverse acc, ty)
             False -> match prune ty with
               TFun a _ r -> fieldsOf (n - 1) r (a :: acc)
-              _ -> error "checkPat: constructor type"
-          let (fields, res) = fieldsOf (ctorArity ci) ct []
-          unifyAt c p t res "this pattern"
-          forEach (zip args fields) (\(x, ft) -> checkPat c x ft seen)
+              _ -> error "inferRecord: constructor type"
+          let (fields, ct) = fieldsOf (ctorArity ci) ct0 []
+          record c p name (Some ct) None (ctorTypePos ci) "constructor"
+          checkDupFields c fs
+          let given = filterMap (\(FieldInit fp n v) ->
+            let i = ctorFieldIndex ci n
+            match i < 0 with
+              True ->
+                errorf c fp "constructor '${name}' has no field '${n}'"
+                let _ = inferExpr c v eff
+                None
+              False ->
+                checkExpr c v (at i fields) eff "the value of field '${n}'"
+                Some n) fs
+          let missing = filter (\n -> not (elem n given)) names
+          match missing with
+            [] -> ()
+            _ -> errorf c p "missing field(s) ${joinNames (mapList (\n -> "'" ++ n ++ "'") missing)} in this construction of ${name}"
+          ct
+  _ -> error "inferRecord"
 
 -- ================================================================ bindings
 
@@ -820,6 +1076,7 @@ checkAgainst c b (Scheme kinds snames preds st) fixed skipFirst eff =
     Some e -> checkClauses c b t e
   let ws = popWanted c
   let lvl = level c
+  settleFields c (lvl - 1)
   forEach (solve c ws) (\w ->
     let Wanted _ ty _ _ = w
     let local = allOf (\m -> readRef (metaLevelRef m) >= lvl) (metasOf ty)

@@ -457,6 +457,28 @@ func (p *parser) derivingClause() []string {
 func (p *parser) ctorDecl() *CtorDecl {
 	t := p.expect(UIDENT)
 	c := &CtorDecl{P: t.Pos, Name: t.Text}
+	if p.at(LBRACE) {
+		// record constructor: C { f : T, g, h : U }
+		p.next()
+		c.Named = []string{}
+		for !p.at(RBRACE) {
+			names := []string{p.expect(LIDENT).Text}
+			for p.accept(COMMA) {
+				names = append(names, p.expect(LIDENT).Text)
+			}
+			p.expect(COLON)
+			ty := p.typeTop()
+			for _, n := range names {
+				c.Named = append(c.Named, n)
+				c.Fields = append(c.Fields, ty)
+			}
+			if !p.accept(COMMA) {
+				break
+			}
+		}
+		p.expect(RBRACE)
+		return c
+	}
 	for p.startsTypeAtom() && !p.atWord("deriving") {
 		c.Fields = append(c.Fields, p.typeAtom())
 	}
@@ -840,6 +862,10 @@ func (p *parser) patApp() Pattern {
 	if t.Kind == UIDENT {
 		p.next()
 		c := &PCon{P: t.Pos, Qual: t.Qual, Name: t.Text}
+		if p.at(LBRACE) {
+			p.recordPat(c)
+			return c
+		}
 		for p.startsPatAtom() {
 			c.Args = append(c.Args, p.patAtom())
 		}
@@ -877,7 +903,11 @@ func (p *parser) patAtom() Pattern {
 		return &PVar{P: t.Pos, Name: t.Text}
 	case UIDENT:
 		p.next()
-		return &PCon{P: t.Pos, Qual: t.Qual, Name: t.Text}
+		c := &PCon{P: t.Pos, Qual: t.Qual, Name: t.Text}
+		if p.at(LBRACE) {
+			p.recordPat(c)
+		}
+		return c
 	case UNDERSCORE:
 		p.next()
 		return &PWild{P: t.Pos}
@@ -919,6 +949,27 @@ func (p *parser) patAtom() Pattern {
 	}
 	p.unexpected("pattern")
 	return nil
+}
+
+// recordPat parses `{ f = p, g }` after a constructor; a bare field name
+// binds a variable of the same name.
+func (p *parser) recordPat(c *PCon) {
+	p.expect(LBRACE)
+	c.Record = true
+	c.Fields = []string{}
+	for !p.at(RBRACE) {
+		n := p.expect(LIDENT)
+		var pat Pattern = &PVar{P: n.Pos, Name: n.Text}
+		if p.accept(EQUALS) {
+			pat = p.pattern()
+		}
+		c.Fields = append(c.Fields, n.Text)
+		c.Args = append(c.Args, pat)
+		if !p.accept(COMMA) {
+			break
+		}
+	}
+	p.expect(RBRACE)
 }
 
 // ------------------------------------------------------------ expressions
@@ -1220,7 +1271,7 @@ func (p *parser) blockExpr() Expr {
 
 func (p *parser) startsAtom() bool {
 	switch p.peek().Kind {
-	case LIDENT, UIDENT, INT, FLOAT, STRING, INTERP, CHAR, LPAREN, LBRACKET:
+	case LIDENT, UIDENT, INT, FLOAT, STRING, INTERP, CHAR, LPAREN, LBRACKET, LBRACE, FIELDFN:
 		return true
 	}
 	return false
@@ -1247,7 +1298,38 @@ func (p *parser) app() Expr {
 	return &EApp{P: f.EPos(), Fun: f, Args: args}
 }
 
+// atom parses an atomic expression followed by any field accesses.
 func (p *parser) atom() Expr {
+	e := p.atomBase()
+	for p.at(FIELD) {
+		t := p.next()
+		e = &EField{P: t.Pos, E: e, Name: t.Text}
+	}
+	return e
+}
+
+// fieldInits parses `f = e, g, ...` up to the closing brace; a bare field
+// name stands for the variable of the same name.
+func (p *parser) fieldInits() []*FieldInit {
+	var fs []*FieldInit
+	for !p.at(RBRACE) {
+		n := p.expect(LIDENT)
+		f := &FieldInit{P: n.Pos, Name: n.Text}
+		if p.accept(EQUALS) {
+			f.Value = p.body()
+		} else {
+			f.Value = &EVar{P: n.Pos, Name: n.Text}
+		}
+		fs = append(fs, f)
+		if !p.accept(COMMA) {
+			break
+		}
+	}
+	p.expect(RBRACE)
+	return fs
+}
+
+func (p *parser) atomBase() Expr {
 	t := p.peek()
 	switch t.Kind {
 	case LIDENT:
@@ -1255,7 +1337,19 @@ func (p *parser) atom() Expr {
 		return &EVar{P: t.Pos, Qual: t.Qual, Name: t.Text}
 	case UIDENT:
 		p.next()
+		if p.at(LBRACE) {
+			p.next()
+			return &ERecord{P: t.Pos, Qual: t.Qual, Name: t.Text, Fields: p.fieldInits()}
+		}
 		return &ECon{P: t.Pos, Qual: t.Qual, Name: t.Text}
+	case FIELDFN:
+		p.next()
+		return &EField{P: t.Pos, Name: t.Text}
+	case LBRACE:
+		p.next()
+		rec := p.expr()
+		p.expect(BAR)
+		return &EUpdate{P: t.Pos, E: rec, Fields: p.fieldInits()}
 	case INT, FLOAT, STRING, CHAR:
 		p.next()
 		return p.litFromToken(t)

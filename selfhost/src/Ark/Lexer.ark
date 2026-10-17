@@ -108,6 +108,8 @@ prevEndsExpr lx = match readRef (lxToks lx) with
     RBRACKET -> True
     RBRACE -> True
     UNDERSCORE -> True
+    FIELD -> True
+    FIELDFN -> True
     _ -> False
 
 -- ================================================================ entry points
@@ -497,6 +499,14 @@ punct lx =
       | not (isOpChar r) ->
           let _ = next lx
           errorAt lx p "unexpected character ${show r}"
+      | r == '.' && isIdentStart (peekAt lx 1) && not (isUpper (peekAt lx 1)) && peekAt lx 1 != '_' ->
+          -- `.name`: field access when glued to the preceding expression,
+          -- otherwise a field accessor function
+          let kind = match not (readRef (lxSawSpc lx)) && prevEndsExpr lx with
+            True -> FIELD
+            False -> FIELDFN
+          let _ = next lx
+          emit lx (mkTok kind (readSeg lx) p)
       | otherwise ->
           let s = lxOff lx
           skipWhile lx isOpChar

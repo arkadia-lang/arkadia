@@ -43,6 +43,9 @@ simplify g p = match p with
   PCon _ _ _ args conRef -> match readRef conRef with
     None -> SWild
     Some ci -> SCtor (fromCtor ci) (mapList (simplify g) args)
+  PRec pos _ _ fields conRef -> match readRef conRef with
+    None -> SWild
+    Some ci -> SCtor (fromCtor ci) (mapList (simplify g) (recordPositional ci fields pos))
   PTuple _ elems -> SCtor (tupleSCon (length elems)) (mapList (simplify g) elems)
   PList _ elems ->
     let cons = fromCtor (builtinCtor g tListName 1)

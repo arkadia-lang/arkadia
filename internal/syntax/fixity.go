@@ -158,6 +158,32 @@ func (r *fixResolver) expr(e Expr) Expr {
 		}
 	case *EAnnot:
 		e.E = r.expr(e.E)
+	case *EField:
+		// `.f.g` is \x -> x.f.g
+		inner := e
+		for {
+			next, ok := inner.E.(*EField)
+			if !ok {
+				break
+			}
+			inner = next
+		}
+		if inner.E == nil {
+			r.n++
+			x := "fld$" + itoa(r.n)
+			inner.E = &EVar{P: inner.P, Name: x}
+			return &ELam{P: inner.P, Params: []Pattern{&PVar{P: inner.P, Name: x}}, Body: e}
+		}
+		e.E = r.expr(e.E)
+	case *ERecord:
+		for _, f := range e.Fields {
+			f.Value = r.expr(f.Value)
+		}
+	case *EUpdate:
+		e.E = r.expr(e.E)
+		for _, f := range e.Fields {
+			f.Value = r.expr(f.Value)
+		}
 	case *EBinOp:
 		e.Left = r.expr(e.Left)
 		e.Right = r.expr(e.Right)

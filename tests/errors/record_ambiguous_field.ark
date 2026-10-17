@@ -1,0 +1,6 @@
+type User = User { name : String, age : Int }
+type Pet = Pet { name : String }
+
+nameOf r = r.name
+
+main () = println (nameOf (Pet { name = "rex" }))

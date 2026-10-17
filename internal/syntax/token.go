@@ -41,6 +41,8 @@ const (
 	DARROW // =>
 	AT     // @
 	UNDERSCORE
+	FIELD   // `.name` directly after an expression (field access)
+	FIELDFN // `.name` elsewhere (field accessor function)
 
 	// keywords
 	KwModule
@@ -95,6 +97,7 @@ var kindNames = map[Kind]string{
 	LPAREN: "'('", RPAREN: "')'", LBRACKET: "'['", RBRACKET: "']'", LBRACE: "'{'",
 	RBRACE: "'}'", COMMA: "','", SEMI: "';'", BACKTICK: "'`'", BACKSLASH: "'\\'", EQUALS: "'='",
 	BAR: "'|'", ARROW: "'->'", COLON: "':'", DARROW: "'=>'", AT: "'@'", UNDERSCORE: "'_'",
+	FIELD: "field", FIELDFN: "field",
 }
 
 func (k Kind) String() string {
@@ -139,6 +142,8 @@ func (t Token) String() string {
 		return "'" + t.Text + "'"
 	case INT, FLOAT, STRING, CHAR:
 		return t.Text
+	case FIELD, FIELDFN:
+		return "'." + t.Text + "'"
 	}
 	return t.Kind.String()
 }

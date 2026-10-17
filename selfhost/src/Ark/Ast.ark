@@ -47,6 +47,7 @@ type TokKind
   | LIDENT | UIDENT | OP | INT | FLOAT | STRING | INTERP | CHAR
   | LPAREN | RPAREN | LBRACKET | RBRACKET | LBRACE | RBRACE
   | COMMA | SEMI | BACKTICK | BACKSLASH | EQUALS | BAR | ARROW | COLON | DARROW | AT | UNDERSCORE
+  | FIELD | FIELDFN
   | KwModule | KwImport | KwAs | KwType | KwAlias | KwClass | KwInstance | KwEffect | KwWhere
   | KwLet | KwIn | KwMatch | KwWith | KwHandle | KwReturn | KwForeign
   | KwInfixl | KwInfixr | KwInfix | KwPrivate | KwTest | KwDeriving
@@ -107,6 +108,8 @@ kindName k = match k with
   DARROW -> "'=>'"
   AT -> "'@'"
   UNDERSCORE -> "'_'"
+  FIELD -> "field"
+  FIELDFN -> "field"
   KwModule -> "'module'"
   KwImport -> "'import'"
   KwType -> "'type'"
@@ -174,6 +177,8 @@ tokString t = match tokKind t with
   FLOAT -> tokText t
   STRING -> tokText t
   CHAR -> tokText t
+  FIELD -> "'." ++ tokText t ++ "'"
+  FIELDFN -> "'." ++ tokText t ++ "'"
   k -> kindName k
 
 private quotedName : Token -> String
@@ -262,35 +267,54 @@ typeInfoPos : TypeInfo -> Pos
 typeInfoPos (TypeInfo _ _ _ _ _ _ p) = p
 
 -- global name, short name, type name, type module, number of constructors
--- of the type, tag, arity, scheme, field types (TGen terms), type position
-type CtorInfo = CtorInfo String String String String Int Int Int Scheme (List Type) Pos
+-- of the type, tag, arity, scheme, field types (TGen terms), type position,
+-- field names of a record constructor
+type CtorInfo = CtorInfo String String String String Int Int Int Scheme (List Type) Pos (Option (List String))
 
 ctorName : CtorInfo -> String
-ctorName (CtorInfo n _ _ _ _ _ _ _ _ _) = n
+ctorName (CtorInfo n _ _ _ _ _ _ _ _ _ _) = n
 
 ctorShort : CtorInfo -> String
-ctorShort (CtorInfo _ s _ _ _ _ _ _ _ _) = s
+ctorShort (CtorInfo _ s _ _ _ _ _ _ _ _ _) = s
 
 ctorTypeName : CtorInfo -> String
-ctorTypeName (CtorInfo _ _ t _ _ _ _ _ _ _) = t
+ctorTypeName (CtorInfo _ _ t _ _ _ _ _ _ _ _) = t
 
 ctorTypeModule : CtorInfo -> String
-ctorTypeModule (CtorInfo _ _ _ m _ _ _ _ _ _) = m
+ctorTypeModule (CtorInfo _ _ _ m _ _ _ _ _ _ _) = m
 
 ctorSiblings : CtorInfo -> Int
-ctorSiblings (CtorInfo _ _ _ _ n _ _ _ _ _) = n
+ctorSiblings (CtorInfo _ _ _ _ n _ _ _ _ _ _) = n
 
 ctorTag : CtorInfo -> Int
-ctorTag (CtorInfo _ _ _ _ _ t _ _ _ _) = t
+ctorTag (CtorInfo _ _ _ _ _ t _ _ _ _ _) = t
 
 ctorArity : CtorInfo -> Int
-ctorArity (CtorInfo _ _ _ _ _ _ a _ _ _) = a
+ctorArity (CtorInfo _ _ _ _ _ _ a _ _ _ _) = a
 
 ctorScheme : CtorInfo -> Scheme
-ctorScheme (CtorInfo _ _ _ _ _ _ _ s _ _) = s
+ctorScheme (CtorInfo _ _ _ _ _ _ _ s _ _ _) = s
+
+ctorFields : CtorInfo -> List Type
+ctorFields (CtorInfo _ _ _ _ _ _ _ _ fs _ _) = fs
+
+ctorFieldNames : CtorInfo -> Option (List String)
+ctorFieldNames (CtorInfo _ _ _ _ _ _ _ _ _ _ ns) = ns
+
+-- The position of a named field, or -1.
+ctorFieldIndex : CtorInfo -> String -> Int
+ctorFieldIndex ci name = match ctorFieldNames ci with
+  None -> -1
+  Some ns -> indexOfName name ns 0
+
+private indexOfName : String -> List String -> Int -> Int
+indexOfName _ [] _ = -1
+indexOfName name (n :: ns) i
+  | n == name = i
+  | otherwise = indexOfName name ns (i + 1)
 
 ctorTypePos : CtorInfo -> Pos
-ctorTypePos (CtorInfo _ _ _ _ _ _ _ _ _ p) = p
+ctorTypePos (CtorInfo _ _ _ _ _ _ _ _ _ p _) = p
 
 -- name, params, body, module, defining scope, expanding
 type AliasInfo = AliasInfo String (List String) TypeExpr String Scope (Ref Bool)
@@ -620,6 +644,7 @@ type Pattern
   | PAs Pos String (Ref String) Pattern
   | PUnit Pos
   | PAnnot Pos Pattern TypeExpr
+  | PRec Pos String String (List (String, Pattern)) (Ref (Option CtorInfo))
 
 patPos : Pattern -> Pos
 patPos p = match p with
@@ -632,6 +657,14 @@ patPos p = match p with
   PAs pos _ _ _ -> pos
   PUnit pos -> pos
   PAnnot pos _ _ -> pos
+  PRec pos _ _ _ _ -> pos
+
+-- The positional sub-patterns of a valid record pattern; missing fields
+-- are wildcards.
+recordPositional : CtorInfo -> List (String, Pattern) -> Pos -> List Pattern
+recordPositional ci fields p = mapList (\i -> match find (\(f, _) -> ctorFieldIndex ci f == i) fields with
+  Some (_, sub) -> sub
+  None -> PWild p) (range 0 (ctorArity ci))
 
 -- ================================================================ syntax: expressions
 
@@ -668,6 +701,13 @@ type Expr
   | ESection Pos Expr (Option Expr) (Option Expr)
   | EInterp Pos (List Expr)
   | EAnnot Pos Expr SchemeE
+  | EField Pos Expr String (Ref String)          -- record type name, set by the checker
+  | EFieldFn Pos String                          -- `.name` (removed by fixity resolution)
+  | ERecord Pos String String (List FieldInit) (Ref (Option CtorInfo))
+  | EUpdate Pos Expr (List FieldInit) (Ref String)
+
+-- `name = value` in a record construction or update.
+type FieldInit = FieldInit Pos String Expr
 
 exprPos : Expr -> Pos
 exprPos e = match e with
@@ -689,6 +729,10 @@ exprPos e = match e with
   ESection p _ _ _ -> p
   EInterp p _ -> p
   EAnnot p _ _ -> p
+  EField p _ _ _ -> p
+  EFieldFn p _ -> p
+  ERecord p _ _ _ _ -> p
+  EUpdate p _ _ _ -> p
 
 -- A fresh variable reference node.
 mkVar : Pos -> String -> String -> <IO> Expr
@@ -808,7 +852,8 @@ sigName (Sig _ n _ _) = n
 sigSchemeE : Sig -> SchemeE
 sigSchemeE (Sig _ _ s _) = s
 
-type CtorDecl = CtorDecl Pos String (List TypeExpr)
+-- position, name, field types, field names (record constructors)
+type CtorDecl = CtorDecl Pos String (List TypeExpr) (Option (List String))
 
 type Decl
   = DSig Sig

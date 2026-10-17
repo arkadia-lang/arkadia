@@ -152,6 +152,7 @@ func (c *Checker) flushRoot() {
 	for c.wanted.parent != nil {
 		c.popWanted()
 	}
+	c.settleFields(-1)
 	ws := c.wanted.list
 	c.wanted.list = nil
 	for _, w := range c.solve(ws) {
@@ -198,6 +199,9 @@ func (c *Checker) freshDictName(cls *ClassInfo) string {
 // generalize closes the inferred types of a binding group. It must be
 // called after leaving the group's level and popping its wanted scope.
 func (c *Checker) generalize(monos []Type, ws []*wanted, canGen bool) ([]*Scheme, []string) {
+	if canGen {
+		c.settleFields(c.level)
+	}
 	if !canGen {
 		for _, t := range monos {
 			lowerLevels(t, c.level)
@@ -387,6 +391,7 @@ func (c *Checker) checkAgainst(b *syntax.Bind, sc *Scheme, fixed []Type, skipFir
 		c.checkClauses(b, t, eff)
 	}
 	ws := c.popWanted()
+	c.settleFields(c.level - 1)
 	for _, w := range c.solve(ws) {
 		acc := map[*Meta]bool{}
 		var ms []*Meta
@@ -537,6 +542,17 @@ func collectRefs(e syntax.Expr, acc map[string]bool) {
 			}
 		case *syntax.EAnnot:
 			expr(e.E)
+		case *syntax.EField:
+			expr(e.E)
+		case *syntax.ERecord:
+			for _, f := range e.Fields {
+				expr(f.Value)
+			}
+		case *syntax.EUpdate:
+			expr(e.E)
+			for _, f := range e.Fields {
+				expr(f.Value)
+			}
 		}
 	}
 	expr(e)
@@ -762,6 +778,7 @@ func (c *Checker) checkTests() {
 		c.checkExpr(d.Body, c.tUnit(), row, "this test")
 		ws := c.popWanted()
 		c.level--
+		c.settleFields(c.level)
 		for _, w := range c.solve(ws) {
 			c.defaultAmbiguous(w)
 		}
