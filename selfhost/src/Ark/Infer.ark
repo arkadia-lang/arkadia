@@ -298,6 +298,7 @@ inferExpr c e eff = match e with
     Some ci ->
       writeRef con (Some ci)
       let (t, _) = instantiate c (ctorScheme ci) p
+      record c p n (Some t) None (ctorTypePos ci) "constructor"
       t
   EApp _ f args masks ->
     let ft = inferExpr c f eff
@@ -357,38 +358,53 @@ litType c l = match l with
   LChar _ -> tChar c
 
 inferVar : Checker -> Expr -> <IO> Type
-inferVar c e = match e with
+inferVar c e =
+  let (t, def, kind) = inferVarInner c e
+  let display = match e with
+    EVar _ q n _ _ -> match startsWith "#" q || q == "" with
+      True -> n
+      False -> q ++ "." ++ n
+    _ -> ""
+  record c (exprPos e) display (Some t) None def kind
+  t
+
+private inferVarInner : Checker -> Expr -> <IO> (Type, Pos, String)
+inferVarInner c e = match e with
   EVar p qual name ref dicts ->
     let local = match qual with
       "" -> lookupLocal c name
       _ -> None
     match local with
-      Some (LocalVar _ id sc mono grp) ->
+      Some (LocalVar lpos id sc mono grp) ->
         writeRef ref (Some (VarRef True id grp None None None))
         match sc with
-          None -> openFun c mono
+          None -> (openFun c mono, lpos, "local")
           Some s ->
             let (t, refs) = instantiate c s p
             writeRef dicts refs
-            openFun c t
+            (openFun c t, lpos, "local")
       None -> match lookupValue c p qual name with
-        None -> freshType c
+        None -> (freshType c, noPos, "")
         Some v ->
+          let kind = match (valueMethod v, valueOp v) with
+            (Some _, _) -> "method"
+            (_, Some _) -> "operation"
+            _ -> "value"
           let grp = readRef (valueGroup v)
           let grpInfo = match grp with
             Some (g, _) -> Some g
             None -> None
           writeRef ref (Some (VarRef False (valueSym v) grpInfo (valueMethod v) (valueOp v) None))
           match grp with
-            Some (_, m) -> openFun c m
+            Some (_, m) -> (openFun c m, valuePos v, kind)
             None -> match readRef (valueSchemeRef v) with
               None ->
                 errorf c p "internal error: '${name}' used before its type is known"
-                freshType c
+                (freshType c, valuePos v, kind)
               Some s ->
                 let (t, refs) = instantiate c s p
                 writeRef dicts refs
-                openFun c t
+                (openFun c t, valuePos v, kind)
   _ -> error "inferVar: not a variable"
 
 -- Check the arguments of an application. masks is None for operators.
@@ -667,6 +683,7 @@ bindPatVar c p name t seen =
   modifyRef seen (\s -> name :: s)
   let id = freshLocalID c name
   pushLocal c name (LocalVar p id None t None)
+  record c p name (Some t) None p "local"
   id
 
 checkPat : Checker -> Pattern -> Type -> Ref (List String) -> <IO> Unit
@@ -841,6 +858,7 @@ inferLocalBind c b eff = match bindPat b with
         match recursive with
           True -> ()
           False -> pushLocal c (bindName b) lv
+        record c (bindPos b) (bindName b) None (Some sc) (bindPos b) "local"
         writeRef (bindInfo b) (Some (BindInfo names None (Some sc)))
       None ->
         let gs = newRef []
@@ -861,5 +879,9 @@ inferLocalBind c b eff = match bindPat b with
         writeRef (bindInfo b) (Some (BindInfo names (Some gs) (Some sc)))
         let Scheme skinds _ _ st = sc
         match isEmpty skinds && isEmpty names with
-          True -> pushLocal c (bindName b) (LocalVar (bindPos b) id None st None)
-          False -> pushLocal c (bindName b) (LocalVar (bindPos b) id (Some sc) TRowEmpty None)
+          True ->
+            pushLocal c (bindName b) (LocalVar (bindPos b) id None st None)
+            record c (bindPos b) (bindName b) (Some st) None (bindPos b) "local"
+          False ->
+            pushLocal c (bindName b) (LocalVar (bindPos b) id (Some sc) TRowEmpty None)
+            record c (bindPos b) (bindName b) None (Some sc) (bindPos b) "local"

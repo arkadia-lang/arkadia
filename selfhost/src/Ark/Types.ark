@@ -477,6 +477,14 @@ incLevel c = modifyRef (cLevelRef c) (\l -> l + 1)
 decLevel : Checker -> <IO> Unit
 decLevel c = modifyRef (cLevelRef c) (\l -> l - 1)
 
+-- Record identifier information for editor tooling.
+record : Checker -> Pos -> String -> Option Type -> Option Scheme -> Pos -> String -> <IO> Unit
+record c p name t sc def kind =
+  let g = cG c
+  match gCollectInfo g && posLine p != 0 with
+    True -> modifyRef (gInfo g) (\is -> IdentInfo p (stringLength name) name t sc def kind :: is)
+    False -> ()
+
 errorf : Checker -> Pos -> String -> <IO> Unit
 errorf c p msg = modifyRef (cErrs c) (\es -> diagAt p msg :: es)
 

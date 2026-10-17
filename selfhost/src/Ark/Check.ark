@@ -577,6 +577,7 @@ checkTopBindings c funs =
         Some sc ->
           let names = checkAgainst c b sc [] False None
           writeRef (bindInfo b) (Some (BindInfo names None (Some sc)))
+          record c (valuePos vi) (valueName vi) None (Some sc) (valuePos vi) "definition"
         None -> ())
   flushRoot c
 
@@ -607,6 +608,7 @@ inferTopGroup c names byName =
   forEach (zip members scs) (\((vi, _, b), sc) ->
     writeRef (valueGroup vi) None
     writeRef (valueSchemeRef vi) (Some sc)
+    record c (valuePos vi) (valueName vi) None (Some sc) (valuePos vi) "definition"
     writeRef (bindInfo b) (Some (BindInfo dictNames (Some gs) (Some sc))))
 
 checkInstanceBodies : Checker -> List (InstInfo, List Bind) -> <IO> Unit

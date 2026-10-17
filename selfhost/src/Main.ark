@@ -14,6 +14,7 @@ import Ark.Debug
 import Ark.Project
 import Ark.Build
 import Ark.Repl
+import Ark.Lsp
 import Std.IO
 import Std.Map as Map
 
@@ -36,6 +37,7 @@ Commands:
   doc <Module>       show the public interface of a module
   new <name>         create a new project in directory <name>
   repl               start an interactive session
+  lsp                start the language server (stdio)
   version            print the version
 
 Options of build and run:
@@ -63,6 +65,7 @@ cli argv = match argv with
     "doc" -> withRoot (\root -> cmdDoc root rest)
     "new" -> cmdNew rest
     "repl" -> withRoot (\root -> repl root version)
+    "lsp" -> withRoot (\root -> serve (libDir root) version)
     "test" -> withRoot (\root -> cmdTest root rest)
     "debug" -> withRoot (\root -> cmdDebug root rest)
     "version" -> versionCmd ()

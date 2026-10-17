@@ -10,42 +10,62 @@ import Ark.Check
 import Std.Map as Map
 
 -- search paths, standard library directory, parsed modules, modules in
--- dependency order (reversed), modules being visited, sources by file
-type Loader = Loader (List String) String (Ref (Map.Map String Module)) (Ref (List Module)) (Ref (Map.Map String Bool)) (Ref (Map.Map String String))
+-- dependency order (reversed), modules being visited, sources by file,
+-- options (unsaved editor contents by absolute path, collect identifier
+-- information) and the global information of the last check (set even
+-- when checking fails)
+type Loader = Loader (List String) String (Ref (Map.Map String Module)) (Ref (List Module)) (Ref (Map.Map String Bool)) (Ref (Map.Map String String)) LoaderOptions (Ref (Option Global))
+
+type LoaderOptions = LoaderOptions (Map.Map String String) Bool
 
 -- A loaded and checked program: modules in dependency order (Prelude
 -- first), global information, entry module name.
 type Program = Program (List Module) Global String
 
 newLoader : List String -> String -> <IO> Loader
-newLoader paths libDir = Loader paths libDir (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty)
+newLoader paths libDir = newLoaderWith paths libDir (LoaderOptions Map.empty False)
+
+newLoaderWith : List String -> String -> LoaderOptions -> <IO> Loader
+newLoaderWith paths libDir opts = Loader paths libDir (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty) opts (newRef None)
 
 loaderSources : Loader -> <IO> Map.Map String String
-loaderSources (Loader _ _ _ _ _ srcs) = readRef srcs
+loaderSources (Loader _ _ _ _ _ srcs _ _) = readRef srcs
+
+-- The global information of the last check.
+loaderGlobal : Loader -> <IO> Option Global
+loaderGlobal (Loader _ _ _ _ _ _ _ g) = readRef g
+
+-- Read a file, preferring unsaved editor contents.
+readSource : Loader -> String -> <IO> Result String String
+readSource (Loader _ _ _ _ _ _ (LoaderOptions overlay _) _) path = match Map.isEmpty overlay with
+  True -> readFile path
+  False -> match Map.lookup (pathAbs path) overlay with
+    Some src -> Ok src
+    None -> readFile path
 
 modulePath : String -> String
 modulePath name = joinWith "/" (split "." name) ++ ".ark"
 
-private readFirst : List String -> String -> <IO> Option (String, String)
-readFirst dirs rel = match dirs with
+private readFirst : Loader -> List String -> String -> <IO> Option (String, String)
+readFirst l dirs rel = match dirs with
   [] -> None
   d :: rest ->
     let p = pathJoin d rel
-    match readFile p with
+    match readSource l p with
       Ok src -> Some (p, src)
-      Err _ -> readFirst rest rel
+      Err _ -> readFirst l rest rel
 
 readModule : Loader -> String -> <IO> Result String (String, String)
-readModule (Loader paths libDir _ _ _ _) name =
+readModule (l@(Loader paths libDir _ _ _ _ _ _)) name =
   let rel = modulePath name
-  match readFirst paths rel with
+  match readFirst l paths rel with
     Some r -> Ok r
     None -> match readFile (pathJoin libDir rel) with
       Ok src -> Ok ("<std>/" ++ rel, src)
       Err _ -> Err "module ${name} not found (looked for ${rel})"
 
 parseFile : Loader -> String -> String -> String -> <IO> Result (List Diag) Module
-parseFile (Loader _ _ _ _ _ srcs) file src expectName =
+parseFile (Loader _ _ _ _ _ srcs _ _) file src expectName =
   modifyRef srcs (Map.insert file src)
   match parseModule file src with
     Err errs -> Err errs
@@ -60,7 +80,7 @@ parseFile (Loader _ _ _ _ _ srcs) file src expectName =
 -- Parse a module's imports (recursively) and record it.
 load : Loader -> Module -> <IO> Result (List Diag) Unit
 load l m =
-  let Loader _ _ mods order visiting _ = l
+  let Loader _ _ mods order visiting _ _ _ = l
   let name = moduleName m
   match Map.findWithDefault False name (readRef visiting) with
     True -> Err [diagAt (Pos (moduleFile m) 1 1) "import cycle involving module ${name}"]
@@ -79,7 +99,7 @@ load l m =
 
 private loadDeps : Loader -> Module -> List String -> <IO> Result (List Diag) Unit
 loadDeps l m deps =
-  let Loader _ _ mods _ visiting _ = l
+  let Loader _ _ mods _ visiting _ _ _ = l
   match deps with
     [] -> Ok ()
     d :: rest -> match Map.member d (readRef mods) with
@@ -100,7 +120,7 @@ loadDeps l m deps =
 
 -- Load an entry module from a file plus everything it imports.
 loadFile : Loader -> String -> <IO> Result (List Diag) Program
-loadFile l path = match readFile path with
+loadFile l path = match readSource l path with
   Err e -> Err [diagAt noPos e]
   Ok src -> match parseFile l path src "" with
     Err e -> Err e
@@ -117,7 +137,7 @@ loadModules : Loader -> List String -> <IO> Result (List Diag) Program
 loadModules l names = match names with
   [] -> checkProgram l ""
   n :: rest ->
-    let Loader _ _ mods _ _ _ = l
+    let Loader _ _ mods _ _ _ _ _ = l
     match Map.member n (readRef mods) with
       True -> loadModules l rest
       False -> match readModule l n with
@@ -129,7 +149,7 @@ loadModules l names = match names with
             Ok _ -> loadModules l rest
 
 checkProgram : Loader -> String -> <IO> Result (List Diag) Program
-checkProgram (Loader _ _ _ orderRef _ _) main =
+checkProgram (Loader _ _ _ orderRef _ _ (LoaderOptions _ collect) lastGlobal) main =
   let order = reverse (readRef orderRef)
   let fx = newRef defaultFixities
   let errs1 = concat (mapList (collectFixities fx) order)
@@ -139,7 +159,8 @@ checkProgram (Loader _ _ _ orderRef _ _) main =
     _ :: _ -> Err errs
     [] ->
       let mods = map fst resolved
-      let g = newGlobal ()
+      let g = newGlobal collect
+      writeRef lastGlobal (Some g)
       match checkAll g mods with
         [] -> Ok (Program mods g main)
         errs -> Err errs

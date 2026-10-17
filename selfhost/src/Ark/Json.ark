@@ -1,0 +1,172 @@
+-- JSON values: parsing and encoding (encoded like Go's encoding/json).
+module Ark.Json
+
+import Ark.Util
+
+-- Numbers keep their source text.
+type Json
+  = JNull
+  | JBool Bool
+  | JNum String
+  | JStr String
+  | JArr (List Json)
+  | JObj (List (String, Json))
+
+-- A member of an object (JNull when missing).
+field : String -> Json -> Json
+field name j = match j with
+  JObj members -> withDefault JNull (lookup name members)
+  _ -> JNull
+
+-- Follow a path of member names.
+jpath : List String -> Json -> Json
+jpath names j = foldl (\acc n -> field n acc) j names
+
+asString : Json -> String
+asString j = match j with
+  JStr s -> s
+  _ -> ""
+
+asInt : Json -> Int
+asInt j = match j with
+  JNum s -> withDefault 0 (parseInt s)
+  _ -> 0
+
+asList : Json -> List Json
+asList j = match j with
+  JArr xs -> xs
+  _ -> []
+
+jint : Int -> Json
+jint n = JNum (show n)
+
+-- ================================================================ encoding
+
+encode : Json -> String
+encode j = concatStrings (reverse (encodeAcc j []))
+
+private encodeAcc : Json -> List String -> List String
+encodeAcc j acc = match j with
+  JNull -> "null" :: acc
+  JBool True -> "true" :: acc
+  JBool False -> "false" :: acc
+  JNum s -> s :: acc
+  JStr s -> quote s :: acc
+  JArr xs -> "]" :: sepBy (\x a -> encodeAcc x a) xs ("[" :: acc)
+  JObj ms -> "}" :: sepBy (\(k, v) a -> encodeAcc v (":" :: quote k :: a)) ms ("{" :: acc)
+
+private sepBy : (a -> List String -> List String) -> List a -> List String -> List String
+sepBy f xs acc = match xs with
+  [] -> acc
+  [x] -> f x acc
+  x :: rest -> sepBy f rest ("," :: f x acc)
+
+-- A JSON string literal (HTML-safe, like Go).
+quote : String -> String
+quote s = "\"" ++ concatStrings (mapList escapeChar (chars s)) ++ "\""
+
+private escapeChar : Char -> String
+escapeChar c = match c with
+  '"' -> "\\\""
+  '\\' -> "\\\\"
+  '\n' -> "\\n"
+  '\r' -> "\\r"
+  '\t' -> "\\t"
+  '<' -> "\\u003c"
+  '>' -> "\\u003e"
+  '&' -> "\\u0026"
+  _ | charCode c < 32 -> "\\u00" ++ hex2 (charCode c)
+    | charCode c == 8232 -> "\\u2028"
+    | charCode c == 8233 -> "\\u2029"
+    | otherwise -> charToString c
+
+private hex2 : Int -> String
+hex2 n =
+  let digits = chars "0123456789abcdef"
+  charToString (at (n / 16) digits) ++ charToString (at (n % 16) digits)
+
+-- ================================================================ parsing
+
+parse : String -> Option Json
+parse s = match value (skipWs (chars s)) with
+  Some (j, rest) -> match skipWs rest with
+    [] -> Some j
+    _ -> None
+  None -> None
+
+private skipWs : List Char -> List Char
+skipWs cs = match cs with
+  c :: rest | c == ' ' || c == '\n' || c == '\r' || c == '\t' -> skipWs rest
+  _ -> cs
+
+private value : List Char -> Option (Json, List Char)
+value cs = match cs with
+  'n' :: 'u' :: 'l' :: 'l' :: rest -> Some (JNull, rest)
+  't' :: 'r' :: 'u' :: 'e' :: rest -> Some (JBool True, rest)
+  'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest -> Some (JBool False, rest)
+  '"' :: rest -> match str rest [] with
+    Some (s, more) -> Some (JStr s, more)
+    None -> None
+  '[' :: rest -> arr (skipWs rest) []
+  '{' :: rest -> obj (skipWs rest) []
+  c :: _ | c == '-' || isDigit c ->
+    let num = takeWhile (\x -> isDigit x || x == '-' || x == '+' || x == '.' || x == 'e' || x == 'E') cs
+    Some (JNum (fromChars num), drop (length num) cs)
+  _ -> None
+
+private str : List Char -> List Char -> Option (String, List Char)
+str cs acc = match cs with
+  [] -> None
+  '"' :: rest -> Some (fromChars (reverse acc), rest)
+  '\\' :: 'u' :: a :: b :: c :: d :: rest ->
+    let code = hexVal [a, b, c, d]
+    -- surrogate pairs
+    match (code >= 55296 && code < 56320, rest) with
+      (True, '\\' :: 'u' :: e :: f :: g :: h :: more) ->
+        let low = hexVal [e, f, g, h]
+        str more (fromCharCode (65536 + (code - 55296) * 1024 + (low - 56320)) :: acc)
+      _ -> str rest (fromCharCode code :: acc)
+  '\\' :: e :: rest ->
+    let ch = match e with
+      'n' -> '\n'
+      't' -> '\t'
+      'r' -> '\r'
+      'b' -> fromCharCode 8
+      'f' -> fromCharCode 12
+      _ -> e
+    str rest (ch :: acc)
+  c :: rest -> str rest (c :: acc)
+
+private hexVal : List Char -> Int
+hexVal cs = foldl (\acc c ->
+  let v = match c with
+    _ | c >= '0' && c <= '9' -> charCode c - 48
+      | c >= 'a' && c <= 'f' -> charCode c - 87
+      | c >= 'A' && c <= 'F' -> charCode c - 55
+      | otherwise -> 0
+  acc * 16 + v) 0 cs
+
+private arr : List Char -> List Json -> Option (Json, List Char)
+arr cs acc = match cs with
+  ']' :: rest -> Some (JArr (reverse acc), rest)
+  _ -> match value cs with
+    None -> None
+    Some (v, rest) -> match skipWs rest with
+      ',' :: more -> arr (skipWs more) (v :: acc)
+      ']' :: more -> Some (JArr (reverse (v :: acc)), more)
+      _ -> None
+
+private obj : List Char -> List (String, Json) -> Option (Json, List Char)
+obj cs acc = match cs with
+  '}' :: rest -> Some (JObj (reverse acc), rest)
+  '"' :: rest -> match str rest [] with
+    None -> None
+    Some (k, more) -> match skipWs more with
+      ':' :: more2 -> match value (skipWs more2) with
+        None -> None
+        Some (v, rest2) -> match skipWs rest2 with
+          ',' :: more3 -> obj (skipWs more3) ((k, v) :: acc)
+          '}' :: more3 -> Some (JObj (reverse ((k, v) :: acc)), more3)
+          _ -> None
+      _ -> None
+  _ -> None

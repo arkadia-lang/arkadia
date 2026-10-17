@@ -4,7 +4,10 @@
 package main
 
 import (
+	"bufio"
 	"go/format"
+	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,4 +152,51 @@ func NativeLookPath(name rt.Value) rt.Value {
 func NativeStderrIsTerminal(_ rt.Value) rt.Value {
 	fi, err := os.Stderr.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// Standard input for the language server, read independently of the
+// runtime's line reader so that messages can be read by byte count.
+var nativeStdin = bufio.NewReader(os.Stdin)
+
+// NativeStdinLine reads a line (without the line terminator).
+func NativeStdinLine(_ rt.Value) rt.Value {
+	line, err := nativeStdin.ReadString('\n')
+	if err != nil && line == "" {
+		return rt.None
+	}
+	return rt.Some(strings.TrimRight(line, "\r\n"))
+}
+
+// NativeStdinBytes reads exactly n bytes.
+func NativeStdinBytes(n rt.Value) rt.Value {
+	buf := make([]byte, n.(int64))
+	if _, err := io.ReadFull(nativeStdin, buf); err != nil {
+		return rt.None
+	}
+	return rt.Some(string(buf))
+}
+
+// NativeWriteFlush writes to standard output and flushes it.
+func NativeWriteFlush(s rt.Value) rt.Value {
+	rt.Print(s)
+	rt.Flush()
+	return rt.Unit
+}
+
+// NativeByteLength is the length of a string in bytes (UTF-8).
+func NativeByteLength(s rt.Value) rt.Value { return int64(len(s.(string))) }
+
+// NativeURIToPath converts a file:// URI to a path.
+func NativeURIToPath(uri rt.Value) rt.Value {
+	u, err := url.Parse(uri.(string))
+	if err != nil || u.Scheme != "file" {
+		return uri
+	}
+	return filepath.Clean(u.Path)
+}
+
+// NativePathToURI converts a path to a file:// URI.
+func NativePathToURI(p rt.Value) rt.Value {
+	abs, _ := filepath.Abs(p.(string))
+	return (&url.URL{Scheme: "file", Path: abs}).String()
 }

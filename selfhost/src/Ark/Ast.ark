@@ -516,6 +516,12 @@ scopeQuals (Scope _ _ _ q) = q
 -- name, symbol, module
 type TestInfo = TestInfo String String String
 
+-- An identifier occurrence for editor tooling: position, length, name,
+-- monomorphic type at the occurrence, scheme (for definitions with a
+-- polymorphic type), definition position, kind ("local", "value",
+-- "constructor", "method", "operation", "definition").
+type IdentInfo = IdentInfo Pos Int String (Option Type) (Option Scheme) Pos String
+
 -- Information shared by all modules of a program.
 type Global = Global
   (Ref (Map.Map String Exports))
@@ -527,38 +533,47 @@ type Global = Global
   (Ref (Map.Map String ValueInfo))
   (Ref (List TestInfo))
   (Ref Int)
+  Bool                                  -- collect identifier information
+  (Ref (List IdentInfo))                -- identifier information (reversed)
 
-newGlobal : Unit -> <IO> Global
-newGlobal () = Global (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef 0)
+newGlobal : Bool -> <IO> Global
+newGlobal collect = Global (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef 0) collect (newRef [])
 
 gModules : Global -> Ref (Map.Map String Exports)
-gModules (Global m _ _ _ _ _ _ _ _) = m
+gModules (Global m _ _ _ _ _ _ _ _ _ _) = m
 
 gInstances : Global -> Ref (Map.Map String (Map.Map String InstInfo))
-gInstances (Global _ i _ _ _ _ _ _ _) = i
+gInstances (Global _ i _ _ _ _ _ _ _ _ _) = i
 
 -- instances in reverse order of declaration
 gInstList : Global -> Ref (List InstInfo)
-gInstList (Global _ _ l _ _ _ _ _ _) = l
+gInstList (Global _ _ l _ _ _ _ _ _ _ _) = l
 
 gTypes : Global -> Ref (Map.Map String TypeInfo)
-gTypes (Global _ _ _ t _ _ _ _ _) = t
+gTypes (Global _ _ _ t _ _ _ _ _ _ _) = t
 
 gClasses : Global -> Ref (Map.Map String ClassInfo)
-gClasses (Global _ _ _ _ c _ _ _ _) = c
+gClasses (Global _ _ _ _ c _ _ _ _ _ _) = c
 
 gEffects : Global -> Ref (Map.Map String EffectInfo)
-gEffects (Global _ _ _ _ _ e _ _ _) = e
+gEffects (Global _ _ _ _ _ e _ _ _ _ _) = e
 
 gValues : Global -> Ref (Map.Map String ValueInfo)
-gValues (Global _ _ _ _ _ _ v _ _) = v
+gValues (Global _ _ _ _ _ _ v _ _ _ _) = v
 
 -- tests in reverse order of declaration
 gTests : Global -> Ref (List TestInfo)
-gTests (Global _ _ _ _ _ _ _ t _) = t
+gTests (Global _ _ _ _ _ _ _ t _ _ _) = t
 
 gNextId : Global -> Ref Int
-gNextId (Global _ _ _ _ _ _ _ _ n) = n
+gNextId (Global _ _ _ _ _ _ _ _ n _ _) = n
+
+gCollectInfo : Global -> Bool
+gCollectInfo (Global _ _ _ _ _ _ _ _ _ c _) = c
+
+-- identifier information in reverse order of recording
+gInfo : Global -> Ref (List IdentInfo)
+gInfo (Global _ _ _ _ _ _ _ _ _ _ i) = i
 
 freshId : Global -> <IO> Int
 freshId g = nextId (gNextId g)

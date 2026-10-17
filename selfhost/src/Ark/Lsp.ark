@@ -1,0 +1,190 @@
+-- A Language Server Protocol server: diagnostics, hover (types) and go to
+-- definition.
+module Ark.Lsp
+
+import Ark.Util
+import Ark.Ast
+import Ark.Types
+import Ark.Loader
+import Ark.Project
+import Ark.Json
+import Std.Map as Map
+
+foreign stdinLine : Unit -> <IO> Option String = "NativeStdinLine"
+foreign stdinBytes : Int -> <IO> Option String = "NativeStdinBytes"
+foreign writeFlush : String -> <IO> Unit = "NativeWriteFlush"
+foreign byteLength : String -> Int = "NativeByteLength"
+foreign uriToPath : String -> String = "NativeURIToPath"
+foreign pathToURI : String -> <IO> String = "NativePathToURI"
+
+-- standard library directory, version, open documents (absolute path ->
+-- text), identifier information by file, files with published diagnostics
+type Server = Server String String (Ref (Map.Map String String)) (Ref (Map.Map String (List IdentInfo))) (Ref (Map.Map String Bool))
+
+-- Serve on standard input and output until exit.
+serve : String -> String -> <IO> Int
+serve libDir ver = serveLoop (Server libDir ver (newRef Map.empty) (newRef Map.empty) (newRef Map.empty))
+
+private serveLoop : Server -> <IO> Int
+serveLoop s = match readMessage () with
+  None -> 0
+  Some m -> match asString (field "method" m) with
+    "exit" -> 0
+    _ ->
+      handleMessage s m
+      serveLoop s
+
+-- Read a message: headers, an empty line and a body of Content-Length
+-- bytes.
+readMessage : Unit -> <IO> Option Json
+readMessage () =
+  let headers len = match stdinLine () with
+    None -> None
+    Some line -> match trim line with
+      "" -> Some len
+      l -> match startsWith "Content-Length:" l with
+        True -> headers (withDefault 0 (parseInt (trim (substring 15 (stringLength l) l))))
+        False -> headers len
+  match headers 0 with
+    None -> None
+    Some n -> match stdinBytes n with
+      None -> None
+      Some body -> parse body
+
+send : Json -> <IO> Unit
+send m =
+  let data = encode m
+  writeFlush "Content-Length: ${byteLength data}\r\n\r\n${data}"
+
+reply : Json -> Json -> <IO> Unit
+reply id result = send (JObj [("id", id), ("jsonrpc", JStr "2.0"), ("result", result)])
+
+notify : String -> Json -> <IO> Unit
+notify method params = send (JObj [("jsonrpc", JStr "2.0"), ("method", JStr method), ("params", params)])
+
+position : Int -> Int -> Json
+position line ch = JObj [("line", jint line), ("character", jint ch)]
+
+range : Json -> Json -> Json
+range start end = JObj [("start", start), ("end", end)]
+
+docPath : Json -> String
+docPath m = uriToPath (asString (jpath ["params", "textDocument", "uri"] m))
+
+handleMessage : Server -> Json -> <IO> Unit
+handleMessage (s@(Server _ ver docs _ _)) m =
+  let id = field "id" m
+  match asString (field "method" m) with
+    "initialize" -> reply id (JObj
+      [ ("capabilities", JObj
+          [ ("definitionProvider", JBool True)
+          , ("hoverProvider", JBool True)
+          , ("textDocumentSync", JObj [("change", jint 1), ("openClose", JBool True), ("save", JBool True)])
+          ])
+      , ("serverInfo", JObj [("name", JStr "ark-lsp"), ("version", JStr ver)])
+      ])
+    "shutdown" -> reply id JNull
+    "textDocument/didOpen" ->
+      let p = docPath m
+      modifyRef docs (Map.insert p (asString (jpath ["params", "textDocument", "text"] m)))
+      check s p
+    "textDocument/didChange" ->
+      let p = docPath m
+      match reverse (asList (jpath ["params", "contentChanges"] m)) with
+        last :: _ -> modifyRef docs (Map.insert p (asString (field "text" last)))
+        [] -> ()
+      check s p
+    "textDocument/didSave" -> check s (docPath m)
+    "textDocument/didClose" -> modifyRef docs (Map.delete (docPath m))
+    "textDocument/hover" -> match find s m with
+      Some (ident@(IdentInfo _ _ _ _ _ _ _)) -> reply id (JObj
+        [ ("contents", JObj [("kind", JStr "markdown"), ("value", JStr ("```arkadia\n" ++ describe ident ++ "\n```"))])
+        , ("range", identRange ident)
+        ])
+      None -> reply id JNull
+    "textDocument/definition" -> match find s m with
+      Some (IdentInfo _ _ _ _ _ (Pos dfile dline dcol) _) | dline > 0 && not (startsWith "<std>" dfile) ->
+        let p = position (dline - 1) (dcol - 1)
+        reply id (JObj [("uri", JStr (pathToURI dfile)), ("range", range p p)])
+      _ -> reply id JNull
+    _ -> match id with
+      JNull -> ()
+      _ -> send (JObj [("error", JObj [("code", jint (-32601)), ("message", JStr "method not found")]), ("id", id), ("jsonrpc", JStr "2.0")])
+
+-- The type information of an identifier.
+describe : IdentInfo -> <IO> String
+describe (IdentInfo _ _ name t sc _ _) = match (sc, t) with
+  (Some s, _) -> name ++ " : " ++ schemeString s
+  (None, Some ty) -> name ++ " : " ++ typeString (zonk ty)
+  _ -> name
+
+identRange : IdentInfo -> Json
+identRange (IdentInfo (Pos _ line col) len _ _ _ _ _) =
+  range (position (line - 1) (col - 1)) (position (line - 1) (col - 1 + len))
+
+-- The innermost identifier at the requested position.
+find : Server -> Json -> <IO> Option IdentInfo
+find (Server _ _ _ info _) m =
+  let p = docPath m
+  let line = asInt (jpath ["params", "position", "line"] m)
+  let ch = asInt (jpath ["params", "position", "character"] m)
+  foldl (\best (ident@(IdentInfo (Pos _ l c) len _ _ _ _ _)) ->
+    let start = c - 1
+    match l - 1 == line && ch >= start && ch <= start + len with
+      False -> best
+      True -> match best with
+        Some (IdentInfo _ blen _ _ _ _ _) | blen <= len -> best
+        _ -> Some ident) None (Map.findWithDefault [] p (readRef info))
+
+-- Type check the program containing path and publish diagnostics.
+check : Server -> String -> <IO> Unit
+check (Server libDir _ docs info lastErr) p =
+  let projectPaths = match findManifest (pathDir p) with
+    Some mp -> match resolveProject mp with
+      Ok (Project _ srcs _) -> srcs
+      Err _ -> []
+    None -> []
+  let l = newLoaderWith (pathDir p :: projectPaths) libDir (LoaderOptions (readRef docs) True)
+  let errs = match loadFile l p with
+    Ok _ -> []
+    Err es -> es
+  let diags = foldl (\acc (Diag (Pos file line col) msg notes) ->
+    let f = pathAbs (match file with
+      "" -> p
+      _ -> file)
+    let ln = max (line - 1) 0
+    let cl = max (col - 1) 0
+    let d = JObj
+      [ ("range", range (position ln cl) (position ln (cl + 1)))
+      , ("severity", jint 1)
+      , ("source", JStr "arkadia")
+      , ("message", JStr (msg ++ concatStrings (mapList (\n -> "\n" ++ n) notes)))
+      ]
+    Map.insert f (snoc (Map.findWithDefault [] f acc) d) acc) Map.empty errs
+  match loaderGlobal l with
+    Some g ->
+      let byFile = foldl (\acc (ident@(IdentInfo (Pos file _ _) _ _ _ _ _ _)) ->
+        let f = pathAbs file
+        Map.insert f (ident :: Map.findWithDefault [] f acc) acc) Map.empty (readRef (gInfo g))
+      forEach (Map.toList byFile) (\(f, ids) ->
+        modifyRef info (Map.insert f (sortBy (\(IdentInfo (Pos _ a _) _ _ _ _ _ _) (IdentInfo (Pos _ b _) _ _ _ _ _ _) -> compare a b) ids)))
+    None -> ()
+  -- clear diagnostics of files that are now clean
+  forEach (Map.keys (readRef lastErr)) (\f -> match Map.member f diags with
+    True -> ()
+    False ->
+      publish f []
+      modifyRef lastErr (Map.delete f))
+  match Map.member p diags with
+    True -> ()
+    False -> publish p []
+  forEach (Map.toList diags) (\(f, ds) -> match startsWith "<std>" f with
+    True -> ()
+    False ->
+      modifyRef lastErr (Map.insert f True)
+      publish f ds)
+
+private publish : String -> List Json -> <IO> Unit
+publish f ds =
+  let uri = pathToURI f
+  notify "textDocument/publishDiagnostics" (JObj [("diagnostics", JArr ds), ("uri", JStr uri)])
