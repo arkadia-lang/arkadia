@@ -1,0 +1,137 @@
+-- Unit tests for Std.Task: structured tasks, cancellation and timeouts.
+module TaskTests
+
+import Std.Task
+import Std.Ref
+import Std.State
+import Std.Gen
+import Std.Time (sleep, now)
+
+fib : Int -> Int
+fib n
+  | n < 2 = n
+  | otherwise = fib (n - 1) + fib (n - 2)
+
+-- A pure loop that never ends: only cancellation stops it.
+spin : Int -> Int
+spin n = spin (n + 1)
+
+-- Non-tail recursion that never ends.
+deep : Int -> Int
+deep n = 1 + deep (n + 1)
+
+test "spawn and await" =
+  let r = runAsync (\_ ->
+    let a = spawn (\_ -> fib 20)
+    let b = spawn (\_ -> fib 21)
+    await a + await b)
+  assertEq r 17711
+
+test "parallel combinators" =
+  assertEq (parallel [\_ -> 1, \_ -> 2, \_ -> 3]) [1, 2, 3]
+  assertEq (parMap fib [10, 11, 12]) [55, 89, 144]
+  assertEq (both (\_ -> "a") (\_ -> fib 15)) ("a", 610)
+  assertEq (race [\_ -> spin 0, \_ -> 7]) 7
+  assert (numProcessors () >= 1) "at least one processor"
+
+test "tasks run concurrently" =
+  let start = now ()
+  let _ = parallel (mapList (\_ _ -> sleep 0.2) [1 .. 8])
+  assert (now () - start < 1.0) "eight sleeps of 0.2s overlap"
+
+test "tasks start tasks in the same scope" =
+  let sumTree n = match n == 0 with
+    True -> 1
+    False ->
+      let l = spawn (\_ -> sumTree (n - 1))
+      let r = sumTree (n - 1)
+      await l + r
+  assertEq (runAsync (\_ -> sumTree 6)) 64
+
+test "a timeout cancels a pure loop" =
+  assertEq (timeout 0.05 (\_ -> spin 0)) None
+  assertEq (timeout 0.05 (\_ -> deep 0)) None
+  assertEq (timeout 5.0 (\_ -> fib 15)) (Some 610)
+
+test "cancelling a task" =
+  let (o1, o2) = runAsync (\_ ->
+    let t1 = spawn (\_ -> spin 0)
+    let t2 = spawn (\_ -> sleep 100.0)
+    sleep 0.02
+    cancel t1
+    cancel t2
+    (awaitOutcome t1, awaitOutcome t2))
+  assertEq (o1, o2) (Cancelled, Cancelled)
+  let t = runAsync (\_ -> spawn (\_ -> 5))
+  assert (isDone t) "a scope waits for its tasks"
+  assertEq (awaitOutcome t) (Completed 5)
+
+test "cancellation reaches nested tasks" =
+  let o = runAsync (\_ ->
+    let t = spawn (\_ -> runAsync (\_ ->
+      let _ = spawn (\_ -> spin 0)
+      spin 0))
+    sleep 0.02
+    cancel t
+    awaitOutcome t)
+  assertEq o Cancelled
+
+test "finally runs cleanups" =
+  let log = newRef []
+  let o = runAsync (\_ ->
+    let t = spawn (\_ -> finally (\_ -> spin 0) (\_ -> writeRef log ("cancelled" :: readRef log)))
+    sleep 0.02
+    cancel t
+    awaitOutcome t)
+  assertEq o Cancelled
+  assertEq (readRef log) ["cancelled"]
+  assertEq (finally (\_ -> 1) (\_ -> writeRef log [])) 1
+  assertEq (readRef log) []
+  assertEq (timeout 0.05 (\_ -> finally (\_ -> spin 0) (\_ -> writeRef log ["timeout"]))) None
+  assertEq (readRef log) ["timeout"]
+
+test "uncancellable sections finish" =
+  let done = newRef False
+  let o = runAsync (\_ ->
+    let t = spawn (\_ ->
+      uncancellable (\_ ->
+        sleep 0.05
+        writeRef done True)
+      spin 0)
+    sleep 0.01
+    cancel t
+    awaitOutcome t)
+  assertEq o Cancelled
+  assert (readRef done) "the critical section completed"
+
+test "a failing task cancels its scope" =
+  -- the body and the other task are cancelled
+  assertEq (catchError spawnAndFail) (Err "boom")
+  assertEq (catchError (\_ -> runAsync (\_ -> awaitOutcome (spawn (\_ -> error "awaited"))))) (Err "awaited")
+  assertEq (catchError (\_ -> runAsync (\_ -> await (spawn (\_ -> await (spawn (\_ -> error "inner"))))))) (Err "inner")
+  -- a task that catches its errors does not fail
+  let r = runAsync (\_ ->
+    let t = spawn (\_ -> catchError (\_ -> error "caught"))
+    let u = spawn (\_ -> fib 10)
+    (await t, await u))
+  assertEq r (Err "caught", 55)
+
+spawnAndFail : Unit -> <IO> Unit
+spawnAndFail () = runAsync (\_ ->
+  let _ = spawn (\_ -> spin 0)
+  let _ = spawn (\_ -> error "boom")
+  sleep 100.0)
+
+test "effects inside tasks" =
+  let counter () = execState 0 (\_ -> forEach [1 .. 100] (\i -> modify (+ i)))
+  assertEq (parallel [counter, counter]) [5050, 5050]
+  let gen () = takeGen 5 (\_ -> iterateGen (\x -> x * 2) 1)
+  assertEq (parallel [gen, gen, gen]) [[1, 2, 4, 8, 16], [1, 2, 4, 8, 16], [1, 2, 4, 8, 16]]
+
+test "outer handlers inside runAsync and timeout" =
+  let (r, s) = runState 1 (\_ -> runAsync (\_ ->
+    let t = spawn (\_ -> fib 10)
+    put (get () + await t)
+    get ()))
+  assertEq (r, s) (56, 56)
+  assertEq (runState 0 (\_ -> timeout 1.0 (\_ -> put 3))) (Some (), 3)

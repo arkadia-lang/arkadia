@@ -10,6 +10,7 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -26,11 +27,44 @@ func (e *ArkError) Error() string { return e.Msg }
 // ExitSignal requests program termination with a status code.
 type ExitSignal struct{ Code int }
 
-var stdout = bufio.NewWriterSize(os.Stdout, 64*1024)
-var stdin = bufio.NewReader(os.Stdin)
+// output is the buffered standard output, shared by all tasks: each write
+// (a whole line for println) is atomic.
+type output struct {
+	mu sync.Mutex
+	w  *bufio.Writer
+}
+
+func (o *output) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.w.Write(p)
+}
+
+func (o *output) write(s string, newline bool) {
+	o.mu.Lock()
+	o.w.WriteString(s)
+	if newline {
+		o.w.WriteByte('\n')
+	}
+	o.mu.Unlock()
+}
+
+func (o *output) flush() {
+	o.mu.Lock()
+	o.w.Flush()
+	o.mu.Unlock()
+}
+
+var stdout = &output{w: bufio.NewWriterSize(os.Stdout, 64*1024)}
+
+// stdin is the buffered standard input; inMu serializes reads.
+var (
+	stdin = bufio.NewReader(os.Stdin)
+	inMu  sync.Mutex
+)
 
 // Flush flushes buffered standard output.
-func Flush() { stdout.Flush() }
+func Flush() { stdout.flush() }
 
 // InitEv is the evidence of the program initialization (top-level values
 // and dictionaries).
@@ -328,13 +362,12 @@ func ShowArg(s Value) Value {
 // ---------------------------------------------------------------- IO
 
 func Print(s Value) Value {
-	stdout.WriteString(s.(string))
+	stdout.write(s.(string), false)
 	return Unit
 }
 
 func Println(s Value) Value {
-	stdout.WriteString(s.(string))
-	stdout.WriteByte('\n')
+	stdout.write(s.(string), true)
 	return Unit
 }
 
@@ -346,7 +379,9 @@ func Eprintln(s Value) Value {
 
 func ReadLine(_ Value) Value {
 	Flush()
+	inMu.Lock()
 	line, err := stdin.ReadString('\n')
+	inMu.Unlock()
 	if err != nil && line == "" {
 		return None
 	}
@@ -355,7 +390,9 @@ func ReadLine(_ Value) Value {
 
 func ReadAll(_ Value) Value {
 	Flush()
+	inMu.Lock()
 	data, _ := io.ReadAll(stdin)
+	inMu.Unlock()
 	return string(data)
 }
 

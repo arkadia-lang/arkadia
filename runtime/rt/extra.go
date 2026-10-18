@@ -309,11 +309,6 @@ func RefSet(r, v Value) Value { r.(*Ref).V = v; return Unit }
 
 func UnixTime(_ Value) Value   { return float64(time.Now().UnixNano()) / 1e9 }
 func UnixMillis(_ Value) Value { return time.Now().UnixMilli() }
-func Sleep(secs Value) Value {
-	Flush()
-	time.Sleep(time.Duration(secs.(float64) * float64(time.Second)))
-	return Unit
-}
 
 func timeOf(secs Value) time.Time {
 	f := secs.(float64)
