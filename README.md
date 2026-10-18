@@ -86,6 +86,8 @@ ark build          # bin/hello を生成
 
 ## ドキュメント
 
+ガイドと標準ライブラリのリファレンスは **[arkadia-lang.github.io](https://arkadia-lang.github.io/)** でも読めます（サイトのソースは [arkadia-lang.github.io](https://github.com/arkadia-lang/arkadia-lang.github.io) リポジトリ。ガイドなどの内容はこのリポジトリから生成されます）。
+
 - [言語ガイド](docs/guide.md) — 構文・型・型クラス・エフェクト・タスク・テスト・FFI のリファレンス
 - 標準ライブラリ — `ark doc <Module>` で各モジュールの API とドキュメントを表示できます
 - [変更履歴](CHANGELOG.md)
