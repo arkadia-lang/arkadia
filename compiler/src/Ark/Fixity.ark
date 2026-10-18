@@ -3,8 +3,8 @@
 -- string interpolation).
 module Ark.Fixity
 
-import Ark.Util
-import Ark.Ast
+import Ark.Util (..)
+import Ark.Ast (..)
 import Std.Map as Map
 
 -- associativity (0 none, 1 left, 2 right) and precedence
@@ -18,7 +18,7 @@ defaultFixities = Map.fromList [("::", Fixity 2 5), ("&&", Fixity 2 3), ("||", F
 
 -- Add the fixity declarations of a module, reporting conflicts.
 collectFixities : Ref (Map.Map String Fixity) -> Module -> <IO> List Diag
-collectFixities fx m = concat (mapList (collectDecl fx) (moduleDecls m))
+collectFixities fx m = concat (map (collectDecl fx) (moduleDecls m))
 
 private collectDecl : Ref (Map.Map String Fixity) -> Decl -> <IO> List Diag
 collectDecl fx d = match d with
@@ -30,7 +30,7 @@ collectDecl fx d = match d with
         _ -> []
       modifyRef fx (Map.insert op new)
       errs
-    concat (mapList one ops)
+    concat (map one ops)
   _ -> []
 
 fixityOf : Map.Map String Fixity -> String -> Fixity
@@ -44,34 +44,34 @@ type R = R (Map.Map String Fixity) (Ref (List Diag)) (Ref Int)
 resolveFixity : Module -> Map.Map String Fixity -> <IO> (Module, List Diag)
 resolveFixity (Module name file imports decls) fx =
   let r = R fx (newRef []) (newRef 0)
-  let decls2 = mapList (rDecl r) decls
+  let decls2 = map (rDecl r) decls
   let R _ errs _ = r
   (Module name file imports decls2, reverse (readRef errs))
 
 rDecl : R -> Decl -> <IO> Decl
 rDecl r d = match d with
   DFun p b priv -> DFun p (rBind r b) priv
-  DClass p n param supers sigs defs -> DClass p n param supers sigs (mapList (rBind r) defs)
-  DInstance p ctx q c h bs derived -> DInstance p ctx q c h (mapList (rBind r) bs) derived
+  DClass p n param supers sigs defs -> DClass p n param supers sigs (map (rBind r) defs)
+  DInstance p ctx q c h bs derived -> DInstance p ctx q c h (map (rBind r) bs) derived
   DTest p n b id -> DTest p n (rExpr r b) id
   _ -> d
 
 rBind : R -> Bind -> <IO> Bind
 rBind r (Bind p name pat clauses sig id info) =
-  Bind p name pat (mapList (\(Clause cp ps rh) -> Clause cp ps (rRhs r rh)) clauses) sig id info
+  Bind p name pat (map (\(Clause cp ps rh) -> Clause cp ps (rRhs r rh)) clauses) sig id info
 
 rRhs : R -> Rhs -> <IO> Rhs
 rRhs r rh = match rh with
   RBody e -> RBody (rExpr r e)
-  RGuards gs -> RGuards (mapList (\(Guard p c b) ->
+  RGuards gs -> RGuards (map (\(Guard p c b) ->
     let c2 = rExpr r c
     Guard p c2 (rExpr r b)) gs)
   RWhere inner bs ->
     let inner2 = rRhs r inner
-    RWhere inner2 (mapList (rBind r) bs)
+    RWhere inner2 (map (rBind r) bs)
 
 rExprs : R -> List Expr -> <IO> List Expr
-rExprs r es = mapList (rExpr r) es
+rExprs r es = map (rExpr r) es
 
 rExpr : R -> Expr -> <IO> Expr
 rExpr r e = match e with
@@ -80,20 +80,20 @@ rExpr r e = match e with
     EApp p f2 (rExprs r args) masks
   ELam p ps b -> ELam p ps (rExpr r b)
   ELet p bs b ->
-    let bs2 = mapList (rBind r) bs
+    let bs2 = map (rBind r) bs
     ELet p bs2 (rExpr r b)
-  EBlock p stmts -> EBlock p (mapList (\s -> match s with
+  EBlock p stmts -> EBlock p (map (\s -> match s with
     SExpr x -> SExpr (rExpr r x)
     SLet b -> SLet (rBind r b)) stmts)
   EMatch p s arms ->
     let s2 = rExpr r s
-    EMatch p s2 (mapList (\(Arm ap pat rh) -> Arm ap pat (rRhs r rh)) arms)
+    EMatch p s2 (map (\(Arm ap pat rh) -> Arm ap pat (rRhs r rh)) arms)
   EHandle p b ret ops eff ->
     let b2 = rExpr r b
     let ret2 = match ret with
       Some (HandlerClause hp n ps hb op) -> Some (HandlerClause hp n ps (rExpr r hb) op)
       None -> None
-    EHandle p b2 ret2 (mapList (\(HandlerClause hp n ps hb op) -> HandlerClause hp n ps (rExpr r hb) op) ops) eff
+    EHandle p b2 ret2 (map (\(HandlerClause hp n ps hb op) -> HandlerClause hp n ps (rExpr r hb) op) ops) eff
   ETuple p es -> ETuple p (rExprs r es)
   EList p es -> EList p (rExprs r es)
   ENeg p x -> desugarNeg p (rExpr r x)
@@ -111,7 +111,7 @@ rExpr r e = match e with
       _ ->
         let disp = mkVar (exprPos x) "#Prelude" "display"
         mkApp (exprPos x) disp [x]
-    EInterp p (mapList wrap (rExprs r parts))
+    EInterp p (map wrap (rExprs r parts))
   EAnnot p x s -> EAnnot p (rExpr r x) s
   EFieldFn _ _ -> accessor r e
   EField p x name rec -> match accessorRoot x with
@@ -128,7 +128,7 @@ rExpr r e = match e with
   _ -> e
 
 rFields : R -> List FieldInit -> <IO> List FieldInit
-rFields r fs = mapList (\(FieldInit p n v) -> FieldInit p n (rExpr r v)) fs
+rFields r fs = map (\(FieldInit p n v) -> FieldInit p n (rExpr r v)) fs
 
 -- Whether a chain of field accesses starts with an accessor `.f`.
 private accessorRoot : Expr -> Bool

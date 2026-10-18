@@ -3,9 +3,9 @@
 -- long, even pure loops.
 module Main
 
-import Std.Task
+import Std.Task (..)
 import Std.Channel as Chan
-import Std.Atomic
+import Std.Atomic (..)
 import Std.Time (sleep)
 
 -- ------------------------------------------------------------ data parallelism
@@ -41,7 +41,7 @@ pipeline n workers =
   let outputs = Chan.newChannel 64
   runAsync (\_ ->
     fork (\_ -> Chan.sendAll inputs [1 .. n])
-    let pool = mapList (\_ -> spawn (\_ -> Chan.forEachMessage inputs (\x -> Chan.send outputs (x * x)))) (range 0 workers)
+    let pool = map (\_ -> spawn (\_ -> Chan.forEachMessage inputs (\x -> Chan.send outputs (x * x)))) (range 0 workers)
     fork (\_ ->
       forEach pool await
       Chan.closeChannel outputs)
@@ -72,10 +72,10 @@ main () =
     None -> println "the endless search was cancelled after 0.1s"
   let progress = newAtomic 0
   let outcomes = runAsync (\_ ->
-    let tasks = mapList (\_ -> spawn (\_ -> workUntilCancelled progress 0)) [1 .. 4]
+    let tasks = map (\_ -> spawn (\_ -> workUntilCancelled progress 0)) [1 .. 4]
     sleep 0.05
     forEach tasks cancel
-    mapList awaitOutcome tasks)
+    map awaitOutcome tasks)
   println "outcomes: ${show outcomes}"
   println "the workers made progress: ${show (readAtomic progress > 0)}"
   let winner = race [\_ -> collatzZero 27, \_ -> countPrimes 0 1000, \_ ->

@@ -1,10 +1,10 @@
 -- The recursive descent parser. Parse errors abort with the Exn effect.
 module Ark.Parser
 
-import Ark.Util
-import Ark.Ast
-import Ark.Lexer
-import Std.Exn
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Lexer (..)
+import Std.Exn (..)
 import Std.Array as Arr
 import Std.Map as Map
 
@@ -18,7 +18,7 @@ type P = P (Arr.Array Token) Int (Ref Int) (Ref Int) (Ref Bool) (Ref Bool) (Ref 
 newParser : List Token -> <IO> P
 newParser toks =
   let arr = Arr.fromList toks
-  P arr (Arr.length arr) (newRef 0) (newRef 0) (newRef False) (newRef False) (newRef None)
+  P arr (length arr) (newRef 0) (newRef 0) (newRef False) (newRef False) (newRef None)
 
 pIndex : P -> Ref Int
 pIndex (P _ _ i _ _ _ _) = i
@@ -273,7 +273,8 @@ decl p =
         DFun pos b _ -> DFun pos b True
         DSig (Sig pos n s _) -> DSig (Sig pos n s True)
         DType pos n ps cs ds _ -> DType pos n ps cs ds True
-        _ -> fail (tokPos t) "'private' is only allowed on functions, signatures and types"
+        DForeign pos n sc target _ -> DForeign pos n sc target True
+        _ -> fail (tokPos t) "'private' is only allowed on functions, signatures, types and foreign declarations"
     KwType -> typeDecl p
     KwClass -> classDecl p
     KwInstance -> instanceDecl p
@@ -571,7 +572,7 @@ recordFields p types names = match at p RBRACE with
     let group = loop [tokText (expect p LIDENT)]
     expect_ p COLON
     let ty = typeTop p
-    let types2 = types ++ mapList (\_ -> ty) group
+    let types2 = types ++ map (\_ -> ty) group
     let names2 = names ++ group
     match accept p COMMA with
       True -> recordFields p types2 names2
@@ -677,7 +678,7 @@ foreignDecl p =
   let sc = schemeTop p
   expect_ p EQUALS
   let target = tokStr (expect p STRING)
-  DForeign pos name sc target
+  DForeign pos name sc target False
 
 fixityDecl : P -> <Exn Diag, IO> Decl
 fixityDecl p =
@@ -1416,4 +1417,4 @@ interp t =
       match at sub EOF with
         True -> x
         False -> unexpected sub "'}'"
-  EInterp (tokPos t) (mapList part (tokParts t))
+  EInterp (tokPos t) (map part (tokParts t))

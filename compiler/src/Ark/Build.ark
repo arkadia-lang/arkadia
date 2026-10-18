@@ -2,14 +2,14 @@
 -- executables with the Go toolchain.
 module Ark.Build
 
-import Ark.Util
-import Ark.Ast
-import Ark.Check
-import Ark.Loader
-import Ark.Lower
-import Ark.Codegen
-import Ark.Project
-import Std.IO
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Check (..)
+import Ark.Loader (..)
+import Ark.Lower (..)
+import Ark.Codegen (..)
+import Ark.Project (..)
+import Std.IO (..)
 import Std.Map as Map
 
 -- ================================================================ installation

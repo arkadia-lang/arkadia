@@ -1,6 +1,6 @@
 -- Character classification and conversion, meant to be imported qualified:
 --
---   import Std.Char as Char
+--   import Std.Char
 --   Char.digitToInt 'f'   -- Some 15
 --   Char.toCode 'A'       -- 65
 --

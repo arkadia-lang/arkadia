@@ -4,7 +4,7 @@ module CollectionTests
 import Std.Map as Map
 import Std.Set as Set
 import Std.Array as Array
-import Std.State
+import Std.State (..)
 
 test "map update and construction" =
   let m = Map.fromList [(1, "a"), (2, "b")]
@@ -47,10 +47,10 @@ test "map iteration with effects" =
 
 test "set extras" =
   let s = Set.fromList [5, 1, 3]
-  assertEq (Set.toList (Set.map (\x -> x % 2) s)) [1]
+  assertEq (toList (Set.map (\x -> x % 2) s)) [1]
   let (odds, evens) = Set.partition odd (Set.fromList [1 .. 5])
-  assertEq (Set.toList odds, Set.toList evens) ([1, 3, 5], [2, 4])
-  assertEq (Set.toList (Set.unions [Set.fromList [1], Set.fromList [2, 1]])) [1, 2]
+  assertEq (toList odds, toList evens) ([1, 3, 5], [2, 4])
+  assertEq (toList (Set.unions [Set.fromList [1], Set.fromList [2, 1]])) [1, 2]
   assert (Set.isSubsetOf (Set.fromList [1, 3]) s && not (Set.isSubsetOf (Set.fromList [2]) s)) "isSubsetOf"
   assert (Set.disjoint s (Set.fromList [2, 4]) && Set.notMember 2 s) "disjoint"
   assertEq (Set.lookupMin s, Set.lookupMax s, Set.lookupGT 3 s, Set.lookupLE 2 s) (Some 1, Some 5, Some 5, Some 1)
@@ -58,24 +58,24 @@ test "set extras" =
 
 test "array basics" =
   let a = Array.fromList [3, 1, 2]
-  assertEq (Array.toList (Array.reverse a)) [2, 1, 3]
+  assertEq (toList (Array.reverse a)) [2, 1, 3]
   assertEq (Array.first a, Array.last a, Array.last (Array.empty : Array.Array Int)) (Some 3, Some 2, None)
-  assert (Array.isEmpty (Array.empty : Array.Array Int) && not (Array.isEmpty a)) "isEmpty"
-  assertEq (Array.toList (Array.range 2 5)) [2, 3, 4]
-  assertEq (Array.toList (Array.update 1 (* 10) a)) [3, 10, 2]
-  assertEq (Array.toList (Array.swap 0 2 a)) [2, 1, 3]
-  assertEq (Array.toList (Array.concat [a, Array.singleton 9])) [3, 1, 2, 9]
+  assert (isEmpty (Array.empty : Array.Array Int) && not (isEmpty a)) "isEmpty"
+  assertEq (toList (Array.range 2 5)) [2, 3, 4]
+  assertEq (toList (Array.update 1 (* 10) a)) [3, 10, 2]
+  assertEq (toList (Array.swap 0 2 a)) [2, 1, 3]
+  assertEq (toList (Array.concat [a, Array.singleton 9])) [3, 1, 2, 9]
 
 test "array traversals" =
   let a = Array.fromList [10, 20, 30]
-  assertEq (Array.toList (Array.mapWithIndex (\i x -> i + x) a)) [10, 21, 32]
+  assertEq (toList (Array.mapWithIndex (\i x -> i + x) a)) [10, 21, 32]
   assertEq (Array.foldlWithIndex (\acc i x -> acc + i * x) 0 a) 80
-  assertEq (Array.toList (Array.filter (\x -> x > 15) a)) [20, 30]
+  assertEq (toList (Array.filter (\x -> x > 15) a)) [20, 30]
   assertEq (Array.find (\x -> x > 15) a, Array.findIndex (\x -> x > 15) a) (Some 20, Some 1)
-  assertEq (Array.toList (Array.zip a (Array.fromList ['x', 'y']))) [(10, 'x'), (20, 'y')]
-  assertEq (sum a, Array.toList (map (* 2) a)) (60, [20, 40, 60])
+  assertEq (toList (Array.zip a (Array.fromList ['x', 'y']))) [(10, 'x'), (20, 'y')]
+  assertEq (sum a, toList (map (* 2) a)) (60, [20, 40, 60])
   assertEq (traverse (\x -> Some x) a) (Some a)
-  assertEq (runFail (\_ -> Array.toList (Array.map (\x -> orFail "zero" (Some (x / 10))) a))) (Ok [1, 2, 3])
+  assertEq (runFail (\_ -> toList (map (\x -> orFail "zero" (Some (x / 10))) a))) (Ok [1, 2, 3])
 
 test "array binary search" =
   let a = Array.fromList [1, 3, 5, 7, 9, 11]
@@ -83,19 +83,19 @@ test "array binary search" =
 
 test "collections qualified map and folds" =
   let m = Map.fromList [(2, "b"), (1, "a")]
-  assertEq (Map.toList (Map.map toUpper m)) [(1, "A"), (2, "B")]
-  assertEq (Map.foldl (++) "" m, Map.foldr (++) "" m) ("ab", "ab")
+  assertEq (Map.toList (map toUpper m)) [(1, "A"), (2, "B")]
+  assertEq (foldl (++) "" m, foldr (++) "" m) ("ab", "ab")
   let s = Set.fromList [3, 1, 2]
-  assertEq (Set.foldl (\acc x -> acc * 10 + x) 0 s, Set.foldr (\x acc -> x :: acc) [] s) (123, [1, 2, 3])
+  assertEq (foldl (\acc x -> acc * 10 + x) 0 s, foldr (\x acc -> x :: acc) [] s) (123, [1, 2, 3])
   let a = Array.fromList [1, 2, 3]
-  assertEq (Array.foldl (-) 0 a, Array.foldr (\x acc -> x :: acc) [] a) (-6, [1, 2, 3])
-  assertEq (runFail (\_ -> Array.toList (Array.map (\x -> orFail "never" (Some (x * 2))) a))) (Ok [2, 4, 6])
+  assertEq (foldl (-) 0 a, foldr (\x acc -> x :: acc) [] a) (-6, [1, 2, 3])
+  assertEq (runFail (\_ -> toList (map (\x -> orFail "never" (Some (x * 2))) a))) (Ok [2, 4, 6])
 
 test "collections are monoids" =
   assertEq (Map.toList (Map.fromList [(1, "a")] <> Map.fromList [(1, "x"), (2, "b")])) [(1, "a"), (2, "b")]
-  assertEq (Set.toList (Set.fromList [1, 3] <> Set.fromList [2, 3])) [1, 2, 3]
-  assertEq (Array.toList (Array.fromList [1] <> Array.fromList [2])) [1, 2]
-  assertEq (Set.toList (foldMap Set.singleton [3, 1, 3])) [1, 3]
+  assertEq (toList (Set.fromList [1, 3] <> Set.fromList [2, 3])) [1, 2, 3]
+  assertEq (toList (Array.fromList [1] <> Array.fromList [2])) [1, 2]
+  assertEq (toList (foldMap Set.singleton [3, 1, 3])) [1, 3]
 
 test "collections interpolate" =
   assertEq "${Map.fromList [(1, "a")]}" "Map.fromList [(1, \"a\")]"

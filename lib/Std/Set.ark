@@ -1,6 +1,6 @@
 -- Persistent ordered sets, meant to be imported qualified:
 --
---   import Std.Set as Set
+--   import Std.Set
 --   let s = Set.fromList [3, 1, 2]
 --   Set.member 2 s            -- True
 --   s <> Set.fromList [4]     -- union
@@ -27,17 +27,8 @@ delete x (Set m) = Set (M.delete x m)
 member : Ord a => a -> Set a -> Bool
 member x (Set m) = M.member x m
 
-size : Set a -> Int
-size (Set m) = M.size m
-
-isEmpty : Set a -> Bool
-isEmpty (Set m) = M.isEmpty m
-
 fromList : Ord a => List a -> Set a
 fromList xs = Prelude.foldl (\s x -> insert x s) empty xs
-
-toList : Set a -> List a
-toList (Set m) = M.keys m
 
 union : Ord a => Set a -> Set a -> Set a
 union (Set a) (Set b) = Set (M.union a b)
@@ -55,7 +46,7 @@ notMember : Ord a => a -> Set a -> Bool
 notMember x s = not (member x s)
 
 map : Ord b => (a -> b) -> Set a -> Set b
-map f s = fromList (mapList f (toList s))
+map f s = fromList (Prelude.map f (toList s))
 
 partition : Ord a => (a -> Bool) -> Set a -> (Set a, Set a)
 partition p s = (filter p s, filter (\x -> not (p x)) s)
@@ -91,15 +82,12 @@ lookupGE x (Set m) = Prelude.map fst (M.lookupGE x m)
 toDescList : Set a -> List a
 toDescList s = Prelude.reverse (toList s)
 
-foldl : (b -> a -> b) -> b -> Set a -> b
-foldl f z s = Prelude.foldl f z (toList s)
-
-foldr : (a -> b -> b) -> b -> Set a -> b
-foldr f z s = Prelude.foldr f z (toList s)
-
 instance Foldable Set where
   foldr f z s = Prelude.foldr f z (toList s)
   foldl f z s = Prelude.foldl f z (toList s)
+  toList (Set m) = M.keys m
+  length (Set m) = length m
+  isEmpty (Set m) = isEmpty m
 
 instance Eq a => Eq (Set a) where
   a == b = toList a == toList b

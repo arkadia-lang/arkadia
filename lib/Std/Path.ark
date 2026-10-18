@@ -1,6 +1,6 @@
 -- File path manipulation (purely textual, using the host OS conventions).
 --
---   import Std.Path
+--   import Std.Path (..)
 --   "src" </> "Main.ark"            -- "src/Main.ark"
 --   extension "lib/Std/Map.ark"     -- ".ark"
 module Std.Path

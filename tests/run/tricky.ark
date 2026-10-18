@@ -1,5 +1,5 @@
 -- Corner cases for code generation and the type checker.
-import Std.State
+import Std.State (..)
 
 -- closures created inside a self-tail-recursive loop must capture the
 -- value of each iteration

@@ -3,9 +3,9 @@
 -- functions and substitution of trivially bound variables.
 module Ark.Opt
 
-import Ark.Util
-import Ark.Ast
-import Ark.Core
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Core (..)
 import Std.Map as Map
 
 -- aliases (value symbol -> global), dictionaries (current slots), small
@@ -17,15 +17,15 @@ optimize (Program funcs values dicts foreigns ops effects main tests failEff) =
   let aliases = Map.fromList (filterMap (\(Value s b) -> match b with
     CGlobal g -> Some (s, g)
     _ -> None) values)
-  let dictMap = newRef (Map.fromList (mapList (\d -> (dictSym d, d)) dicts))
+  let dictMap = newRef (Map.fromList (map (\d -> (dictSym d, d)) dicts))
   let small = Map.fromList (filterMap (\f -> match isSmall f with
     True -> Some (funcSym f, f)
     False -> None) funcs)
   let o = O aliases dictMap small (newRef 0)
   let round (fs, vs, ds) _ =
-    let fs2 = mapList (\(Func s ps b ts) -> Func s ps (optExpr o b) ts) fs
-    let vs2 = mapList (\(Value s b) -> Value s (optExpr o b)) vs
-    let ds2 = mapList (\(Dict s ps slots) ->
+    let fs2 = map (\(Func s ps b ts) -> Func s ps (optExpr o b) ts) fs
+    let vs2 = map (\(Value s b) -> Value s (optExpr o b)) vs
+    let ds2 = map (\(Dict s ps slots) ->
       let slots2 = optSlots o s ps [] slots
       Dict s ps slots2) ds
     (fs2, vs2, ds2)
@@ -97,7 +97,7 @@ optNode o e =
 inline : O -> Func -> List CExpr -> <IO> CExpr
 inline o (Func _ ps body _) args =
   let O _ _ _ counter = o
-  let bound = mapList (\(p, a) -> match isAtom a with
+  let bound = map (\(p, a) -> match isAtom a with
     True -> ((p, a), None)
     False ->
       let name = p ++ "$i" ++ show (nextId counter)

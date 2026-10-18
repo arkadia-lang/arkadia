@@ -19,9 +19,9 @@
 -- the same tokens, layout and comments as the input.
 module Ark.Format
 
-import Ark.Util
-import Ark.Ast
-import Ark.Lexer
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Lexer (..)
 import Std.Array as Arr
 import Std.MArray as MA
 import Std.Map as Map
@@ -55,14 +55,14 @@ format file src =
 -- ================================================================ items
 
 private text : Arr.Array Char -> Int -> Int -> String
-text chs from to = fromChars (Arr.toList (Arr.slice from to chs))
+text chs from to = fromChars (toList (Arr.slice from to chs))
 
 private tokAt : Src -> Int -> Token
 tokAt s i = Arr.at i s.toks
 
 -- The tokens (without EOF) and comments in source order.
 private items : Src -> List Comment -> List Item
-items s comments = finishItems s.chs 0 (mergeItems s 0 (Arr.length s.toks - 1) comments []) []
+items s comments = finishItems s.chs 0 (mergeItems s 0 (length s.toks - 1) comments []) []
 
 private mergeItems : Src -> Int -> Int -> List Comment -> List Item -> List Item
 mergeItems s i n cs acc = match cs with
@@ -114,10 +114,10 @@ formatTokens s comments = match items s comments with
   [] -> ""
   itemList ->
     let its = Arr.fromList itemList
-    let n = Arr.length its
+    let n = length its
     let sp = newSpacing s
     let gaps = MA.make n ""
-    let lineOff = MA.make (Arr.length s.toks) 0
+    let lineOff = MA.make (length s.toks) 0
     let off = newRef 0
     forEach (range 0 n) (\i ->
       let it = Arr.at i its
@@ -162,8 +162,8 @@ formatTokens s comments = match items s comments with
 -- with the previous line, else shifted like the next line.
 private lineStarts : Arr.Array Item -> Arr.Array Int -> <IO> MA.MArray Int
 lineStarts its tokCol =
-  let firsts = Arr.fromList (filter (\it -> it.first) (Arr.toList its))
-  let m = Arr.length firsts
+  let firsts = Arr.fromList (filter (\it -> it.first) (toList its))
+  let m = length firsts
   let news = MA.make m 0
   let isTok k = (Arr.at k firsts).tok >= 0
   let old k = (Arr.at k firsts).col
@@ -234,7 +234,7 @@ newCtx bracket col nc item typeDecl = Ctx { bracket = bracket, ccol = col, cnew 
 -- deepest earlier continuation line left of it).
 private layoutColumns : Src -> Arr.Array Int -> <IO> Arr.Array Int
 layoutColumns s lineOff =
-  let n = Arr.length s.toks
+  let n = length s.toks
   let cols = MA.make n 0
   let col i = posCol (tokPos (tokAt s i))
   let isType i = tokKind (tokAt s i) == KwType || tokKind (tokAt s i) == KwPrivate && tokKind (tokAt s (i + 1)) == KwType
@@ -395,7 +395,7 @@ private moreGuards : Src -> Int -> Int -> Bool
 moreGuards s i col = moreGuardsFrom s (i + 1) col 0
 
 private moreGuardsFrom : Src -> Int -> Int -> Int -> Bool
-moreGuardsFrom s j col depth = match j >= Arr.length s.toks with
+moreGuardsFrom s j col depth = match j >= length s.toks with
   True -> False
   False ->
     let t = tokAt s j
@@ -417,7 +417,7 @@ type Spacing = Spacing { src : Src, partner : Arr.Array Int, row : Arr.Array Boo
 
 private newSpacing : Src -> <IO> Spacing
 newSpacing s =
-  let n = Arr.length s.toks
+  let n = length s.toks
   let partner = MA.make n (-1)
   let row = MA.make n False
   let brackets = newRef []
@@ -479,7 +479,7 @@ spacedToken k = k == EQUALS || k == ARROW || k == DARROW || k == BAR || k == COL
 private binaryOp : Spacing -> Int -> Bool
 binaryOp sp i =
   let s = sp.src
-  match tokKind (tokAt s i) == OP && not (Arr.at i sp.row) && i > 0 && i + 1 < Arr.length s.toks with
+  match tokKind (tokAt s i) == OP && not (Arr.at i sp.row) && i > 0 && i + 1 < length s.toks with
     True -> endsOperand (tokKind (tokAt s (i - 1))) && startsOperand (tokKind (tokAt s (i + 1)))
     False -> False
 
@@ -538,7 +538,7 @@ sameTokens file s want comments out =
           let mismatch = filter (\i ->
             let (o1, e1) = Arr.at i s.spans
             let (o2, e2) = Arr.at i raw2
-            text s.chs o1 e1 != text chs2 o2 e2) (range 0 (Arr.length s.spans))
+            text s.chs o1 e1 != text chs2 o2 e2) (range 0 (length s.spans))
           match mismatch with
             i :: _ ->
               let w = tokAt s i

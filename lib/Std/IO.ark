@@ -28,7 +28,7 @@ stdinLines () =
     Some l -> l :: stdinLines ()
 
 writeLines : String -> List String -> <IO> Result String Unit
-writeLines path ls = writeFile path (concatStrings (mapList (\l -> l ++ "\n") ls))
+writeLines path ls = writeFile path (concatStrings (map (\l -> l ++ "\n") ls))
 
 copyFile : String -> String -> <IO> Result String Unit
 copyFile from to = match readFile from with

@@ -1,6 +1,6 @@
 -- Mutual exclusion between tasks (see Std.Task).
 --
---   import Std.Mutex
+--   import Std.Mutex (..)
 --   let accounts = newShared (Map.fromList [("ann", 100), ("bob", 0)])
 --   updateShared accounts (\m ->
 --     let amount = Map.findWithDefault 0 "ann" m
@@ -11,7 +11,7 @@
 -- effects (if it fails or is abandoned, the value is left unchanged).
 module Std.Mutex
 
-import Std.Ref
+import Std.Ref (..)
 
 -- A lock.
 type Mutex

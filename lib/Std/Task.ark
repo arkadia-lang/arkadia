@@ -1,6 +1,6 @@
 -- Tasks: computations that run in parallel on all processors.
 --
---   import Std.Task
+--   import Std.Task (..)
 --
 --   main () = runAsync (\_ ->
 --     let a = spawn (\_ -> fib 32)
@@ -101,11 +101,11 @@ foreign numProcessors : Unit -> <IO> Int = "rt.NumProcessors"
 
 -- Run computations in parallel and collect their results in order.
 parallel : List (Unit -> <Async, IO> a) -> <IO> List a
-parallel actions = runAsync (\_ -> mapList await (mapList spawn actions))
+parallel actions = runAsync (\_ -> map await (map spawn actions))
 
 -- Apply a function to every element in parallel.
 parMap : (a -> <Async, IO> b) -> List a -> <IO> List b
-parMap f xs = parallel (mapList (\x _ -> f x) xs)
+parMap f xs = parallel (map (\x _ -> f x) xs)
 
 -- Run two computations in parallel.
 both : (Unit -> <Async, IO> a) -> (Unit -> <Async, IO> b) -> <IO> (a, b)
@@ -118,7 +118,7 @@ both first second = runAsync (\_ ->
 -- finish; the others are cancelled. If it failed, its error is raised.
 race : List (Unit -> <Async, IO> a) -> <IO> a
 race actions = runAsync (\_ ->
-  let tasks = mapList spawn actions
+  let tasks = map spawn actions
   let winner = firstDone tasks
   forEach tasks cancel
   await winner)

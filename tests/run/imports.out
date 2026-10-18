@@ -1,0 +1,6 @@
+Map.fromList [("ann", 30), ("bob", 0)] 2
+ann, bob
+ABC
+Some 3
+2
+Some 2 3 [10, 20, 30]

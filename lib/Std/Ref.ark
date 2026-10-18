@@ -1,7 +1,7 @@
 -- Mutable references. Reading and writing a reference is an IO effect; for
 -- state local to a computation, prefer Std.State.
 --
---   import Std.Ref
+--   import Std.Ref (..)
 --   let r = newRef 0
 --   forEach [1 .. 10] (\i -> modifyRef r (+ i))
 --   readRef r   -- 55

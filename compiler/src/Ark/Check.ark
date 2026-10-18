@@ -2,12 +2,12 @@
 -- deriving), top-level bindings and tests.
 module Ark.Check
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Infer
-import Ark.Exhaust
-import Std.Exn
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Infer (..)
+import Ark.Exhaust (..)
+import Std.Exn (..)
 import Std.Map as Map
 
 -- Type check a parsed module and register its exports.
@@ -83,9 +83,9 @@ installBuiltins c =
   forEach (range 2 13) (\n ->
     let k = foldl (\acc _ -> KArrow KStar acc) KStar (range 0 n)
     let name = "Tuple" ++ show n
-    let params = mapList (\i -> charToString (fromCharCode (97 + i))) (range 0 n)
+    let params = map (\i -> charToString (fromCharCode (97 + i))) (range 0 n)
     let ti = prim name params k
-    addCtors c ti [name] [mapList TGen (range 0 n)])
+    addCtors c ti [name] [map TGen (range 0 n)])
   -- IO is the builtin, unhandleable effect of the outside world
   let io = EffectInfo (sym c "IO") (newRef KEffect) 0 (newRef []) preludeMod noPos
   modifyRef (gEffects g) (Map.insert (effectName io) io)
@@ -95,7 +95,7 @@ addCtors : Checker -> TypeInfo -> List String -> List (List Type) -> <IO> Unit
 addCtors c ti names fields =
   let n = length (typeInfoParams ti)
   let k = typeInfoKind ti
-  let res = mkAppT (TCon (typeInfoName ti) k) (mapList TGen (range 0 n))
+  let res = mkAppT (TCon (typeInfoName ti) k) (map TGen (range 0 n))
   let total = length names
   forEach (indexed (zip names fields)) (\(i, (name, fs)) ->
     let ci = CtorInfo (sym c name) name (typeInfoName ti) (typeInfoModule ti) total i (length fs) (ctorSchemeOf (replicate n KStar) fs res) fs (typeInfoPos ti) None
@@ -122,7 +122,7 @@ collectTypeNames c decls =
   let g = cG c
   foldl (\classes d -> match d with
     DType p name params _ _ _ ->
-      let kinds = mapList (\_ -> newKVar g) params
+      let kinds = map (\_ -> newKVar g) params
       let k = foldr (\pk acc -> KArrow pk acc) KStar kinds
       let ti = TypeInfo (sym c name) (newRef k) params (newRef []) False (cMod c) p
       modifyRef (gTypes g) (Map.insert (sym c name) ti)
@@ -152,7 +152,7 @@ ownType c name = match Map.lookup name (readRef (scopeTypes (cScope c))) with
 
 inferDataKinds : Checker -> List Decl -> <IO> Unit
 inferDataKinds c decls =
-  let pending = filterMap id (mapList (\d -> match d with
+  let pending = filterMap id (map (\d -> match d with
     DType p name params ctors _ priv -> match ownType c name with
       None -> None
       Some ti ->
@@ -164,7 +164,7 @@ inferDataKinds c decls =
           let _ = addGen env pn k
           ())
         writeRef (envFixed env) True
-        let fields = mapList (\(CtorDecl _ _ fs _) -> mapList (\f -> convStar c f env) fs) ctors
+        let fields = map (\(CtorDecl _ _ fs _) -> map (\f -> convStar c f env) fs) ctors
         Some (ti, params, ctors, fields, priv)
     _ -> None) decls)
   forEach pending (\(ti, params, ctors, fields, priv) ->
@@ -172,7 +172,7 @@ inferDataKinds c decls =
     let k = defaultKind (readRef kref)
     writeRef kref k
     let n = length params
-    let res = mkAppT (TCon tname k) (mapList TGen (range 0 n))
+    let res = mkAppT (TCon tname k) (map TGen (range 0 n))
     let pks = paramKinds k n
     let total = length ctors
     forEach (indexed (zip ctors fields)) (\(i, (CtorDecl cp cname _ named, fs)) ->
@@ -216,7 +216,7 @@ processEffect c ei params ops =
   let EffectInfo en kref np opsRef _ _ = ei
   let ek = readRef kref
   let pks = paramKinds ek (length params)
-  let label = mkAppT (TCon en ek) (mapList TGen (range 0 (length params)))
+  let label = mkAppT (TCon en ek) (map TGen (range 0 (length params)))
   forEach (indexed ops) (\(i, Sig op_p op_name (SchemeE preds te) _) ->
     let env = newTvEnv True arrowAmbient
     forEach (zip params pks) (\(pn, pk) ->
@@ -238,7 +238,7 @@ processEffect c ei params ops =
           Some (TGen gi) -> gi
           _ -> -1
         let names = envNames env
-        let sc = Scheme (mapList (envKindOf env) names) names [] full
+        let sc = Scheme (map (envKindOf env) names) names [] full
         let oi = OpInfo en op_name i (length ps) (sym c op_name) sc ps resT ambient
         modifyRef opsRef (\os -> snoc os oi)
         defineValue c op_name (ValueInfo op_name (sym c op_name) (newRef (Some sc)) None (Some oi) "" (length ps) op_p None (newRef None)) False
@@ -307,7 +307,7 @@ private appE : Expr -> List Expr -> <IO> Expr
 appE f args = mkApp (exprPos f) f args
 
 deriveInstances : Checker -> List Decl -> <IO> List Decl
-deriveInstances c decls = concat (mapList (\d -> match d with
+deriveInstances c decls = concat (map (\d -> match d with
   DType p name params ctors deriv _ | not (isEmpty deriv) -> match ownType c name with
     None -> []
     Some ti ->
@@ -330,12 +330,12 @@ deriveInstances c decls = concat (mapList (\d -> match d with
         match ok with
           False -> None
           True ->
-            let ctx = filterMap id (mapList (\(pn, k) -> match isStarKind k with
+            let ctx = filterMap id (map (\(pn, k) -> match isStarKind k with
               True -> Some (PredE p qual cls (TVarE p pn))
               False -> None) (zip params pks))
             let head = match params with
               [] -> TConE p "" name
-              _ -> TAppE p (TConE p "" name) (mapList (TVarE p) params)
+              _ -> TAppE p (TConE p "" name) (map (TVarE p) params)
             let bind = match cls with
               "Eq" -> Some (deriveEq p ctors)
               "Ord" -> Some (deriveOrd p ctors)
@@ -352,12 +352,12 @@ deriveInstances c decls = concat (mapList (\d -> match d with
 
 private ctorPat : Pos -> CtorDecl -> String -> <IO> (Pattern, List Expr)
 ctorPat p (CtorDecl _ name fields _) prefix =
-  let names = mapList (\i -> prefix ++ show i) (range 0 (length fields))
-  let pat = mkPCon p "" name (mapList (mkPVar p) names)
-  (pat, mapList (ev p) names)
+  let names = map (\i -> prefix ++ show i) (range 0 (length fields))
+  let pat = mkPCon p "" name (map (mkPVar p) names)
+  (pat, map (ev p) names)
 
 private simpleBind : Pos -> String -> List String -> Expr -> <IO> Bind
-simpleBind p name params body = mkBind p name None [Clause p (mapList (mkPVar p) params) (RBody body)] None
+simpleBind p name params body = mkBind p name None [Clause p (map (mkPVar p) params) (RBody body)] None
 
 private pairScrut : Pos -> <IO> Expr
 pairScrut p = ETuple p [ev p "x$", ev p "y$"]
@@ -367,12 +367,12 @@ deriveEq p ctors =
   let arm cd =
     let (pa, va) = ctorPat p cd "a$"
     let (pb, vb) = ctorPat p cd "b$"
-    let eqs = mapList (\(x, y) -> EBinOp p (mkVar p "#Prelude" "==") x y) (zip va vb)
+    let eqs = map (\(x, y) -> EBinOp p (mkVar p "#Prelude" "==") x y) (zip va vb)
     let body = match reverse eqs with
       [] -> mkCon p "#Prelude" "True"
       last :: rest -> foldl (\acc eq -> EBinOp p (ev p "&&") eq acc) last rest
     Arm p (PTuple p [pa, pb]) (RBody body)
-  let arms = mapList arm ctors
+  let arms = map arm ctors
   let arms2 = match length ctors > 1 with
     True -> snoc arms (Arm p (PWild p) (RBody (mkCon p "#Prelude" "False")))
     False -> arms
@@ -383,14 +383,14 @@ deriveOrd p ctors =
   let arm cd =
     let (pa, va) = ctorPat p cd "a$"
     let (pb, vb) = ctorPat p cd "b$"
-    let cmps = mapList (\(x, y) -> appE (pv "compare") [x, y]) (zip va vb)
+    let cmps = map (\(x, y) -> appE (pv "compare") [x, y]) (zip va vb)
     Arm p (PTuple p [pa, pb]) (RBody (appE (pv "lexicoOrder") [EList p cmps]))
-  let arms = mapList arm ctors
+  let arms = map arm ctors
   match ctors with
     [_] -> simpleBind p "compare" ["x$", "y$"] (EMatch p (pairScrut p) arms)
     _ ->
-      let idxArms = mapList (\(i, CtorDecl _ name fields _) ->
-        Arm p (mkPCon p "" name (mapList (\_ -> PWild p) fields)) (RBody (mkNum p i))) (indexed ctors)
+      let idxArms = map (\(i, CtorDecl _ name fields _) ->
+        Arm p (mkPCon p "" name (map (\_ -> PWild p) fields)) (RBody (mkNum p i))) (indexed ctors)
       let idx = EMatch p (ev p "v$") idxArms
       let fallback = Arm p (PWild p) (RBody (appE (pv "compare") [appE (ev p "idx$") [ev p "x$"], appE (ev p "idx$") [ev p "y$"]]))
       let m = EMatch p (pairScrut p) (snoc arms fallback)
@@ -403,12 +403,12 @@ deriveShow p ctors =
     let (pa, va) = ctorPat p cd "a$"
     match named with
       Some fs ->
-        let shown = mapList (\(f, v) -> ETuple p [ELit p (LString f), appE (pv "show") [v]]) (zip fs va)
+        let shown = map (\(f, v) -> ETuple p [ELit p (LString f), appE (pv "show") [v]]) (zip fs va)
         Arm p pa (RBody (appE (pv "showRecord") [ELit p (LString name), EList p shown]))
       None ->
-        let shown = mapList (\v -> appE (pv "showArg") [appE (pv "show") [v]]) va
+        let shown = map (\v -> appE (pv "showArg") [appE (pv "show") [v]]) va
         Arm p pa (RBody (appE (pv "showCon") [ELit p (LString name), EList p shown]))
-  simpleBind p "show" ["x$"] (EMatch p (ev p "x$") (mapList arm ctors))
+  simpleBind p "show" ["x$"] (EMatch p (ev p "x$") (map arm ctors))
 
 jsonMod : String
 jsonMod = "Std.Json"
@@ -428,11 +428,11 @@ deriveToJson p ctors =
   let multi = length ctors > 1
   let arm (cd@(CtorDecl _ name fields named)) =
     let (pa, va) = ctorPat p cd "a$"
-    let conv = mapList (\v -> appE (jv p "toJson") [v]) va
+    let conv = map (\v -> appE (jv p "toJson") [v]) va
     let tag = ETuple p [strLit p "tag", appE (jc p "JString") [strLit p name]]
     let body = match named with
       Some fs ->
-        let entries = mapList (\(f, x) -> ETuple p [strLit p f, x]) (zip fs conv)
+        let entries = map (\(f, x) -> ETuple p [strLit p f, x]) (zip fs conv)
         let elems = match multi with
           True -> tag :: entries
           False -> entries
@@ -445,7 +445,7 @@ deriveToJson p ctors =
             let values = ETuple p [strLit p "values", appE (jc p "JArray") [EList p conv]]
             appE (jc p "JObject") [EList p [tag, values]]
     Arm p pa (RBody body)
-  simpleBind p "toJson" ["x$"] (EMatch p (ev p "x$") (mapList arm ctors))
+  simpleBind p "toJson" ["x$"] (EMatch p (ev p "x$") (map arm ctors))
 
 private okPat : Pos -> Pattern -> <IO> Pattern
 okPat p x = mkPCon p "#Prelude" "Ok" [x]
@@ -462,7 +462,7 @@ resultChain p results con =
   let c0 = mkCon p "" con
   let final = match results with
     [] -> c0
-    _ -> appE c0 (mapList (\i -> ev p ("b$" ++ show i)) (range 0 (length results)))
+    _ -> appE c0 (map (\i -> ev p ("b$" ++ show i)) (range 0 (length results)))
   let okE = appE (mkCon p "#Prelude" "Ok") [final]
   foldr (\(i, r) acc ->
     let err = errArm p
@@ -485,12 +485,12 @@ private deriveFromJson : Pos -> String -> List CtorDecl -> <IO> Bind
 deriveFromJson p typeName ctors =
   let multi = length ctors > 1
   let decode (CtorDecl _ name fields named) = match named with
-    Some fs -> resultChain p (mapList (\f -> appE (jv p "fieldOf") [strLit p f, ev p "j$"]) fs) name
+    Some fs -> resultChain p (map (\f -> appE (jv p "fieldOf") [strLit p f, ev p "j$"]) fs) name
     None
       | isEmpty fields -> resultChain p [] name
       | not multi && length fields == 1 -> resultChain p [appE (jv p "fromJson") [ev p "j$"]] name
       | otherwise ->
-          let results = mapList (\i -> appE (jv p "elemOf") [mkNum p i, ev p "vs$"]) (range 0 (length fields))
+          let results = map (\i -> appE (jv p "elemOf") [mkNum p i, ev p "vs$"]) (range 0 (length fields))
           let scrut = appE (jv p "valuesOf") [mkNum p (length fields), ev p "j$"]
           let err = errArm p
           let okArm = Arm p (okPat p (mkPVar p "vs$")) (RBody (resultChain p results name))
@@ -498,14 +498,14 @@ deriveFromJson p typeName ctors =
   let body = match ctors with
     [cd@(CtorDecl _ name fields None)] | isEmpty fields -> tagMatch p typeName [tagArm p name (decode cd)]
     [cd] -> decode cd
-    _ -> tagMatch p typeName (mapList (\(cd@(CtorDecl _ name _ _)) -> tagArm p name (decode cd)) ctors)
+    _ -> tagMatch p typeName (map (\(cd@(CtorDecl _ name _ _)) -> tagArm p name (decode cd)) ctors)
   simpleBind p "fromJson" ["j$"] body
 
 -- ================================================================ instances
 
 -- Returns the instances of this module with their declarations.
 processInstanceHeads : Checker -> List Decl -> <IO> List (InstInfo, List Bind)
-processInstanceHeads c decls = filterMap id (mapList (\d -> match d with
+processInstanceHeads c decls = filterMap id (map (\d -> match d with
   DInstance p ctx q cls headE binds _ -> match lookupClass c p q cls with
     None -> None
     Some cl -> instanceHead c d p ctx cl headE binds
@@ -529,8 +529,8 @@ instanceHead c d p ctx cl headE binds =
         (TCon tc _, True) ->
           writeRef (envFixed env) True
           let names = envNames env
-          let kinds = mapList (\n -> defaultKind (envKindOf env n)) names
-          let context = filterMap id (mapList (\(PredE pp pq pcls pty) -> match lookupClass c pp pq pcls with
+          let kinds = map (\n -> defaultKind (envKindOf env n)) names
+          let context = filterMap id (map (\(PredE pp pq pcls pty) -> match lookupClass c pp pq pcls with
             None -> None
             Some pc -> match pty with
               TVarE _ v -> Some (Pred pc (tyVar c pp env v (classParamKind pc)))
@@ -562,9 +562,9 @@ tgenIs t i = match t with
 
 processForeigns : Checker -> List Decl -> <IO> Unit
 processForeigns c decls = forEach decls (\d -> match d with
-  DForeign p name se target ->
+  DForeign p name se target priv ->
     let sc = sigScheme c se
-    defineValue c name (ValueInfo name (sym c name) (newRef (Some sc)) None None target (arity (schemeType sc)) p None (newRef None)) False
+    defineValue c name (ValueInfo name (sym c name) (newRef (Some sc)) None None target (arity (schemeType sc)) p None (newRef None)) priv
   _ -> ())
 
 -- Returns the function bindings (binding, private) and the tests.
@@ -581,7 +581,7 @@ collectValues c decls =
     DTest _ _ _ _ -> True
     _ -> False) decls
   let defined = newRef []
-  let funs = filterMap id (mapList (\d -> match d with
+  let funs = filterMap id (map (\d -> match d with
     DFun _ b priv
       | elem (bindName b) (readRef defined) ->
           errorf c (bindPos b) "'${bindName b}' is defined more than once (equations of a function must be adjacent)"
@@ -666,11 +666,11 @@ lookupOwnValue c name = match Map.lookup name (readRef (scopeValues (cScope c)))
 
 checkTopBindings : Checker -> List Bind -> <IO> Unit
 checkTopBindings c funs =
-  let byName = Map.fromList (mapList (\b -> (bindName b, b)) funs)
+  let byName = Map.fromList (map (\b -> (bindName b, b)) funs)
   let unsig = filterMap (\b -> match readRef (valueSchemeRef (lookupOwnValue c (bindName b))) with
     None -> Some (bindName b)
     Some _ -> None) funs
-  let edges = Map.fromList (mapList (\n ->
+  let edges = Map.fromList (map (\n ->
     let refs = collectRefsOfBind (Map.findWithDefault (at 0 funs) n byName)
     (n, sortStrings (nub (filter (\r -> elem r unsig) refs)))) unsig)
   forEach (sccs unsig edges) (\comp -> inferTopGroup c comp byName)
@@ -693,7 +693,7 @@ inferTopGroup : Checker -> List String -> Map.Map String Bind -> <IO> Unit
 inferTopGroup c names byName =
   let gs = newRef []
   incLevel c
-  let members = mapList (\n ->
+  let members = map (\n ->
     let vi = lookupOwnValue c n
     let m = freshType c
     writeRef (valueGroup vi) (Some (gs, m))
@@ -708,7 +708,7 @@ inferTopGroup c names byName =
     checkPure c b eff)
   let ws = popWanted c
   decLevel c
-  let (scs, dictNames) = generalize c (mapList (\(_, m, _) -> m) members) ws True
+  let (scs, dictNames) = generalize c (map (\(_, m, _) -> m) members) ws True
   writeRef gs dictNames
   forEach (zip members scs) (\((vi, _, b), sc) ->
     writeRef (valueGroup vi) None
@@ -723,16 +723,16 @@ private checkInstanceBody : Checker -> (InstInfo, List Bind) -> <IO> Unit
 checkInstanceBody c (info, binds) =
   let cl = instClass info
   incLevel c
-  let sub = mapList (\(i, k) -> newSkolem c (charToString (fromCharCode (97 + i))) k) (indexed (instKinds info))
+  let sub = map (\(i, k) -> newSkolem c (charToString (fromCharCode (97 + i))) k) (indexed (instKinds info))
   let head = substGen (instHead info) sub
   let savedGivens = readRef (cGivens c)
-  let ctxParams = mapList (\(i, Pred pc pt) ->
+  let ctxParams = map (\(i, Pred pc pt) ->
     let name = "ictx" ++ show i
     let gt = substGen pt sub
     modifyRef (cGivens c) (\gs -> Given pc gt (DictParam name) :: gs)
     name) (indexed (instContext info))
   writeRef (instCtxParams info) ctxParams
-  let supers = mapList (\s ->
+  let supers = map (\s ->
     pushWanted c
     let ref = addWanted c s head (instPos info)
     let ws = popWanted c

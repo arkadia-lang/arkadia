@@ -2,7 +2,7 @@
 -- lexical closures. Errors are an effect, the environment is a Map.
 module Main
 
-import Std.Exn
+import Std.Exn (..)
 import Std.Map as Map
 
 type Value
@@ -70,7 +70,7 @@ eval env (List [Sym "lambda", List params, body]) = Fn (map symName params) body
 eval env (List [Sym "let", List [Sym name, value], body]) =
   let Env m = env
   eval (Env (Map.insert name (eval env value) m)) body
-eval env (List (f :: args)) = apply (eval env f) (mapList (eval env) args)
+eval env (List (f :: args)) = apply (eval env f) (map (eval env) args)
 eval _ v = v
 
 symName : Value -> String

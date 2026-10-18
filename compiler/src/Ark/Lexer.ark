@@ -1,8 +1,8 @@
 -- The lexer and the layout algorithm.
 module Ark.Lexer
 
-import Ark.Util
-import Ark.Ast
+import Ark.Util (..)
+import Ark.Ast (..)
 import Std.Array as Arr
 
 -- ================================================================ characters
@@ -90,7 +90,7 @@ next (Lx _ src n o l c _ _ _ _ _ _ _ _) =
 
 -- Source text between two offsets.
 slice : Lx -> Int -> Int -> String
-slice (Lx _ src _ _ _ _ _ _ _ _ _ _ _ _) from to = fromChars (Arr.toList (Arr.slice from to src))
+slice (Lx _ src _ _ _ _ _ _ _ _ _ _ _ _) from to = fromChars (toList (Arr.slice from to src))
 
 emit : Lx -> Token -> <IO> Unit
 emit lx t =
@@ -145,7 +145,7 @@ lex file src = match lexRaw file src 1 1 with
 lexRaw : String -> String -> Int -> Int -> <IO> Result (List Diag) (List Token)
 lexRaw file src line col =
   let chs = Arr.fromList (chars src)
-  let lx = Lx file chs (Arr.length chs) (newRef 0) (newRef line) (newRef col) (newRef []) (newRef []) (newRef True) (newRef True) False (newRef 0) (newRef []) (newRef [])
+  let lx = Lx file chs (length chs) (newRef 0) (newRef line) (newRef col) (newRef []) (newRef []) (newRef True) (newRef True) False (newRef 0) (newRef []) (newRef [])
   run lx
   match readRef (lxErrs lx) with
     [] -> Ok (reverse (readRef (lxToks lx)))
@@ -155,7 +155,7 @@ lexRaw file src line col =
 -- the tokens, their offsets in the source characters and the comments.
 lexSpans : String -> Arr.Array Char -> <IO> Result (List Diag) (List Token, List (Int, Int), List Comment)
 lexSpans file chs =
-  let lx = Lx file chs (Arr.length chs) (newRef 0) (newRef 1) (newRef 1) (newRef []) (newRef []) (newRef True) (newRef True) True (newRef 0) (newRef []) (newRef [])
+  let lx = Lx file chs (length chs) (newRef 0) (newRef 1) (newRef 1) (newRef []) (newRef []) (newRef True) (newRef True) True (newRef 0) (newRef []) (newRef [])
   run lx
   let Lx _ _ _ _ _ _ toks errs _ _ _ _ spans cs = lx
   match readRef errs with
@@ -490,7 +490,7 @@ interpolation lx ep =
         Err errs ->
           modifyRef (lxErrs lx) (\es -> reverseOnto errs es)
           None
-        Ok toks -> Some (InterpExpr (mapList (setTokFirst False) toks) ep)
+        Ok toks -> Some (InterpExpr (map (setTokFirst False) toks) ep)
 
 reverseOnto : List a -> List a -> List a
 reverseOnto [] acc = acc

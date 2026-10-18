@@ -1,17 +1,17 @@
 -- Immutable arrays with constant-time indexing, meant to be imported
 -- qualified:
 --
---   import Std.Array as Array
+--   import Std.Array
 --   let a = Array.fromList [10, 20, 30]
 --   Array.get 1 a            -- Some 20
---   Array.map (* 2) a        -- Array.fromList [20, 40, 60]
+--   map (* 2) a              -- Array.fromList [20, 40, 60]
 module Std.Array
 
 type Array a
 
 foreign fromList : List a -> Array a = "rt.ArrayFromList"
-foreign toList : Array a -> List a = "rt.ArrayToList"
-foreign length : Array a -> Int = "rt.ArrayLength"
+private foreign arrayToList : Array a -> List a = "rt.ArrayToList"
+private foreign arrayLength : Array a -> Int = "rt.ArrayLength"
 foreign get : Int -> Array a -> Option a = "rt.ArrayGet"
 foreign at : Int -> Array a -> a = "rt.ArrayGetUnsafe"
 foreign set : Int -> a -> Array a -> Array a = "rt.ArraySet"
@@ -26,13 +26,8 @@ foreign empty : Array a = "rt.ArrayEmpty"
 sort : Ord a => Array a -> Array a
 sort a = sortBy compare a
 
--- Apply a function to every element; unlike the Functor method `map`, it
--- may perform effects.
-foreign map : (a -> b) -> Array a -> Array b = "rt.ArrayMap"
+private foreign arrayMap : (a -> b) -> Array a -> Array b = "rt.ArrayMap"
 foreign reverse : Array a -> Array a = "rt.ArrayReverse"
-
-isEmpty : Array a -> Bool
-isEmpty a = length a == 0
 
 singleton : a -> Array a
 singleton x = fromList [x]
@@ -63,12 +58,6 @@ mapWithIndex f a = generate (length a) (\i -> f i (at i a))
 
 foldlWithIndex : (b -> Int -> a -> b) -> b -> Array a -> b
 foldlWithIndex f z a = Prelude.foldl (\acc i -> f acc i (at i a)) z (Prelude.range 0 (length a))
-
-foldl : (b -> a -> b) -> b -> Array a -> b
-foldl f z a = Prelude.foldl f z (toList a)
-
-foldr : (a -> b -> b) -> b -> Array a -> b
-foldr f z a = Prelude.foldr f z (toList a)
 
 filter : (a -> Bool) -> Array a -> Array a
 filter p a = fromList (Prelude.filter p (toList a))
@@ -109,11 +98,14 @@ search x a lo hi
         EQ -> Some mid
 
 instance Functor Array where
-  map f a = Std.Array.map f a
+  map f a = arrayMap f a
 
 instance Foldable Array where
-  foldl f z a = Prelude.foldl f z (toList a)
-  foldr f z a = Prelude.foldr f z (toList a)
+  foldl f z a = Prelude.foldl f z (arrayToList a)
+  foldr f z a = Prelude.foldr f z (arrayToList a)
+  toList a = arrayToList a
+  length a = arrayLength a
+  isEmpty a = arrayLength a == 0
 
 instance Traversable Array where
   traverse f a = Prelude.map fromList (traverse f (toList a))

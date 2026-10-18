@@ -1,8 +1,8 @@
 -- Rendering diagnostics with source snippets.
 module Ark.Render
 
-import Ark.Util
-import Ark.Ast
+import Ark.Util (..)
+import Ark.Ast (..)
 import Std.Map as Map
 import Std.Array as Arr
 
@@ -70,7 +70,7 @@ docComment srcs (Pos file line col) name =
 -- The comment block at the start of a file.
 leadingComment : Map.Map String String -> String -> <IO> String
 leadingComment srcs file =
-  let lines = Arr.toList (fileLines srcs file)
+  let lines = toList (fileLines srcs file)
   let collect ls acc = match ls with
     l :: rest | startsWith "--" (trim l) -> collect rest (commentText (trim l) :: acc)
     _ -> reverse acc
@@ -112,5 +112,5 @@ renderDiags srcs errs color =
           let pad = strRepeat (stringLength num) " "
           let col = max 1 (posCol p)
           blue ++ pad ++ " |" ++ reset ++ "\n" ++ blue ++ num ++ " |" ++ reset ++ " " ++ replace "\t" " " line ++ "\n" ++ blue ++ pad ++ " |" ++ reset ++ " " ++ strRepeat (col - 1) " " ++ red ++ "^" ++ reset ++ "\n"
-    head ++ snippet ++ concatStrings (mapList (\n -> "  " ++ blue ++ "= note:" ++ reset ++ " " ++ n ++ "\n") notes)
-  concatStrings (mapList one (sortBy comparePos errs))
+    head ++ snippet ++ concatStrings (map (\n -> "  " ++ blue ++ "= note:" ++ reset ++ " " ++ n ++ "\n") notes)
+  concatStrings (map one (sortBy comparePos errs))

@@ -1,7 +1,7 @@
 -- Unit tests for Std.Math.
 module MathTests
 
-import Std.Math
+import Std.Math (..)
 
 close : Float -> Float -> <Fail> Unit
 close a b = assert (approxEq 0.000000001 a b) "expected ${b}, but got ${a}"

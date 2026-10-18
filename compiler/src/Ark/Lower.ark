@@ -1,10 +1,10 @@
 -- Lowering checked modules to Core.
 module Ark.Lower
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Core
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Core (..)
 import Std.Map as Map
 
 -- global information, counter for fresh names, and the parts of the
@@ -26,7 +26,7 @@ lower g mods mainMod =
   let failEff = match Map.member (preludeMod ++ ".Fail") (readRef (gEffects g)) with
     True -> preludeMod ++ ".Fail"
     False -> ""
-  let tests = mapList (\(TestInfo name s _) -> Test name s) (reverse (readRef (gTests g)))
+  let tests = map (\(TestInfo name s _) -> Test name s) (reverse (readRef (gTests g)))
   Program (reverse (readRef funcs)) (reverse (readRef values)) (reverse (readRef dicts)) (reverse (readRef foreigns)) (reverse (readRef ops)) (reverse (readRef effects)) main tests failEff
 
 fresh : L -> String -> <IO> String
@@ -44,7 +44,7 @@ lowerModule l m =
   let L _ _ _ _ dicts foreigns ops effects = l
   forEach (moduleDecls m) (\d -> match d with
     DFun _ b _ -> topBind l b
-    DForeign _ name _ target -> match Map.lookup (moduleName m ++ "." ++ name) (readRef (gValues g)) with
+    DForeign _ name _ target _ -> match Map.lookup (moduleName m ++ "." ++ name) (readRef (gValues g)) with
       Some v ->
         let (goTarget, ev) = foreignTarget target (readRef (valueSchemeRef v))
         modifyRef foreigns (\fs -> Foreign (valueSym v) goTarget (valueArity v) ev :: fs)
@@ -53,7 +53,7 @@ lowerModule l m =
       Some ei ->
         let eops = effectOps ei
         forEach eops (\op -> modifyRef ops (\os -> Op (opSym op) (effectName ei) (opIndex op) (opArity op) :: os))
-        modifyRef effects (\es -> Effect (effectName ei) (mapList opName eops) :: es)
+        modifyRef effects (\es -> Effect (effectName ei) (map opName eops) :: es)
       None -> ()
     DClass _ _ _ _ _ defs -> forEach defs (\b -> match readRef (bindInfo b) with
       Some _ -> topBind l b
@@ -141,7 +141,7 @@ bindBody l b =
       let simple = match clauses with
         [Clause _ ps rh] -> match rhsInner rh with
           RBody _ ->
-            let ids = mapList patVarId ps
+            let ids = map patVarId ps
             match allOf isSome ids with
               True -> Some (filterMap id ids, rh)
               False -> None
@@ -150,9 +150,9 @@ bindBody l b =
       match simple with
         Some (params, rh) -> (params, rhsBody l rh)
         None ->
-          let params = mapList (\_ -> fresh l "arg") (range 0 n)
-          let rows = mapList (\(Clause _ ps rh) -> (mapList (lowerPat l) ps, rh)) clauses
-          (params, clauseMatch l (mapList CVar params) rows wh)
+          let params = map (\_ -> fresh l "arg") (range 0 n)
+          let rows = map (\(Clause _ ps rh) -> (map (lowerPat l) ps, rh)) clauses
+          (params, clauseMatch l (map CVar params) rows wh)
 
 -- Lower the equations of a function. The guards of an equation with a
 -- where clause see its bindings, so they become a chain of conditionals
@@ -177,12 +177,12 @@ clauseRows l scruts rows wh acc = match rows with
       let rest = fresh l "rest"
       let restBody = clauseMatch l scruts more wh
       let fallback = CApp (CVar rest) [CLit VUnit]
-      let lowered = mapList (\(Guard _ c body) ->
+      let lowered = map (\(Guard _ c body) ->
         let c2 = lowerExpr l c
         (c2, lowerExpr l body)) gs
       let chain = foldr (\(c2, b2) els -> CIf c2 b2 els) fallback lowered
       let row = Row pats (Some (localBinds l bs chain)) []
-      let wild = Row (mapList (\_ -> CPWild) scruts) (Some fallback) []
+      let wild = Row (map (\_ -> CPWild) scruts) (Some fallback) []
       let m = CMatch scruts (reverse acc ++ [row, wild]) wh
       let u = fresh l "u"
       CLet rest (CLam (Lam [u] restBody [])) m
@@ -199,7 +199,7 @@ rhsBody l rh = match rh with
 
 lowerRow : L -> List CPat -> Rhs -> <IO> Row
 lowerRow l pats rh = match rhsInner rh with
-  RGuards gs -> Row pats None (mapList (\(Guard _ c body) ->
+  RGuards gs -> Row pats None (map (\(Guard _ c body) ->
     let c2 = lowerExpr l c
     (c2, lowerExpr l body)) gs)
   _ -> Row pats (Some (rhsBody l rh)) []
@@ -210,14 +210,14 @@ lowerInstance : L -> InstInfo -> <IO> Unit
 lowerInstance l inst =
   let cl = instClass inst
   let ctxParams = readRef (instCtxParams inst)
-  let ctxVars = mapList CVar ctxParams
-  let superSlots = mapList lowerDict (readRef (instSuperDicts inst))
+  let ctxVars = map CVar ctxParams
+  let superSlots = map lowerDict (readRef (instSuperDicts inst))
   let binds = match instDecl inst with
     DInstance _ _ _ _ _ bs _ -> bs
     _ -> []
   let methods = readRef (instMethods inst)
   let defaults = classDefaults cl
-  let methodSlots = mapList (\m -> match Map.lookup (methodName m) methods with
+  let methodSlots = map (\m -> match Map.lookup (methodName m) methods with
     Some s ->
       match find (\b -> bindName b == methodName m) binds with
         Some b -> topBind l b
@@ -235,7 +235,7 @@ lowerDict d = match d with
     Some s -> lowerDict s
     None -> error ("unsolved dictionary for " ++ cls)
   DictInst s [] -> CGlobal s
-  DictInst s args -> CApp (CGlobal s) (mapList lowerDict args)
+  DictInst s args -> CApp (CGlobal s) (map lowerDict args)
   DictParam n -> CVar n
   DictSuper from idx -> CSelect (lowerDict from) idx
 
@@ -254,8 +254,8 @@ varRef l e = match e with
           [] -> error "method without dictionary"
         _ -> (CGlobal id, dicts)
       let args = match grp with
-        Some g -> mapList CVar (readRef g)
-        None -> mapList (\d -> lowerDict (DictHole d)) rest
+        Some g -> map CVar (readRef g)
+        None -> map (\d -> lowerDict (DictHole d)) rest
       match args with
         [] -> base
         _ -> CApp base args
@@ -265,8 +265,8 @@ ctorValue : L -> CtorInfo -> <IO> CExpr
 ctorValue l ci = match ctorArity ci with
   0 -> CCon ci []
   n ->
-    let params = mapList (\_ -> fresh l "c") (range 0 n)
-    CLam (Lam params (CCon ci (mapList CVar params)) [])
+    let params = map (\_ -> fresh l "c") (range 0 n)
+    CLam (Lam params (CCon ci (map CVar params)) [])
 
 apply : CExpr -> List CExpr -> CExpr
 apply f args = match args with
@@ -279,7 +279,7 @@ tupleCtor : L -> Int -> <IO> CtorInfo
 tupleCtor l n = builtinCtor (lG l) (tupleName n) 0
 
 lowerExprs : L -> List Expr -> <IO> List CExpr
-lowerExprs l es = mapList (lowerExpr l) es
+lowerExprs l es = map (lowerExpr l) es
 
 ctorOf : Ref (Option CtorInfo) -> <IO> CtorInfo
 ctorOf r = match readRef r with
@@ -301,7 +301,7 @@ lowerExpr l e = match e with
     match length largs >= a with
       True -> apply (CCon ci (take a largs)) (drop a largs)
       False -> apply (ctorValue l ci) largs
-  EApp _ f args masksRef -> match Map.isEmpty (readRef masksRef) with
+  EApp _ f args masksRef -> match isEmpty (readRef masksRef) with
     False -> maskedApply l f args (readRef masksRef)
     True ->
       let f2 = lowerExpr l f
@@ -313,7 +313,7 @@ lowerExpr l e = match e with
   EBlock _ stmts -> lowerStmts l stmts
   EMatch p scrut arms ->
     let s = lowerExpr l scrut
-    let rows = mapList (\(Arm _ pat rh) ->
+    let rows = map (\(Arm _ pat rh) ->
       let cp = lowerPat l pat
       lowerRow l [cp] rh) arms
     CMatch [s] rows (posString p)
@@ -359,9 +359,9 @@ lowerExpr l e = match e with
     -- a match that binds the field in every constructor
     let v = fresh l "fld"
     let s = lowerExpr l x
-    let rows = mapList (\ci ->
+    let rows = map (\ci ->
       let i = ctorFieldIndex ci name
-      let pats = mapList (\j -> match j == i with
+      let pats = map (\j -> match j == i with
         True -> CPVar v
         False -> CPWild) (range 0 (ctorArity ci))
       Row [CPCon ci pats] (Some (CVar v)) []) (recordCtors l (readRef recRef))
@@ -370,11 +370,11 @@ lowerExpr l e = match e with
     let ci = ctorOf conRef
     let inOrder = allOf (\(i, FieldInit _ n _) -> ctorFieldIndex ci n == i) (indexed fs)
     match inOrder with
-      True -> CCon ci (mapList (\(FieldInit _ _ v) -> lowerExpr l v) fs)
+      True -> CCon ci (map (\(FieldInit _ _ v) -> lowerExpr l v) fs)
       False ->
         let (vals, lets) = bindInOrder l fs
         let names = withDefault [] (ctorFieldNames ci)
-        let args = mapList (\n -> withDefault (CLit VUnit) (lookup n vals)) names
+        let args = map (\n -> withDefault (CLit VUnit) (lookup n vals)) names
         wrapLets lets (CCon ci args)
   EUpdate p x fs recRef ->
     -- the record is evaluated first, then the new values in source order;
@@ -386,8 +386,8 @@ lowerExpr l e = match e with
         let name = fresh l "rec"
         (CVar name, [(name, s0)])
     let (vals, vlets) = bindInOrder l fs
-    let rows = mapList (\ci ->
-      let parts = mapList (\n -> match lookup n vals with
+    let rows = map (\ci ->
+      let parts = map (\n -> match lookup n vals with
         Some v -> (CPWild, v)
         None ->
           let f = fresh l "f"
@@ -435,7 +435,7 @@ isWildLike p = match p with
 maskedApply : L -> Expr -> List Expr -> Map.Map Int (List String) -> <IO> CExpr
 maskedApply l fe argEs masks =
   let f = lowerExpr l fe
-  let lowered = mapList (\a ->
+  let lowered = map (\a ->
     let x = lowerExpr l a
     match isAtom x with
       True -> (None, x)
@@ -453,19 +453,19 @@ maskedApply l fe argEs masks =
 
 lambda : L -> List Pattern -> Expr -> String -> <IO> Lam
 lambda l params body wh =
-  let parts = mapList (\p -> match patVarId p with
+  let parts = map (\p -> match patVarId p with
     Some id -> (id, CPWild, True)
     None
       | isWildLike p -> (fresh l "w", CPWild, True)
       | otherwise ->
           let name = fresh l "p"
           (name, lowerPat l p, False)) params
-  let names = mapList (\(n, _, _) -> n) parts
+  let names = map (\(n, _, _) -> n) parts
   match allOf (\(_, _, s) -> s) parts with
     True -> Lam names (lowerExpr l body) []
     False ->
-      let pats = mapList (\(_, p, _) -> p) parts
-      Lam names (CMatch (mapList CVar names) [Row pats (Some (lowerExpr l body)) []] wh) []
+      let pats = map (\(_, p, _) -> p) parts
+      Lam names (CMatch (map CVar names) [Row pats (Some (lowerExpr l body)) []] wh) []
 
 lowerStmts : L -> List Stmt -> <IO> CExpr
 lowerStmts l ss = match ss with
@@ -493,7 +493,7 @@ localBinds l bs body = foldr (\g acc -> match g with
 -- Lower mutually recursive local functions.
 localGroup : L -> List Bind -> CExpr -> <IO> CExpr
 localGroup l bs body =
-  let parts = mapList (\b ->
+  let parts = map (\b ->
     let (params, v) = bindBody l b
     let ts = paramTypes b (length (dictParamsOf b)) (length params)
     (readRef (bindId b), Lam (dictParamsOf b ++ params) v ts)) bs
@@ -533,11 +533,11 @@ lowerHandle l e = match e with
     let ret2 = match ret with
       Some (HandlerClause rp _ ps rb _) -> Some (lambda l ps rb (posString rp))
       None -> None
-    let clauses = mapList (\hc -> match readRef (hcOp hc) with
+    let clauses = map (\hc -> match readRef (hcOp hc) with
       Some op -> (opIndex op, hc)
       None -> (-1, hc)) ops
     -- (lambda, continuation name, uses k, tail-resumptive)
-    let lowered = mapList (\i -> match lookup i clauses with
+    let lowered = map (\i -> match lookup i clauses with
       None -> error "missing handler clause"
       Some (HandlerClause cp _ ps cb _) ->
         let lam = lambda l ps cb (posString cp)
@@ -551,17 +551,17 @@ lowerHandle l e = match e with
           True -> isSome (tailResume lb k)
           False -> False
         (lam, k, usesK, ok)) (range 0 (length (effectOps ei)))
-    let usesKs = mapList (\(_, _, u, _) -> u) lowered
+    let usesKs = map (\(_, _, u, _) -> u) lowered
     let tail = allOf (\(_, _, _, ok) -> ok) lowered
     let direct = allOf (\(_, _, u, ok) -> ok || not u) lowered
     match direct with
       True ->
-        let lams = mapList (\(Lam ps lb ts, k, _, ok) -> match ok with
+        let lams = map (\(Lam ps lb ts, k, _, ok) -> match ok with
           True -> Lam ps (withDefault lb (tailResume lb k)) ts
           False -> Lam ps lb ts) lowered
         CHandle (Handle en body2 ret2 lams usesKs tail (not tail) None [])
       False ->
-        let lams = mapList (\(lam, _, _, _) -> lam) lowered
+        let lams = map (\(lam, _, _, _) -> lam) lowered
         let (sret, sops) = statePattern l ret2 lams
         CHandle (Handle en body2 ret2 lams usesKs False False sret sops)
   _ -> error "lowerHandle"
@@ -573,7 +573,7 @@ statePattern : L -> Option Lam -> List Lam -> <IO> (Option Lam, List Lam)
 statePattern l ret ops = match ret with
   Some (Lam [x] (CLam (Lam [s] rbody _)) _) ->
     let pair = tupleCtor l 2
-    let sops = mapList (\(Lam ps b _) -> match b with
+    let sops = map (\(Lam ps b _) -> match b with
       CLam (Lam [st] inner _) -> match tailResume2 inner (lastOf ps) pair with
         Some nb -> Some (Lam (initList ps ++ [st]) nb [])
         None -> None
@@ -627,13 +627,13 @@ private tailMatch : List CExpr -> List Row -> String -> String -> (CExpr -> Opti
 tailMatch scruts rows wh k f = match anyOf (\s -> mentions s k) scruts with
   True -> None
   False ->
-    let rows2 = mapList (\(Row pats body guards) ->
+    let rows2 = map (\(Row pats body guards) ->
       let body2 = match body with
         Some b -> match f b with
           Some b2 -> Some (Some b2)
           None -> None
         None -> Some None
-      let guards2 = mapList (\(c, b) -> match mentions c k with
+      let guards2 = map (\(c, b) -> match mentions c k with
         True -> None
         False -> match f b with
           Some b2 -> Some (c, b2)
@@ -655,12 +655,12 @@ lowerPat l p = match p with
   PLit _ lit -> CPLit (litVal lit)
   PAs _ _ idRef inner -> CPAs (readRef idRef) (lowerPat l inner)
   PAnnot _ inner _ -> lowerPat l inner
-  PTuple _ elems -> CPCon (tupleCtor l (length elems)) (mapList (lowerPat l) elems)
+  PTuple _ elems -> CPCon (tupleCtor l (length elems)) (map (lowerPat l) elems)
   PList _ elems ->
     let cons = builtinCtor (lG l) tListName 1
     let nil = builtinCtor (lG l) tListName 0
     foldr (\x acc -> CPCon cons [lowerPat l x, acc]) (CPCon nil []) elems
-  PCon _ _ _ args conRef -> CPCon (ctorOf conRef) (mapList (lowerPat l) args)
+  PCon _ _ _ args conRef -> CPCon (ctorOf conRef) (map (lowerPat l) args)
   PRec pos _ _ fields conRef ->
     let ci = ctorOf conRef
-    CPCon ci (mapList (lowerPat l) (recordPositional ci fields pos))
+    CPCon ci (map (lowerPat l) (recordPositional ci fields pos))

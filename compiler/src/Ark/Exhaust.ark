@@ -1,9 +1,9 @@
 -- Exhaustiveness checking of pattern matches.
 module Ark.Exhaust
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
 import Std.Map as Map
 
 -- A constructor for the analysis: name, short name, arity, type name.
@@ -29,7 +29,7 @@ siblings : Global -> SCon -> <IO> List SCon
 siblings g (con@(SCon _ _ _ tn)) = match startsWith "tuple" tn with
   True -> [con]
   False -> match Map.lookup tn (readRef (gTypes g)) with
-    Some ti -> mapList fromCtor (typeInfoCtors ti)
+    Some ti -> map fromCtor (typeInfoCtors ti)
     None -> [con]
 
 simplify : Global -> Pattern -> <IO> SPat
@@ -42,11 +42,11 @@ simplify g p = match p with
   PLit _ l -> SLit (litKey l)
   PCon _ _ _ args conRef -> match readRef conRef with
     None -> SWild
-    Some ci -> SCtor (fromCtor ci) (mapList (simplify g) args)
+    Some ci -> SCtor (fromCtor ci) (map (simplify g) args)
   PRec pos _ _ fields conRef -> match readRef conRef with
     None -> SWild
-    Some ci -> SCtor (fromCtor ci) (mapList (simplify g) (recordPositional ci fields pos))
-  PTuple _ elems -> SCtor (tupleSCon (length elems)) (mapList (simplify g) elems)
+    Some ci -> SCtor (fromCtor ci) (map (simplify g) (recordPositional ci fields pos))
+  PTuple _ elems -> SCtor (tupleSCon (length elems)) (map (simplify g) elems)
   PList _ elems ->
     let cons = fromCtor (builtinCtor g tListName 1)
     let nil = fromCtor (builtinCtor g tListName 0)
@@ -65,16 +65,16 @@ checkMatches c = forEach (reverse (readRef (cMatches c))) (checkSite c)
 private checkSite : Checker -> MatchSite -> <IO> Unit
 checkSite c (MatchSite p what rows guarded) =
   let g = cG c
-  let kept = filterMap id (mapList (\(r, gd) -> match gd with
+  let kept = filterMap id (map (\(r, gd) -> match gd with
     True -> None
-    False -> Some (mapList (simplify g) r)) (zip rows guarded))
+    False -> Some (map (simplify g) r)) (zip rows guarded))
   let n = match rows with
     r :: _ -> length r
     [] -> 0
   match missing g kept n with
     None -> ()
     Some w ->
-      let parts = mapList (\x -> showSPat x (n > 1)) w
+      let parts = map (\x -> showSPat x (n > 1)) w
       errorf c p "non-exhaustive patterns in ${what}: the case `${joinWith " " parts}` is not handled"
 
 showSPat : SPat -> Bool -> String
@@ -82,7 +82,7 @@ showSPat p atom = match p with
   SWild -> "_"
   SLit _ -> "<literal>"
   SCtor (SCon _ short _ tn) args
-    | startsWith "tuple" tn -> "(" ++ joinWith ", " (mapList (\a -> showSPat a False) args) ++ ")"
+    | startsWith "tuple" tn -> "(" ++ joinWith ", " (map (\a -> showSPat a False) args) ++ ")"
     | tn == tListName -> match args with
         [h, t] ->
           let s = showSPat h True ++ " :: " ++ showSPat t False
@@ -93,7 +93,7 @@ showSPat p atom = match p with
     | otherwise -> match args with
         [] -> short
         _ ->
-          let s = joinWith " " (short :: mapList (\a -> showSPat a True) args)
+          let s = joinWith " " (short :: map (\a -> showSPat a True) args)
           match atom with
             True -> "(" ++ s ++ ")"
             False -> s

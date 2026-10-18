@@ -1,6 +1,6 @@
 -- JSON values: parsing, printing and queries.
 --
---   import Std.Json as Json
+--   import Std.Json
 --   match Json.parse "{\"name\": \"Arkadia\", \"tags\": [\"strict\"]}" with
 --     Ok v -> Json.field "name" v >>= Json.asString   -- Some "Arkadia"
 --     Err e -> ...
@@ -33,7 +33,7 @@ array xs = JArray xs
 
 -- An array of strings, numbers, ...: list JString ["a", "b"]
 list : (a -> Json) -> List a -> Json
-list f xs = JArray (mapList f xs)
+list f xs = JArray (map f xs)
 
 -- None becomes null.
 optional : (a -> Json) -> Option a -> Json
@@ -51,8 +51,8 @@ render (JBool True) = "true"
 render (JBool False) = "false"
 render (JNumber n) = renderNumber n
 render (JString s) = quote s
-render (JArray xs) = "[" ++ joinWith "," (mapList render xs) ++ "]"
-render (JObject kvs) = "{" ++ joinWith "," (mapList (\(k, v) -> quote k ++ ":" ++ render v) kvs) ++ "}"
+render (JArray xs) = "[" ++ joinWith "," (map render xs) ++ "]"
+render (JObject kvs) = "{" ++ joinWith "," (map (\(k, v) -> quote k ++ ":" ++ render v) kvs) ++ "}"
 
 -- Indented JSON text, `indent` spaces per level.
 renderPretty : Int -> Json -> String
@@ -63,11 +63,11 @@ pretty _ _ (JArray []) = "[]"
 pretty _ _ (JObject []) = "{}"
 pretty ind depth (JArray xs) =
   let pad = spaces (ind * (depth + 1))
-  "[\n" ++ joinWith ",\n" (mapList (\x -> pad ++ pretty ind (depth + 1) x) xs) ++ "\n" ++ spaces (ind * depth) ++ "]"
+  "[\n" ++ joinWith ",\n" (map (\x -> pad ++ pretty ind (depth + 1) x) xs) ++ "\n" ++ spaces (ind * depth) ++ "]"
 pretty ind depth (JObject kvs) =
   let pad = spaces (ind * (depth + 1))
   let entry (k, v) = pad ++ quote k ++ ": " ++ pretty ind (depth + 1) v
-  "{\n" ++ joinWith ",\n" (mapList entry kvs) ++ "\n" ++ spaces (ind * depth) ++ "}"
+  "{\n" ++ joinWith ",\n" (map entry kvs) ++ "\n" ++ spaces (ind * depth) ++ "}"
 pretty _ _ v = render v
 
 private spaces : Int -> String
@@ -83,7 +83,7 @@ renderNumber n
 
 -- A JSON string literal.
 quote : String -> String
-quote s = "\"" ++ concatStrings (mapList escapeChar (chars s)) ++ "\""
+quote s = "\"" ++ concatStrings (map escapeChar (chars s)) ++ "\""
 
 private escapeChar : Char -> String
 escapeChar '"' = "\\\""
@@ -247,13 +247,13 @@ isNull _ = False
 
 -- Field names of an object.
 keys : Json -> List String
-keys (JObject kvs) = mapList fst kvs
+keys (JObject kvs) = map fst kvs
 keys _ = []
 
 -- Set (or add) a field of an object; other values are left unchanged.
 setField : String -> Json -> Json -> Json
 setField k v (JObject kvs) = match lookup k kvs with
-  Some _ -> JObject (mapList (\(k2, v2) -> match k2 == k with
+  Some _ -> JObject (map (\(k2, v2) -> match k2 == k with
     True -> (k2, v)
     False -> (k2, v2)) kvs)
   None -> JObject (kvs ++ [(k, v)])
@@ -421,7 +421,7 @@ instance FromJson Unit where
     _ -> expected "null" v
 
 instance ToJson a => ToJson (List a) where
-  toJson xs = JArray (mapList toJson xs)
+  toJson xs = JArray (map toJson xs)
 
 instance FromJson a => FromJson (List a) where
   fromJson v = match v with
@@ -480,7 +480,7 @@ instance JsonKey Int where
   keyFromString s = parseInt s
 
 instance (JsonKey k, ToJson v) => ToJson (Map.Map k v) where
-  toJson m = JObject (mapList (\(k, v) -> (keyToString k, toJson v)) (Map.toList m))
+  toJson m = JObject (map (\(k, v) -> (keyToString k, toJson v)) (Map.toList m))
 
 instance (Ord k, JsonKey k, FromJson v) => FromJson (Map.Map k v) where
   fromJson v = match v with

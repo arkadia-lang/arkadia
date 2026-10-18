@@ -1,7 +1,7 @@
 -- Unit tests for Std.Parser.
 module ParserTests
 
-import Std.Parser
+import Std.Parser (..)
 
 -- Arithmetic with precedence, parentheses and right-associative '^'.
 expr : Unit -> <ParseInput, Fail> Int

@@ -3,7 +3,7 @@
 -- the descriptions of declared entities.
 module Ark.Ast
 
-import Ark.Util
+import Ark.Util (..)
 import Std.Map as Map
 
 -- ================================================================ positions
@@ -668,7 +668,7 @@ patPos p = match p with
 -- The positional sub-patterns of a valid record pattern; missing fields
 -- are wildcards.
 recordPositional : CtorInfo -> List (String, Pattern) -> Pos -> List Pattern
-recordPositional ci fields p = mapList (\i -> match find (\(f, _) -> ctorFieldIndex ci f == i) fields with
+recordPositional ci fields p = map (\i -> match find (\(f, _) -> ctorFieldIndex ci f == i) fields with
   Some (_, sub) -> sub
   None -> PWild p) (range 0 (ctorArity ci))
 
@@ -891,7 +891,7 @@ type Decl
   | DClass Pos String String (List PredE) (List Sig) (List Bind)
   | DInstance Pos (List PredE) String String TypeExpr (List Bind) Bool
   | DEffect Pos String (List String) (List Sig)
-  | DForeign Pos String SchemeE String
+  | DForeign Pos String SchemeE String Bool
   | DFixity Pos Int Int (List String)
   | DTest Pos String Expr (Ref String)
 

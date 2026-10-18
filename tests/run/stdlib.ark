@@ -1,12 +1,12 @@
-import Std.State
-import Std.Reader
-import Std.Writer
-import Std.Exn
+import Std.State (..)
+import Std.Reader (..)
+import Std.Writer (..)
+import Std.Exn (..)
 import Std.Map as Map
 import Std.Set as Set
 import Std.Array as Array
-import Std.Random
-import Std.Bits
+import Std.Random (..)
+import Std.Bits (..)
 import Std.String as S
 
 type Config = Config Int String
@@ -39,23 +39,23 @@ main () =
   printLn (catchExn (\_ -> parseAge "x") (\_ -> 0))
   -- maps and sets
   let freq = wordFreq "the quick brown fox jumps over the lazy dog the end"
-  printLn (Map.lookup "the" freq, Map.lookup "cat" freq, Map.size freq)
+  printLn (Map.lookup "the" freq, Map.lookup "cat" freq, length freq)
   printLn (Map.toList (Map.filter (> 1) freq))
   let m = Map.fromList (map (\i -> (i, i * i)) [1 .. 1000])
-  printLn (Map.size m, Map.lookup 500 m, sum (Map.values (Map.delete 1000 m)))
+  printLn (length m, Map.lookup 500 m, sum (Map.values (Map.delete 1000 m)))
   printLn (Map.keys (map (* 2) (Map.fromList [(3, 1), (1, 2), (2, 3)])))
   let s = Set.fromList [5, 1, 3, 1, 5, 9]
-  printLn (Set.toList s, Set.member 3 s, Set.member 4 s)
+  printLn (toList s, Set.member 3 s, Set.member 4 s)
   printLn (Set.union s (Set.fromList [2, 4]))
   printLn (Set.intersection s (Set.fromList [1, 9, 10]))
   -- arrays
   let arr = Array.generate 10 (\i -> i * i)
-  printLn (Array.get 3 arr, Array.get 10 arr, Array.length arr)
-  printLn (Array.set 0 100 arr |> Array.toList |> take 3)
+  printLn (Array.get 3 arr, Array.get 10 arr, length arr)
+  printLn (Array.set 0 100 arr |> toList |> take 3)
   printLn (Array.sort (Array.fromList [3, 1, 2]))
   printLn (sum arr)
   -- deterministic random numbers
-  let rolls = runRandom 42 (\_ -> mapList (\_ -> randomInt 1 6) [1 .. 10])
+  let rolls = runRandom 42 (\_ -> map (\_ -> randomInt 1 6) [1 .. 10])
   printLn (all (\r -> r >= 1 && r <= 6) rolls, length rolls)
   printLn (runRandom 7 (\_ -> randomInt 1 1000) == runRandom 7 (\_ -> randomInt 1 1000))
   -- bits and strings

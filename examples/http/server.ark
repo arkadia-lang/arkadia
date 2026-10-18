@@ -11,9 +11,9 @@
 -- change that halts (404) leaves the list untouched.
 module Main
 
-import Std.Http
+import Std.Http (..)
 import Std.Json as Json
-import Std.Mutex
+import Std.Mutex (..)
 
 type Todo = Todo { id : Int, title : String, done : Bool }
   deriving (Json.ToJson)

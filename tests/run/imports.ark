@@ -1,0 +1,20 @@
+-- `import M` makes M's names available qualified only; `(..)` or a list of
+-- names also brings them into scope unqualified; `as` renames the qualifier.
+import Std.String
+import Std.Map
+import Std.Array as Arr
+import Std.State (..)
+import Std.Option (map2)
+
+main () =
+  -- `length` and `map` are the Foldable / Functor methods, whatever is imported
+  let ages = Map.fromList [("ann", "30"), ("bob", "x")]
+  println "${map (\s -> withDefault 0 (String.toInt s)) ages} ${length ages}"
+  println (String.join ", " (Map.keys ages))
+  -- the full module path works as a qualifier too
+  println (Std.String.toUpper "abc")
+  println "${map2 (+) (Some 1) (Some 2)}"
+  let (_, n) = runState 1 (\_ -> put (get () + 1))
+  println "${n}"
+  let a = Arr.fromList [1, 2, 3]
+  println "${Arr.get 1 a} ${length a} ${toList (map (* 10) a)}"

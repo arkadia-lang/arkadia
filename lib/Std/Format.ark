@@ -1,6 +1,6 @@
 -- Formatting numbers for people.
 --
---   import Std.Format
+--   import Std.Format (..)
 --   fixed 2 3.14159       -- "3.14"
 --   grouped 1234567       -- "1,234,567"
 --   padInt 3 7            -- "007"

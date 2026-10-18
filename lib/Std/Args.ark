@@ -1,6 +1,6 @@
 -- Command-line argument parsing.
 --
---   import Std.Args
+--   import Std.Args (..)
 --   main () = match parseArgs ["output", "o"] (args ()) with
 --     Err msg -> eprintln msg
 --     Ok opts ->

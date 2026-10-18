@@ -2,15 +2,15 @@
 -- definition and formatting.
 module Ark.Lsp
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Loader
-import Ark.Project
-import Ark.Json
-import Ark.Render
-import Ark.Format
-import Std.IO
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Loader (..)
+import Ark.Project (..)
+import Ark.Json (..)
+import Ark.Render (..)
+import Ark.Format (..)
+import Std.IO (..)
 import Std.Map as Map
 
 foreign stdinLine : Unit -> <IO> Option String = "NativeStdinLine"
@@ -137,7 +137,7 @@ formatEdits docs path =
       _ -> JArr []
 
 private utf16Length : String -> Int
-utf16Length s = sum (mapList (\c -> match charCode c > 65535 with
+utf16Length s = sum (map (\c -> match charCode c > 65535 with
   True -> 2
   False -> 1) (chars s))
 
@@ -202,7 +202,7 @@ check (Server libDir _ docs info lastErr srcs) p =
       [ ("range", range (position ln cl) (position ln (cl + 1)))
       , ("severity", jint 1)
       , ("source", JStr "arkadia")
-      , ("message", JStr (msg ++ concatStrings (mapList (\n -> "\n" ++ n) notes)))
+      , ("message", JStr (msg ++ concatStrings (map (\n -> "\n" ++ n) notes)))
       ]
     Map.insert f (snoc (Map.findWithDefault [] f acc) d) acc) Map.empty errs
   match loaderGlobal l with

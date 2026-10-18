@@ -1,6 +1,6 @@
 -- Base64 and hexadecimal encodings of strings (as bytes in UTF-8).
 --
---   import Std.Encoding
+--   import Std.Encoding (..)
 --   base64Encode "hello"           -- "aGVsbG8="
 --   base64Decode "aGVsbG8="        -- Ok "hello"
 --   hexEncode "hi"                 -- "6869"

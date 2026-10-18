@@ -3,9 +3,9 @@
 -- of written types.
 module Ark.Types
 
-import Ark.Util
-import Ark.Ast
-import Std.Exn
+import Ark.Util (..)
+import Ark.Ast (..)
+import Std.Exn (..)
 import Std.Map as Map
 
 -- ================================================================ kinds
@@ -260,8 +260,8 @@ occurrences (Printer counts _ _ _) t = Map.findWithDefault 0 (varKey t) (readRef
 
 letters : Bool -> List String
 letters row = match row with
-  True -> mapList charToString (chars "efghijklmnopqrstuvwxyzabcd")
-  False -> mapList charToString (chars "abcdefghijklmnopqrstuvwxyz")
+  True -> map charToString (chars "efghijklmnopqrstuvwxyzabcd")
+  False -> map charToString (chars "abcdefghijklmnopqrstuvwxyz")
 
 pfresh : Printer -> String -> Bool -> <IO> String
 pfresh pr base row =
@@ -325,10 +325,10 @@ ptyp pr t0 prec = match prune t0 with
         startsWith "Tuple" name && length args > 1 && "Tuple${length args}" == name
       _ -> False
     match tuple with
-      True -> "(" ++ joinWith ", " (mapList (\a -> ptyp pr a 0) args) ++ ")"
+      True -> "(" ++ joinWith ", " (map (\a -> ptyp pr a 0) args) ++ ")"
       False ->
         let hs = ptyp pr h 2
-        let s = joinWith " " (hs :: mapList (\a -> ptyp pr a 2) args)
+        let s = joinWith " " (hs :: map (\a -> ptyp pr a 2) args)
         match prec > 1 with
           True -> "(" ++ s ++ ")"
           False -> s
@@ -338,7 +338,7 @@ ptyp pr t0 prec = match prune t0 with
 prow : Printer -> Type -> <IO> String
 prow pr t =
   let (labels, tail) = flattenRow t
-  let parts = mapList (\l -> ptyp pr l 0) labels
+  let parts = map (\l -> ptyp pr l 0) labels
   let s = "<" ++ joinWith ", " parts
   let s2 = match tail with
     TRowEmpty -> s
@@ -373,7 +373,7 @@ typesString : List Type -> <IO> List String
 typesString ts =
   let pr = newPrinter ()
   forEach ts (pcount pr)
-  mapList (\t -> ptyp pr t 0) ts
+  map (\t -> ptyp pr t 0) ts
 
 schemeString : Scheme -> <IO> String
 schemeString (Scheme kinds names preds t) =
@@ -387,7 +387,7 @@ schemeString (Scheme kinds names preds t) =
     modifyRef gen (\gs -> snoc gs n))
   pcount pr t
   forEach preds (\(Pred _ pt) -> pcount pr pt)
-  let ps = mapList (\(Pred cl pt) -> shortName (className cl) ++ " " ++ ptyp pr pt 2) preds
+  let ps = map (\(Pred cl pt) -> shortName (className cl) ++ " " ++ ptyp pr pt 2) preds
   let ctx = match ps with
     [] -> ""
     [one] -> one ++ " => "
@@ -406,7 +406,7 @@ ctorString ti ci = match ctorFieldNames ci with
     forEach (typeInfoParams ti) (\n ->
       let v = pfresh pr n False
       modifyRef gen (\gs -> snoc gs v))
-    let parts = mapList (\(n, t) -> n ++ " : " ++ ptyp pr t 0) (zip names (ctorFields ci))
+    let parts = map (\(n, t) -> n ++ " : " ++ ptyp pr t 0) (zip names (ctorFields ci))
     ctorShort ci ++ " { " ++ joinWith ", " parts ++ " }"
 
 -- ================================================================ checker state
@@ -565,7 +565,7 @@ opName2 r = match r with
 
 -- Turn a name (possibly an operator) into an identifier fragment.
 sanitize : String -> String
-sanitize name = concatStrings (mapList sanitizeChar (chars name))
+sanitize name = concatStrings (map sanitizeChar (chars name))
 
 private sanitizeChar : Char -> String
 sanitizeChar r
@@ -716,7 +716,7 @@ unifyRows c a b =
 
 missingEffect : List Type -> Type -> <Exn String, IO> a
 missingEffect labels _ =
-  let names = mapList typeString labels
+  let names = map typeString labels
   throw "effect ${joinNames names} is not allowed here"
 
 extendTail : Type -> List Type -> Type -> <Exn String, IO> Unit
@@ -944,6 +944,10 @@ addUnqualCtor m name ci mod = match Map.lookup name (readRef m) with
   Some (CEAmbig mods) -> modifyRef m (Map.insert name (CEAmbig (snoc mods mod)))
   None -> modifyRef m (Map.insert name (CEctor ci))
 
+-- `import M` and `import M as A` make M's names available qualified only
+-- (`M.x`, `A.x`); `import M (x, T(..))` and `import M (..)` also bring the
+-- listed (or all) names into scope unqualified. The Prelude is imported
+-- with `(..)` unless the module imports it itself.
 processImports : Checker -> List Import -> <IO> Unit
 processImports c imports0 =
   let imports = match cMod c == preludeMod || anyOf (\i -> importPath i == preludeMod) imports0 with
@@ -966,7 +970,7 @@ processImport c (Import ipos path ialias names all) =
         True -> addQual path
         False -> ()
       let exMod = exportsModule ex
-      match all || ialias == "" && isEmpty names with
+      match all with
         True ->
           forEach (Map.toList (readRef (exportsValues ex))) (\(n, v) -> addUnqualValue (scopeValues sc) n v exMod)
           forEach (Map.toList (readRef (exportsTypes ex))) (\(n, v) -> addUnqualType (scopeTypes sc) n v exMod)
@@ -992,6 +996,19 @@ processImport c (Import ipos path ialias names all) =
                     Some v -> addUnqualValue (scopeValues sc) (opName op) v exMod
                     None -> ())
                   _ -> ())
+
+-- For an unknown unqualified name that an imported module exports: a hint
+-- to write it qualified, as in " (did you mean String.split?)".
+private qualifiedHint : Checker -> String -> (Exports -> <> Ref (Map.Map String v)) -> <IO> String
+qualifiedHint c name table =
+  let quals = filter (\(_, exs) -> anyOf (\ex -> Map.member name (readRef (table ex))) exs) (Map.toList (readRef (scopeQuals (cScope c))))
+  let short = filter (\(q, _) -> not (anyOf (\ch -> ch == '.') (chars q))) quals
+  let names = map (\(q, _) -> q ++ "." ++ name) (match short with
+    [] -> quals
+    _ -> short)
+  match names with
+    [] -> ""
+    _ -> " (did you mean ${joinWith " or " names}?)"
 
 -- Resolve a module qualifier to its export tables.
 qualified : Checker -> Pos -> String -> <IO> Option (List Exports)
@@ -1029,7 +1046,7 @@ lookupValue c p qual name = match qual with
       errorf c p "'${name}' is ambiguous: it is exported by ${joinNames mods}"
       None
     None ->
-      errorf c p "unknown variable '${name}'"
+      errorf c p "unknown variable '${name}'${qualifiedHint c name exportsValues}"
       None
   _ -> match qualified c p qual with
     None -> None
@@ -1053,7 +1070,7 @@ lookupCtor c p qual name = match qual with
       errorf c p "constructor '${name}' is ambiguous: it is exported by ${joinNames mods}"
       None
     None ->
-      errorf c p "unknown constructor '${name}'"
+      errorf c p "unknown constructor '${name}'${qualifiedHint c name exportsCtors}"
       None
   _ ->
     let exs = qualified c p qual
@@ -1080,7 +1097,7 @@ lookupTypeName c p qual name = match qual with
       errorf c p "type '${name}' is ambiguous: it is exported by ${joinNames mods}"
       None
     None ->
-      errorf c p "unknown type '${name}'"
+      errorf c p "unknown type '${name}'${qualifiedHint c name exportsTypes}"
       None
     Some v -> Some v
   _ ->
@@ -1240,7 +1257,7 @@ convType c te env = match te with
     let r = convStar c res env
     (TFun a e r, KStar)
   TTupleE p elems ->
-    let ts = mapList (\e ->
+    let ts = map (\e ->
       let (t, k) = convArg c e env
       match unifyKind k KStar with
         True -> ()
@@ -1274,7 +1291,7 @@ convStar c te env =
 
 convRow : Checker -> RowE -> TvEnv -> <IO> Type
 convRow c (RowE p labels tailName) env =
-  let ls = mapList (\l ->
+  let ls = map (\l ->
     let (t, k) = convType c l env
     match unifyKind k KEffect with
       True -> ()
@@ -1386,7 +1403,7 @@ convScheme c (SchemeE preds te) env =
       _ -> ()
     False -> ()
   let t = convSpine c te env
-  let ps = filterMap id (mapList (\(PredE p q cls pty) -> match lookupClass c p q cls with
+  let ps = filterMap id (map (\(PredE p q cls pty) -> match lookupClass c p q cls with
     None -> None
     Some cl ->
       let (pt, pk) = convType c pty env
@@ -1396,7 +1413,7 @@ convScheme c (SchemeE preds te) env =
         False -> errorf c p "kind mismatch in constraint ${cls}: expected ${kindString ck}, got ${kindString pk}"
       Some (Pred cl pt)) preds)
   let names = envNames env
-  let kinds = mapList (\n -> defaultKind (envKindOf env n)) names
+  let kinds = map (\n -> defaultKind (envKindOf env n)) names
   Scheme kinds names ps t
 
 -- Convert a top-level signature.

@@ -1,7 +1,7 @@
 -- Wall-clock time, sleeping and timing. Times are seconds since the Unix
 -- epoch as Float. (`clock` in the Prelude measures seconds since start.)
 --
---   import Std.Time
+--   import Std.Time (..)
 --   let (result, secs) = measure (\_ -> work ())
 --   println "took ${formatDuration secs}"
 module Std.Time
