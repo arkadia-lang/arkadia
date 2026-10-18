@@ -14,8 +14,16 @@ foreign removeAll : String -> <IO> Result String Unit = "rt.RemoveAll"
 foreign currentDir : Unit -> <IO> Result String String = "rt.CurrentDir"
 foreign setEnv : String -> String -> <IO> Result String Unit = "rt.SetEnv"
 
--- Run a program: returns (exit code, stdout, stderr).
-foreign runCommand : String -> List String -> <IO> Result String (Int, String, String) = "rt.RunCommand"
+-- What a finished program printed and how it exited.
+type CommandOutput = CommandOutput { exitCode : Int, stdout : String, stderr : String }
+  deriving (Eq, Show)
+
+private foreign primRunCommand : String -> List String -> <IO> Result String (Int, String, String) = "rt.RunCommand"
+
+-- Run a program and wait for it. Err is for a program that could not be
+-- started; a non-zero exit code is Ok.
+runCommand : String -> List String -> <IO> Result String CommandOutput
+runCommand name argv = map (\(code, out, err) -> CommandOutput { exitCode = code, stdout = out, stderr = err }) (primRunCommand name argv)
 
 readLines : String -> <IO> Result String (List String)
 readLines path = map lines (readFile path)

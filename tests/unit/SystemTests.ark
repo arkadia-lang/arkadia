@@ -70,3 +70,11 @@ test "dates" =
   assertEq (Time.parseIso "2026-10-17T18:30:00+09:00" |> map Time.formatIso) (Some "2026-10-17T09:30:00Z")
   assertEq (Time.parseIso "yesterday") None
   assertEq (Time.startOfDay t |> Time.formatIso) "2024-02-28T00:00:00Z"
+
+test "commands" =
+  match runCommand "sh" ["-c", "echo out; echo err >&2; exit 3"] with
+    Ok r -> assertEq r (CommandOutput { exitCode = 3, stdout = "out\n", stderr = "err\n" })
+    Err e -> fail e
+  match runCommand "arkadia-no-such-command" [] with
+    Ok _ -> fail "a missing program is an error"
+    Err _ -> ()
