@@ -455,7 +455,7 @@ applyArgs c masks fun ft0 args eff = applyLoop c masks fun ft0 (indexed args) ef
 private applyLoop : Checker -> Option (Ref (Map.Map Int (List String))) -> Expr -> Type -> List (Int, Expr) -> Type -> Bool -> <IO> Type
 applyLoop c masks fun ft0 args eff effFailed = match args with
   [] -> ft0
-  (i, a) :: rest -> match prune ft0 with
+  (i, a) :: rest -> match whnf c ft0 with
     TFun farg feff fres ->
       -- check the argument before the call's effect: arguments are
       -- evaluated first and may determine the callee's effect row
@@ -537,7 +537,7 @@ checkLam : Checker -> List Pattern -> Expr -> Type -> <IO> Bool
 checkLam c params body t =
   let collect ps cur acc = match ps with
     [] -> Some (reverse acc)
-    _ :: more -> match prune cur with
+    _ :: more -> match whnf c cur with
       TFun a e r -> collect more r ((a, e, r) :: acc)
       _ -> None
   match collect params t [] with
@@ -883,7 +883,7 @@ inferIntLit c p isFloat =
 
 -- Check a literal against an expected type.
 private checkIntLit : Checker -> Pos -> Ref Bool -> Type -> String -> <IO> Unit
-checkIntLit c p isFloat t what = match prune t with
+checkIntLit c p isFloat t what = match whnf c t with
   TMeta m ->
     markLit c m
     modifyRef (cLits c) (\ls -> snoc ls (LitWanted p isFloat t))
@@ -1073,7 +1073,7 @@ inferUpdate c e eff = match e with
     let t = inferExpr c x eff
     checkDupFields c fs
     let group = map (\(FieldInit _ n _) -> n) fs
-    let (h, _) = headOf t
+    let (h, _) = headOf (whnf c t)
     match isMeta h with
       False ->
         -- the record type is known: check the new values against the fields

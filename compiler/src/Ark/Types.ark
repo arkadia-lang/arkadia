@@ -632,15 +632,17 @@ bindMeta m t =
   writeRef (metaRef m) (Some t)
 
 -- Bind a type variable, keeping the type of an integer literal Int or
--- Float.
+-- Float. The literal is bound to Int or Float itself, not to a type equal
+-- to it only in a match arm or through a type family: the literal is
+-- settled later (maybe outside the arm) by its bound type.
 bindMetaC : Checker -> Meta -> Type -> <Exn String, IO> Unit
 bindMetaC c m t = match Map.member (metaId m) (readRef (cLitMetas c)) with
   False -> bindMeta m t
-  True -> match prune t with
+  True -> match whnf c t with
     TMeta n ->
       markLit c n
-      bindMeta m t
-    TCon n _ | n == tIntName || n == tFloatName -> bindMeta m t
+      bindMeta m (TMeta n)
+    t2@(TCon n _) | n == tIntName || n == tFloatName -> bindMeta m t2
     _ ->
       writeRef (metaRef m) (Some (tInt c))
       throw ""
