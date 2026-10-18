@@ -100,6 +100,32 @@ firstElem xs = match xs with
   x :: _ -> x
   [] -> 0
 
+-- the types reduced by type families and refined by matches are seen
+-- through: function types, Float literals, constraints
+type family Id (a : Type) : Type where
+  Id a = a
+
+applyId : Id (Int -> Int) -> Int
+applyId f = f 3
+
+halfId : Id Float -> Id Float
+halfId x = x / 2
+
+firstOf : b -> b -> b
+firstOf x _ = x
+
+type Num2 a where
+  FloatN : Num2 Float
+  IntN : Num2 Int
+
+two : Num2 a -> a -> a
+two n v = match n with
+  FloatN -> firstOf 2 v
+  IntN -> firstOf 2 v
+
+pick : c -> Elem c -> Elem c
+pick _ d = d
+
 main () =
   let v = VCons 1 (VCons 2 VNil)
   let w = VCons 3 VNil
@@ -119,3 +145,17 @@ main () =
   println (describe v No)
   println (show (firstElem [7, 8]))
   println (show (secondHead v (VCons 5 w)))
+  println (show (applyId (\x -> x + 1)))
+  println (show (halfId 3))
+  println (show (two FloatN 0.5))
+  println (show (two IntN 7))
+  let showPick = \xs d -> show (pick xs d)
+  println (showPick [1] 2)
+  let sameElem = \x -> pick [x] x
+  println (show (sameElem 'c'))
+  -- the length of v is not known here: the arms assume nothing about it
+  let isNil = \(v : Vec n Int) -> match v with
+    VCons _ _ -> False
+    VNil -> True
+  println (show (isNil VNil))
+  println (show (isNil (VCons 1 VNil)))
