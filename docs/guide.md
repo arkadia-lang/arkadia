@@ -516,15 +516,64 @@ main () = runAsync (\_ ->
 
 ## 11. テスト
 
-```haskell
-test "reverse is an involution" =
-  assertEq (reverse (reverse [1, 2, 3])) [1, 2, 3]
+テストはトップレベルの `test "名前" = 本体` 宣言で書きます。テストはテスト対象のすぐ近く、同じモジュールの中に置くのが基本です。
+テストは関数の使い方を示す実行可能なドキュメントでもあり、コードと並べておくと一緒に読まれ、一緒に更新されます。
 
-test "parse fails on garbage" =
-  assert (isNone (parseInt "x")) "expected None"
+```haskell
+module Stack
+
+type Stack a = Stack (List a)
+
+empty : Stack a
+empty = Stack []
+
+push : a -> Stack a -> Stack a
+push x (Stack xs) = Stack (x :: xs)
+
+pop : Stack a -> Option (a, Stack a)
+pop (Stack []) = None
+pop (Stack (x :: xs)) = Some (x, Stack xs)
+
+test "pop returns the last pushed value" =
+  match pop (push 2 (push 1 empty)) with
+    Some (x, _) -> assertEq x 2
+    None -> fail "expected a value"
+
+test "pop on an empty stack is None" =
+  assert (isNone (pop empty)) "expected None"
 ```
 
-テスト本体は `Unit` 型で、`<Fail, IO>` のエフェクトを使えます。`ark test` はプロジェクトの `src/` と `tests/` の全モジュールのテストを実行します。
+- テスト本体は `Unit` 型で、`<Fail, IO>` のエフェクトを使えます。`fail` するか実行時エラーになるとテストは失敗し、他のテストは続けて実行されます。
+- Prelude の `assert : Bool -> String -> <Fail> Unit` は条件が偽なら与えたメッセージで失敗し、`assertEq actual expected` は二つの値が等しくなければ両方を `show` して失敗します。`orFail msg opt` は `Option` から値を取り出し、`None` なら失敗します。
+- 同じモジュールのテストは `private` な宣言も使えます。
+- テストは `ark test` のときだけ実行され、`ark build` / `ark run` のプログラムからは呼ばれません。
+
+### 置き場所
+
+| 置き場所 | 用途 |
+|---|---|
+| `src/` の各モジュールの中（推奨） | 単体テスト。テスト対象と同じモジュールに書く |
+| `tests/` のモジュール | 複数のモジュールにまたがる結合テスト。テスト対象を `import` し、公開 API だけを使う |
+
+`ark new` の雛形も、`src/Greeting.ark` の `greet` のすぐ下にそのテストを置いています。
+`tests/` は必要になったら作ってください（`tests/` のモジュールは `src/` のモジュールを `import` でき、ビルドには含まれません）。
+
+### 実行
+
+```sh
+ark test                 # src/ と tests/ の全モジュールのテストを実行
+ark test -run Stack      # 「モジュール名 › テスト名」がこの文字列を含むテストだけを実行
+ark test src/Stack.ark   # 一つのファイル（とそれが import するモジュール）のテストを実行
+```
+
+```
+✓ Stack › pop returns the last pushed value
+✓ Stack › pop on an empty stack is None
+
+all 2 tests passed (0s)
+```
+
+失敗したテストがあると、失敗の理由を表示して終了コード 1 で終わります。
 
 ## 12. FFI
 
