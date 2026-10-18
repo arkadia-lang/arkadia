@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/diag"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
 )
 
 // Formatting

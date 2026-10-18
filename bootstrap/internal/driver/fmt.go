@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/diag"
-	"github.com/verniyyy/arkadia/bootstrap/internal/syntax"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/syntax"
 )
 
 // cmdFmt formats .ark files in place, or reports the files that are not

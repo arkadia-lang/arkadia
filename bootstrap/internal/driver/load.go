@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/diag"
-	"github.com/verniyyy/arkadia/bootstrap/internal/syntax"
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
-	"github.com/verniyyy/arkadia/lib"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/syntax"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/lib"
 )
 
 // Program is a loaded and type checked set of modules.

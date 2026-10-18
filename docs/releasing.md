@@ -8,11 +8,11 @@
    `[Unreleased]` は空にする。末尾のリンクも更新する
 
    ```markdown
-   [Unreleased]: https://github.com/verniyyy/arkadia/compare/vX.Y.Z...HEAD
-   [X.Y.Z]: https://github.com/verniyyy/arkadia/releases/tag/vX.Y.Z
+   [Unreleased]: https://github.com/arkadia-lang/arkadia/compare/vX.Y.Z...HEAD
+   [X.Y.Z]: https://github.com/arkadia-lang/arkadia/releases/tag/vX.Y.Z
    ```
 
-   （0.1.0 より後のバージョンは `[X.Y.Z]: https://github.com/verniyyy/arkadia/compare/v<前のバージョン>...vX.Y.Z` にし、既存の行は残す）
+   （0.1.0 より後のバージョンは `[X.Y.Z]: https://github.com/arkadia-lang/arkadia/compare/v<前のバージョン>...vX.Y.Z` にし、既存の行は残す）
 3. PR を作って CI が通ったら main にマージする
 4. main の最新コミットにタグを付けて push する
 

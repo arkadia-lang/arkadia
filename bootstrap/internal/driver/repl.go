@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
 )
 
 const replHelp = `Commands:

@@ -1,6 +1,6 @@
 package types
 
-import "github.com/verniyyy/arkadia/bootstrap/internal/syntax"
+import "github.com/arkadia-lang/arkadia/bootstrap/internal/syntax"
 
 // ------------------------------------------------------------------ integer literals
 //

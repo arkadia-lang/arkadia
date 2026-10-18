@@ -31,4 +31,4 @@
   数値（Math / Bits / BigInt）、バイナリ（Bytes / Encoding / Crypto）、入出力（IO / Path / Time / Ref / Args）、
   並行性（Task / Channel / Atomic / Mutex）、ネットワーク（Net / Url / Http のサーバとクライアント）
 
-[Unreleased]: https://github.com/verniyyy/arkadia/commits/main
+[Unreleased]: https://github.com/arkadia-lang/arkadia/commits/main

@@ -3,7 +3,7 @@ package codegen
 import (
 	"fmt"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/core"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/core"
 )
 
 // Optimize performs simple whole-program simplifications on Core:

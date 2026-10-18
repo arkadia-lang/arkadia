@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/core"
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/core"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
 )
 
 // irrefutable reports whether a pattern always matches a value of its type.
