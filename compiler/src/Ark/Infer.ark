@@ -822,7 +822,7 @@ checkPatRefining c p name ci args t seen =
     TMeta _ ->
       errorf c p "the type of the value matched by constructor '${name}' must be known here; add a type signature"
       None
-    _ -> match ctorFieldsAt c ci t True with
+    _ -> match ctorFieldsAt c ci t with
       Some fs -> Some fs
       None ->
         errorf c p "constructor '${name}' can never match a value of type ${typeString (normalize c (zonk t))}"

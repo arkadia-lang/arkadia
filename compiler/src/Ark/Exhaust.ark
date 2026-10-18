@@ -216,7 +216,7 @@ possibleCons c con0 t =
       None -> True
       Some ci ->
         let saved = readRef (cGivens c)
-        let ok = isSome (ctorFieldsAt c ci ty False)
+        let ok = isSome (ctorFieldsAt c ci ty)
         writeRef (cGivens c) saved
         ok) all
     _ -> all
@@ -242,7 +242,7 @@ conFieldTypes c con t =
       False -> match sconInfo g con with
         None -> unknown
         Some ci -> match typeRefines g (ctorTypeName ci) with
-          True -> match ctorFieldsAt c ci ty False with
+          True -> match ctorFieldsAt c ci ty with
             Some fs -> map Some fs
             None -> unknown
           False ->

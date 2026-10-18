@@ -938,26 +938,23 @@ matchPat c sub pat arg = match pat with
 -- Make the type of a matched value (a) and the result type of a
 -- constructor pattern (b) equal, assuming equations for the rigid type
 -- variables of a (GADT matching). own: the metas instantiating the
--- constructor's type variables; other metas are unified when bindOuter,
--- and otherwise left alone. Throws when no value of type a can be built
--- with the constructor.
-refine : Checker -> List Int -> Bool -> Type -> Type -> <Exn String, IO> Unit
-refine c own bindOuter a0 b0 =
+-- constructor's type variables. Other metas are left alone: binding them
+-- would make the equations of one arm hold outside it (and in the other
+-- arms). Throws when no value of type a can be built with the constructor.
+refine : Checker -> List Int -> Type -> Type -> <Exn String, IO> Unit
+refine c own a0 b0 =
   let a = whnf c a0
   let b = whnf c b0
   let isOwn m = elem (metaId m) own
-  let outer _ = match bindOuter with
-    True -> unify c a b
-    False -> ()
   match sameVar a b with
     True -> ()
     False -> match (a, b) with
       (TMeta ma, _) | isOwn ma -> bindMeta ma b
       (_, TMeta mb) | isOwn mb -> bindMeta mb a
-      (TMeta _, _) -> outer ()
-      (_, TMeta _) -> outer ()
+      (TMeta _, _) -> ()
+      (_, TMeta _) -> ()
       _ -> match isRow a || isRow b with
-        True -> outer ()
+        True -> ()
         False -> match isStuck c a || isStuck c b with
           True -> ()
           False -> match (a, b) with
@@ -965,12 +962,12 @@ refine c own bindOuter a0 b0 =
             (_, TSkol i _ _ _) -> assume c i a
             (TCon x _, TCon y _) | x == y -> ()
             (TApp f1 x1, TApp f2 x2) ->
-              refine c own bindOuter f1 f2
-              refine c own bindOuter x1 x2
+              refine c own f1 f2
+              refine c own x1 x2
             (TFun x1 e1 r1, TFun x2 e2 r2) ->
-              refine c own bindOuter x1 x2
-              refine c own bindOuter e1 e2
-              refine c own bindOuter r1 r2
+              refine c own x1 x2
+              refine c own e1 e2
+              refine c own r1 r2
             _ -> throw "inaccessible"
 
 -- Assume that rigid type variable i equals t in the current match arm.
@@ -1002,15 +999,15 @@ splitFunAcc n t acc = match n == 0 with
 -- its fields, assuming the equations it implies (pushed on the givens), or
 -- None when no value of type t can be built with ci. The type variables of
 -- the constructor left unknown are existential and become rigid.
-ctorFieldsAt : Checker -> CtorInfo -> Type -> Bool -> <IO> Option (List Type)
-ctorFieldsAt c ci t bindOuter =
+ctorFieldsAt : Checker -> CtorInfo -> Type -> <IO> Option (List Type)
+ctorFieldsAt c ci t =
   let Scheme kinds names _ st = ctorScheme ci
   let metas = map (newMetaV c) kinds
   -- these metas are all bound here: binding them to rigid type variables
   -- of any scope is fine
   forEach metas (\m -> writeRef (metaLevelRef m) maxLevel)
   let (fields, res) = splitFun (ctorArity ci) (substGen st (map TMeta metas))
-  match try (\_ -> refine c (map metaId metas) bindOuter t res) with
+  match try (\_ -> refine c (map metaId metas) t res) with
     Err _ -> None
     Ok _ ->
       forEach (indexed metas) (\(i, m) -> match readRef (metaRef m) with
