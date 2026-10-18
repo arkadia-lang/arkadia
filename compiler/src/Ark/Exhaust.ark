@@ -1,9 +1,9 @@
 -- Exhaustiveness checking of pattern matches.
 module Ark.Exhaust
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
 import Std.Map as Map
 
 -- A constructor for the analysis: name, short name, arity, type name.

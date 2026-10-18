@@ -1,18 +1,18 @@
 -- ark: the Arkadia compiler, written in Arkadia.
 module Main
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Check
-import Ark.Loader
-import Ark.Render
-import Ark.Project
-import Ark.Build
-import Ark.Repl
-import Ark.Lsp
-import Ark.Format
-import Std.IO
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Check (..)
+import Ark.Loader (..)
+import Ark.Render (..)
+import Ark.Project (..)
+import Ark.Build (..)
+import Ark.Repl (..)
+import Ark.Lsp (..)
+import Ark.Format (..)
+import Std.IO (..)
 import Std.Map as Map
 import Std.Path as Path
 

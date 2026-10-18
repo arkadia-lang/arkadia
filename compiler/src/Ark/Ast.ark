@@ -3,7 +3,7 @@
 -- the descriptions of declared entities.
 module Ark.Ast
 
-import Ark.Util
+import Ark.Util (..)
 import Std.Map as Map
 
 -- ================================================================ positions

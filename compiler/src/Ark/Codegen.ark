@@ -1,11 +1,11 @@
 -- Translating Core programs to Go source code.
 module Ark.Codegen
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Core
-import Ark.Opt
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Core (..)
+import Ark.Opt (..)
 import Std.Map as Map
 
 -- ================================================================ globals

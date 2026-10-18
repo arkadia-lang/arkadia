@@ -3,9 +3,9 @@
 -- of written types.
 module Ark.Types
 
-import Ark.Util
-import Ark.Ast
-import Std.Exn
+import Ark.Util (..)
+import Ark.Ast (..)
+import Std.Exn (..)
 import Std.Map as Map
 
 -- ================================================================ kinds
@@ -944,6 +944,10 @@ addUnqualCtor m name ci mod = match Map.lookup name (readRef m) with
   Some (CEAmbig mods) -> modifyRef m (Map.insert name (CEAmbig (snoc mods mod)))
   None -> modifyRef m (Map.insert name (CEctor ci))
 
+-- `import M` and `import M as A` make M's names available qualified only
+-- (`M.x`, `A.x`); `import M (x, T(..))` and `import M (..)` also bring the
+-- listed (or all) names into scope unqualified. The Prelude is imported
+-- with `(..)` unless the module imports it itself.
 processImports : Checker -> List Import -> <IO> Unit
 processImports c imports0 =
   let imports = match cMod c == preludeMod || anyOf (\i -> importPath i == preludeMod) imports0 with
@@ -966,7 +970,7 @@ processImport c (Import ipos path ialias names all) =
         True -> addQual path
         False -> ()
       let exMod = exportsModule ex
-      match all || ialias == "" && isEmpty names with
+      match all with
         True ->
           forEach (Map.toList (readRef (exportsValues ex))) (\(n, v) -> addUnqualValue (scopeValues sc) n v exMod)
           forEach (Map.toList (readRef (exportsTypes ex))) (\(n, v) -> addUnqualType (scopeTypes sc) n v exMod)
@@ -992,6 +996,19 @@ processImport c (Import ipos path ialias names all) =
                     Some v -> addUnqualValue (scopeValues sc) (opName op) v exMod
                     None -> ())
                   _ -> ())
+
+-- For an unknown unqualified name that an imported module exports: a hint
+-- to write it qualified, as in " (did you mean String.split?)".
+private qualifiedHint : Checker -> String -> (Exports -> <> Ref (Map.Map String v)) -> <IO> String
+qualifiedHint c name table =
+  let quals = filter (\(_, exs) -> anyOf (\ex -> Map.member name (readRef (table ex))) exs) (Map.toList (readRef (scopeQuals (cScope c))))
+  let short = filter (\(q, _) -> not (anyOf (\ch -> ch == '.') (chars q))) quals
+  let names = map (\(q, _) -> q ++ "." ++ name) (match short with
+    [] -> quals
+    _ -> short)
+  match names with
+    [] -> ""
+    _ -> " (did you mean ${joinWith " or " names}?)"
 
 -- Resolve a module qualifier to its export tables.
 qualified : Checker -> Pos -> String -> <IO> Option (List Exports)
@@ -1029,7 +1046,7 @@ lookupValue c p qual name = match qual with
       errorf c p "'${name}' is ambiguous: it is exported by ${joinNames mods}"
       None
     None ->
-      errorf c p "unknown variable '${name}'"
+      errorf c p "unknown variable '${name}'${qualifiedHint c name exportsValues}"
       None
   _ -> match qualified c p qual with
     None -> None
@@ -1053,7 +1070,7 @@ lookupCtor c p qual name = match qual with
       errorf c p "constructor '${name}' is ambiguous: it is exported by ${joinNames mods}"
       None
     None ->
-      errorf c p "unknown constructor '${name}'"
+      errorf c p "unknown constructor '${name}'${qualifiedHint c name exportsCtors}"
       None
   _ ->
     let exs = qualified c p qual
@@ -1080,7 +1097,7 @@ lookupTypeName c p qual name = match qual with
       errorf c p "type '${name}' is ambiguous: it is exported by ${joinNames mods}"
       None
     None ->
-      errorf c p "unknown type '${name}'"
+      errorf c p "unknown type '${name}'${qualifiedHint c name exportsTypes}"
       None
     Some v -> Some v
   _ ->

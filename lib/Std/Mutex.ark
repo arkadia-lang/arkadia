@@ -11,7 +11,7 @@
 -- effects (if it fails or is abandoned, the value is left unchanged).
 module Std.Mutex
 
-import Std.Ref
+import Std.Ref (..)
 
 -- A lock.
 type Mutex

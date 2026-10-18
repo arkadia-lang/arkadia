@@ -3,8 +3,8 @@
 -- syntactic sugar is gone.
 module Ark.Core
 
-import Ark.Util
-import Ark.Ast
+import Ark.Util (..)
+import Ark.Ast (..)
 
 -- literal values
 type Val = VInt Int | VFloat Float | VString String | VChar Char | VBool Bool | VUnit

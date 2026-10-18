@@ -8,11 +8,11 @@ import Std.HashMap as HM
 import Std.BigInt (BigInt, big)
 import Std.BigInt as Big
 import Std.Array as Array
-import Std.Encoding
-import Std.Crypto
-import Std.Args
+import Std.Encoding (..)
+import Std.Crypto (..)
+import Std.Args (..)
 import Std.Result (isErr)
-import Std.Format
+import Std.Format (..)
 import Std.Csv as Csv
 
 test "regex matching and captures" =

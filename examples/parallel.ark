@@ -3,9 +3,9 @@
 -- long, even pure loops.
 module Main
 
-import Std.Task
+import Std.Task (..)
 import Std.Channel as Chan
-import Std.Atomic
+import Std.Atomic (..)
 import Std.Time (sleep)
 
 -- ------------------------------------------------------------ data parallelism

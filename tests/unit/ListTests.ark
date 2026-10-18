@@ -1,7 +1,7 @@
 -- Unit tests for Std.List.
 module ListTests
 
-import Std.List
+import Std.List (..)
 
 test "unfold and rangeStep" =
   assertEq (unfold (\n -> match n > 0 with

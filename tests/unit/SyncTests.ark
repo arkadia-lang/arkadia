@@ -1,10 +1,10 @@
 -- Unit tests for Std.Channel, Std.Atomic and Std.Mutex.
 module SyncTests
 
-import Std.Task
-import Std.Channel
-import Std.Atomic
-import Std.Mutex
+import Std.Task (..)
+import Std.Channel (..)
+import Std.Atomic (..)
+import Std.Mutex (..)
 import Std.Time (sleep)
 
 test "channels carry values between tasks" =

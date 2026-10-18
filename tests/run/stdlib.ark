@@ -1,12 +1,12 @@
-import Std.State
-import Std.Reader
-import Std.Writer
-import Std.Exn
+import Std.State (..)
+import Std.Reader (..)
+import Std.Writer (..)
+import Std.Exn (..)
 import Std.Map as Map
 import Std.Set as Set
 import Std.Array as Array
-import Std.Random
-import Std.Bits
+import Std.Random (..)
+import Std.Bits (..)
 import Std.String as S
 
 type Config = Config Int String

@@ -1,8 +1,8 @@
 -- The lexer and the layout algorithm.
 module Ark.Lexer
 
-import Ark.Util
-import Ark.Ast
+import Ark.Util (..)
+import Ark.Ast (..)
 import Std.Array as Arr
 
 -- ================================================================ characters

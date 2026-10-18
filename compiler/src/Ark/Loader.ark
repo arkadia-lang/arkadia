@@ -1,12 +1,12 @@
 -- Finding, parsing and checking the modules of a program.
 module Ark.Loader
 
-import Ark.Util
-import Ark.Ast
-import Ark.Parser
-import Ark.Fixity
-import Ark.Types
-import Ark.Check
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Parser (..)
+import Ark.Fixity (..)
+import Ark.Types (..)
+import Ark.Check (..)
 import Std.Map as Map
 
 -- search paths, standard library directory, parsed modules, modules in

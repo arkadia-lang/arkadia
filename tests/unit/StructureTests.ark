@@ -3,7 +3,7 @@ module StructureTests
 
 import Std.Queue as Queue
 import Std.Heap as Heap
-import Std.Ord
+import Std.Ord (..)
 
 -- Pop every element from the front.
 drainQueue : Queue.Queue a -> List a

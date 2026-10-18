@@ -1,7 +1,7 @@
 -- Pseudo-random numbers as an algebraic effect.
 module Std.Random
 
-import Std.Bits
+import Std.Bits (..)
 
 effect Random where
   nextInt : Unit -> Int

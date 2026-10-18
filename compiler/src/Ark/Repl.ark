@@ -2,15 +2,15 @@
 -- Main module; expressions are evaluated by building and running it.
 module Ark.Repl
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Check
-import Ark.Loader
-import Ark.Render
-import Ark.Project
-import Ark.Build
-import Std.IO
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Check (..)
+import Ark.Loader (..)
+import Ark.Render (..)
+import Ark.Project (..)
+import Ark.Build (..)
+import Std.IO (..)
 import Std.Map as Map
 
 replHelp : String

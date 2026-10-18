@@ -2,12 +2,12 @@
 -- deriving), top-level bindings and tests.
 module Ark.Check
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Infer
-import Ark.Exhaust
-import Std.Exn
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Infer (..)
+import Ark.Exhaust (..)
+import Std.Exn (..)
 import Std.Map as Map
 
 -- Type check a parsed module and register its exports.

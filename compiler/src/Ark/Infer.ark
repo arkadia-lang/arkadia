@@ -2,10 +2,10 @@
 -- with type classes (dictionary passing) and effect rows.
 module Ark.Infer
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Std.Exn
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Std.Exn (..)
 import Std.Map as Map
 
 -- ================================================================ errors

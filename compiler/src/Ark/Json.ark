@@ -1,7 +1,7 @@
 -- JSON values: parsing and encoding (encoded like Go's encoding/json).
 module Ark.Json
 
-import Ark.Util
+import Ark.Util (..)
 
 -- Numbers keep their source text.
 type Json

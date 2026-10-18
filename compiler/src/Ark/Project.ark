@@ -1,9 +1,9 @@
 -- Package manifests (ark.toml) and source roots of a project.
 module Ark.Project
 
-import Ark.Util
-import Std.IO
-import Std.Bits
+import Ark.Util (..)
+import Std.IO (..)
+import Std.Bits (..)
 import Std.Map as Map
 
 manifestName : String

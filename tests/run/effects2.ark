@@ -1,6 +1,6 @@
 -- Interaction between the different handler implementations.
-import Std.Exn
-import Std.State
+import Std.Exn (..)
+import Std.State (..)
 
 effect Yield where
   yield : Int -> Unit

@@ -2,7 +2,7 @@
 -- lexical closures. Errors are an effect, the environment is a Map.
 module Main
 
-import Std.Exn
+import Std.Exn (..)
 import Std.Map as Map
 
 type Value

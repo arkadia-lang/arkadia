@@ -1,10 +1,10 @@
 -- The recursive descent parser. Parse errors abort with the Exn effect.
 module Ark.Parser
 
-import Ark.Util
-import Ark.Ast
-import Ark.Lexer
-import Std.Exn
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Lexer (..)
+import Std.Exn (..)
 import Std.Array as Arr
 import Std.Map as Map
 

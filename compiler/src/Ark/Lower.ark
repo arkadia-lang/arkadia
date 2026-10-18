@@ -1,10 +1,10 @@
 -- Lowering checked modules to Core.
 module Ark.Lower
 
-import Ark.Util
-import Ark.Ast
-import Ark.Types
-import Ark.Core
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Types (..)
+import Ark.Core (..)
 import Std.Map as Map
 
 -- global information, counter for fresh names, and the parts of the

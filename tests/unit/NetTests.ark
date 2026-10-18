@@ -8,9 +8,9 @@ import Std.Http (Handler, Response(..), get, post, delete, router, scope, text, 
 import Std.Json as Json
 import Std.State as St
 import Std.IO as IO
-import Std.Task
+import Std.Task (..)
 import Std.Channel as Chan
-import Std.Atomic
+import Std.Atomic (..)
 import Std.Time (sleep)
 
 ok : Result String a -> <Fail> a

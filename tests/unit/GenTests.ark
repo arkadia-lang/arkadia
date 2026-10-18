@@ -1,8 +1,8 @@
 -- Unit tests for Std.Gen.
 module GenTests
 
-import Std.Gen
-import Std.State
+import Std.Gen (..)
+import Std.State (..)
 
 naturals : Unit -> <Yield Int> a
 naturals () = iterateGen (+ 1) 0

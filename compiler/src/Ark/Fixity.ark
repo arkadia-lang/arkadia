@@ -3,8 +3,8 @@
 -- string interpolation).
 module Ark.Fixity
 
-import Ark.Util
-import Ark.Ast
+import Ark.Util (..)
+import Ark.Ast (..)
 import Std.Map as Map
 
 -- associativity (0 none, 1 left, 2 right) and precedence

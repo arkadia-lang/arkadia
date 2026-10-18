@@ -19,9 +19,9 @@
 -- the same tokens, layout and comments as the input.
 module Ark.Format
 
-import Ark.Util
-import Ark.Ast
-import Ark.Lexer
+import Ark.Util (..)
+import Ark.Ast (..)
+import Ark.Lexer (..)
 import Std.Array as Arr
 import Std.MArray as MA
 import Std.Map as Map
