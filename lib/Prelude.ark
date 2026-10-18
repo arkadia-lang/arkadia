@@ -1,17 +1,12 @@
 -- Prelude: imported implicitly by every module.
 module Prelude
 
-infixr 0 <|
 infixl 0 |>
-infixr 9 <<
-infixl 9 >>
 infixr 5 ++
-infixr 6 <>
 infix 4 ==, !=, <, <=, >, >=
 infixl 6 +, -
 infixl 7 *, /, %
-infixl 4 <$>, <*>, <$
-infixl 1 >>=
+infixl 4 <*>
 infix 5 ..
 
 -- ===================================================================
@@ -52,15 +47,6 @@ snd (_, y) = y
 
 (|>) : a -> (a -> b) -> b
 x |> f = f x
-
-(<|) : (a -> b) -> a -> b
-f <| x = f x
-
-(>>) : (a -> b) -> (b -> c) -> a -> c
-(>>) f g x = g (f x)
-
-(<<) : (b -> c) -> (a -> b) -> a -> c
-(<<) f g x = f (g x)
 
 foreign error : String -> a = "rt.Error"
 
@@ -401,31 +387,28 @@ showRecord name fields = name ++ " { " ++ joinWith ", " (map (\(f, v) -> f ++ " 
 -- ===================================================================
 
 class Semigroup a where
-  (<>) : a -> a -> a
+  (++) : a -> a -> a
 
 class Semigroup a => Monoid a where
   empty : a
 
-(++) : Semigroup a => a -> a -> a
-(++) = (<>)
-
 foreign primStringConcat : String -> String -> String = "rt.StringConcat"
 
 instance Semigroup String where
-  (<>) = primStringConcat
+  (++) = primStringConcat
 
 instance Monoid String where
   empty = ""
 
 instance Semigroup (List a) where
-  (<>) = append
+  (++) = append
 
 instance Monoid (List a) where
   empty = []
 
 instance Semigroup Ordering where
-  EQ <> o = o
-  o <> _ = o
+  EQ ++ o = o
+  o ++ _ = o
 
 instance Monoid Ordering where
   empty = EQ
@@ -447,7 +430,7 @@ class Functor f => Applicative f where
   (<*>) : f (a -> <e> b) -> f a -> <e> f b
 
 class Applicative m => Monad m where
-  (>>=) : m a -> (a -> m b) -> m b
+  andThen : (a -> m b) -> m a -> m b
 
 -- `toList`, `length` and `isEmpty` default to folds; instances that know
 -- them directly override them.
@@ -464,15 +447,6 @@ class Foldable t where
 class (Functor t, Foldable t) => Traversable t where
   traverse : Applicative f => (a -> f b) -> t a -> f (t b)
 
-(<$>) : Functor f => (a -> b) -> f a -> f b
-(<$>) = map
-
-(<$) : Functor f => a -> f b -> f a
-x <$ fa = map (const x) fa
-
-andThen : Monad m => (a -> m b) -> m a -> m b
-andThen f m = m >>= f
-
 sequence : (Traversable t, Applicative f) => t (f a) -> f (t a)
 sequence = traverse id
 
@@ -480,7 +454,7 @@ forEach : Foldable t => t a -> (a -> Unit) -> Unit
 forEach xs f = foldl (\_ x -> f x) () xs
 
 foldMap : (Foldable t, Monoid m) => (a -> m) -> t a -> m
-foldMap f xs = foldr (\x acc -> f x <> acc) empty xs
+foldMap f xs = foldr (\x acc -> f x ++ acc) empty xs
 
 sum : (Foldable t, Num a) => t a -> a
 sum xs = foldl (+) (fromInt 0) xs
@@ -519,7 +493,7 @@ instance Applicative List where
   fs <*> xs = concatMap (\f -> map f xs) fs
 
 instance Monad List where
-  xs >>= f = concatMap f xs
+  andThen f xs = concatMap f xs
 
 instance Foldable List where
   foldr f z xs = foldl (\acc x -> f x acc) z (reverse xs)
@@ -560,8 +534,8 @@ instance Applicative Option where
   _ <*> _ = None
 
 instance Monad Option where
-  None >>= _ = None
-  Some x >>= f = f x
+  andThen _ None = None
+  andThen f (Some x) = f x
 
 instance Foldable Option where
   foldr _ z None = z
@@ -615,8 +589,8 @@ instance Applicative (Result e) where
   Ok _ <*> Err e = Err e
 
 instance Monad (Result e) where
-  Ok x >>= f = f x
-  Err e >>= _ = Err e
+  andThen f (Ok x) = f x
+  andThen _ (Err e) = Err e
 
 instance Foldable (Result e) where
   foldr f z (Ok x) = f x z

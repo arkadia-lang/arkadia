@@ -8,7 +8,7 @@ runWriter : Monoid w => (Unit -> <Writer w | e> a) -> <e> (a, w)
 runWriter action =
   let run = handle action () with
     return x -> \acc -> (x, acc)
-    tell w k -> \acc -> k () (acc <> w)
+    tell w k -> \acc -> k () (acc ++ w)
   run empty
 
 execWriter : Monoid w => (Unit -> <Writer w | e> a) -> <e> w

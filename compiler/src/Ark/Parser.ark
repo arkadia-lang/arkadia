@@ -325,13 +325,7 @@ funBind p =
       (n, paramPatterns p)
     _ | isInfixDef p ->
           let left = patApp p
-          let n = match at p BACKTICK with
-            True ->
-              skip p
-              let id = tokText (expect p LIDENT)
-              expect_ p BACKTICK
-              id
-            False -> tokText (next p)
+          let n = tokText (next p)
           let right = patApp p
           (n, [left, right])
       | tokKind t == LIDENT && tokQual t == "" ->
@@ -456,8 +450,7 @@ isInfixDef p = match startsPatAtom p with
     let save = readRef (pIndex p)
     let res = try (\_ ->
       let _ = patApp p
-      let k = peekKind p
-      k == OP || k == BACKTICK)
+      peekKind p == OP)
     writeRef (pIndex p) save
     match res with
       Ok b -> b
@@ -749,16 +742,11 @@ fixityDecl p =
     _ -> 0
   let n = expect p INT
   let prec = withDefault 0 (parseInt (tokText n))
-  let loop acc = match at p OP || at p BACKTICK with
-    True -> match accept p BACKTICK with
-      True ->
-        let op = tokText (expect p LIDENT)
-        expect_ p BACKTICK
-        loop (op :: acc)
-      False ->
-        let op = tokText (next p)
-        let _ = accept p COMMA
-        loop (op :: acc)
+  let loop acc = match at p OP with
+    True ->
+      let op = tokText (next p)
+      let _ = accept p COMMA
+      loop (op :: acc)
     False -> reverse acc
   match loop [] with
     [] -> unexpected p "operator"
@@ -1214,15 +1202,6 @@ tryOperator p =
     OP ->
       skip p
       Some (mkVar (tokPos t) (tokQual t) (tokText t))
-    BACKTICK ->
-      skip p
-      let id = peek p
-      match tokKind id == LIDENT || tokKind id == UIDENT with
-        True -> ()
-        False -> unexpected p "identifier"
-      skip p
-      expect_ p BACKTICK
-      Some (mkVar (tokPos id) (tokQual id) (tokText id))
     _ -> None
 
 prefixOperand : P -> <Exn Diag, IO> Expr
@@ -1429,7 +1408,7 @@ parenExpr : P -> Token -> <Exn Diag, IO> Expr
 parenExpr p t = match accept p RPAREN with
   True -> EUnit (tokPos t)
   False
-    | at p OP && tokText (peek p) != "-" || at p BACKTICK ->
+    | at p OP && tokText (peek p) != "-" ->
         let op = withDefault (EUnit (tokPos t)) (tryOperator p)
         match accept p RPAREN with
           True -> op

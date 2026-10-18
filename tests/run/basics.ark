@@ -30,4 +30,4 @@ main () =
   printLn ([1, 2] ++ [3], "ab" ++ "cd")
   printLn (concatMap (\x -> [x, x]) [1, 2])
   printLn (nub [1, 1, 2, 3, 2], intersperse 0 [1, 2, 3])
-  println "${(+ 1) 2} ${(10 -) 4} ${(`mod` 4) 10}"
+  println "${(+ 1) 2} ${(10 -) 4} ${mod 10 4}"

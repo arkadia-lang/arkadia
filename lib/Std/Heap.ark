@@ -80,7 +80,7 @@ instance (Ord a, Show a) => Display (Heap a) where
   display h = show h
 
 instance Ord a => Semigroup (Heap a) where
-  a <> b = merge a b
+  a ++ b = merge a b
 
 instance Ord a => Monoid (Heap a) where
   empty = Leaf

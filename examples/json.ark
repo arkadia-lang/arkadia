@@ -162,7 +162,7 @@ main () =
     Ok json ->
       println (render json)
       println (withDefault "?" (map render (field "tags" json)))
-      printLn (map render (field "features" json >>= field "native"))
+      printLn (map render (field "features" json |> andThen (field "native")))
   match parse "[1, 2,, 3]" with
     Err e -> println "parse error: ${e}"
     Ok j -> println (render j)

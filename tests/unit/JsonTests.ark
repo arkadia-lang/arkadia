@@ -51,10 +51,10 @@ test "pretty printing" =
 
 test "queries" =
   let v = parsed "{\"user\": {\"name\": \"ark\", \"age\": 3, \"tags\": [\"x\", \"y\"], \"admin\": false}}"
-  assertEq (Json.at ["user", "name"] v >>= Json.asString) (Some "ark")
-  assertEq (Json.at ["user", "age"] v >>= Json.asInt) (Some 3)
-  assertEq (Json.at ["user", "tags"] v >>= Json.index 1 >>= Json.asString) (Some "y")
-  assertEq (Json.at ["user", "admin"] v >>= Json.asBool) (Some False)
+  assertEq (Json.at ["user", "name"] v |> andThen Json.asString) (Some "ark")
+  assertEq (Json.at ["user", "age"] v |> andThen Json.asInt) (Some 3)
+  assertEq (Json.at ["user", "tags"] v |> andThen (Json.index 1) |> andThen Json.asString) (Some "y")
+  assertEq (Json.at ["user", "admin"] v |> andThen Json.asBool) (Some False)
   assertEq (Json.at ["user", "missing"] v) None
   assertEq (Json.at ["user"] v |> map Json.keys) (Some ["name", "age", "tags", "admin"])
 

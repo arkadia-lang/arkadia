@@ -2,7 +2,7 @@
 --
 --   import Std.Json
 --   match Json.parse "{\"name\": \"Arkadia\", \"tags\": [\"strict\"]}" with
---     Ok v -> Json.field "name" v >>= Json.asString   -- Some "Arkadia"
+--     Ok v -> Json.field "name" v |> andThen Json.asString   -- Some "Arkadia"
 --     Err e -> ...
 module Std.Json
 
@@ -213,7 +213,7 @@ index _ _ = None
 -- Follow a path of object fields: at ["a", "b"] v
 at : List String -> Json -> Option Json
 at [] v = Some v
-at (k :: ks) v = field k v >>= at ks
+at (k :: ks) v = field k v |> andThen (at ks)
 
 asString : Json -> Option String
 asString (JString s) = Some s

@@ -117,7 +117,7 @@ instance Show a => Display (Array a) where
   display a = show a
 
 instance Semigroup (Array a) where
-  a <> b = append a b
+  a ++ b = append a b
 
 instance Monoid (Array a) where
   empty = Std.Array.empty

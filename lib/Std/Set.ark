@@ -3,7 +3,7 @@
 --   import Std.Set
 --   let s = Set.fromList [3, 1, 2]
 --   Set.member 2 s            -- True
---   s <> Set.fromList [4]     -- union
+--   s ++ Set.fromList [4]     -- union
 --
 -- Functions that visit several elements do so in ascending order.
 module Std.Set
@@ -102,7 +102,7 @@ instance Show a => Display (Set a) where
   display s = show s
 
 instance Ord a => Semigroup (Set a) where
-  a <> b = union a b
+  a ++ b = union a b
 
 instance Ord a => Monoid (Set a) where
   empty = Set M.empty

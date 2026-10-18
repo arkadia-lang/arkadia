@@ -96,8 +96,7 @@
       "patterns": [
         { "name": "keyword.operator.arrow.arkadia", "match": "->|=>|\\\\" },
         { "name": "keyword.operator.guard.arkadia", "match": "(?<![!#$%&*+./<=>?@\\\\^|~:-])\\|(?![!#$%&*+./<=>?@\\\\^|~:-])" },
-        { "name": "keyword.operator.arkadia", "match": "[!#$%&*+./<=>?@\\\\^|~:-]+" },
-        { "name": "keyword.operator.infix.arkadia", "match": "`[A-Za-z_][A-Za-z0-9_']*`" }
+        { "name": "keyword.operator.arkadia", "match": "[!#$%&*+./<=>?@\\\\^|~:-]+" }
       ]
     }
   }

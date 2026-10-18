@@ -303,9 +303,9 @@ vzip (VCons x xs) (VCons y ys) = VCons (x, y) (vzip xs ys)
 | 構文 | 例 |
 |---|---|
 | 関数適用（左結合・カリー化） | `f x y` |
-| 演算子 | `a + b * c`、関数を中置: ``x `mod` 3`` |
+| 演算子 | `a + b * c` |
 | 演算子を関数として | `(+)`, `foldl (+) 0 xs` |
-| セクション | `(+ 1)`, `(10 -)`, ``(`div` 2)`` |
+| セクション | `(+ 1)`, `(10 -)` |
 | ラムダ | `\x y -> x + y`, `\(a, b) -> a` |
 | let | `let x = 1` (ブロック内の文), `let x = 1 in x + 1` |
 | ローカル関数 | `let go acc n = ...`（再帰可） |
@@ -317,7 +317,8 @@ vzip (VCons x xs) (VCons y ys) = VCons (x, y) (vzip xs ys)
 | リスト / 範囲 | `[1, 2, 3]`, `x :: xs`, `[1 .. 10]` |
 | レコード | `User { name = "a", age = 1 }`, `u.name`, `.name`, `{ u \| age = 2 }`（4 章） |
 | 型注釈 | `(e : List Int)` |
-| パイプ・合成 | `xs \|> map f`, `f <\| x`, `f >> g`, `g << f` |
+| パイプ | `xs \|> map f`（`map f xs` と同じ） |
+| 連結 | `"a" ++ "b"`, `[1] ++ [2]`（`Semigroup`） |
 | ブロックの引数 | `forEach xs \x ->` の後に字下げした本体 |
 
 整数の `/` は 0 の方向へ切り捨て、`%` はその剰余で、`(a / b) * b + a % b == a` が成り立ちます（`-7 / 2 == -3`、`-7 % 2 == -1`）。除数と同じ符号の剰余は `mod` です（`mod (-7) 2 == 1`）。
@@ -398,7 +399,7 @@ instance Eq a => Eq (List a) where   -- 文脈付きインスタンス
 ### Functor / Applicative / Monad / Foldable とエフェクト
 
 `Functor`・`Applicative`・`Monad`・`Foldable`・`Traversable` のメソッドは受け取った関数を**その場で**呼ぶので、エフェクトを起こす関数も渡せます（`map (\x -> println x; x) xs`）。
-`List`・`Option`・`Result`・`Map`・`Array`・`Queue`・`Set`（`Foldable` のみ）はどれも同じ `map` / `>>=`（`andThen`）/ `foldl` / `length` / `isEmpty` / `toList` を使います。
+`List`・`Option`・`Result`・`Map`・`Array`・`Queue`・`Set`（`Foldable` のみ）はどれも同じ `map` / `andThen` / `foldl` / `length` / `isEmpty` / `toList` を使います。
 `Foldable` の `toList`・`length`・`isEmpty` は畳み込みによる既定の実装を持ち、インスタンスはより速い実装で上書きできます（`Array` の `length` は定数時間）。
 
 受け取った関数を保存して「後で」呼ぶ型（関数を包んだパーサや状態変換子など）は、その時点で呼び出し元のハンドラが無くなっているかもしれないので、これらのインスタンスにはできません（型検査で弾かれます）。

@@ -92,9 +92,9 @@ test "collections qualified map and folds" =
   assertEq (runFail (\_ -> toList (map (\x -> orFail "never" (Some (x * 2))) a))) (Ok [2, 4, 6])
 
 test "collections are monoids" =
-  assertEq (Map.toList (Map.fromList [(1, "a")] <> Map.fromList [(1, "x"), (2, "b")])) [(1, "a"), (2, "b")]
-  assertEq (toList (Set.fromList [1, 3] <> Set.fromList [2, 3])) [1, 2, 3]
-  assertEq (toList (Array.fromList [1] <> Array.fromList [2])) [1, 2]
+  assertEq (Map.toList (Map.fromList [(1, "a")] ++ Map.fromList [(1, "x"), (2, "b")])) [(1, "a"), (2, "b")]
+  assertEq (toList (Set.fromList [1, 3] ++ Set.fromList [2, 3])) [1, 2, 3]
+  assertEq (toList (Array.fromList [1] ++ Array.fromList [2])) [1, 2]
   assertEq (toList (foldMap Set.singleton [3, 1, 3])) [1, 3]
 
 test "collections interpolate" =

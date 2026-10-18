@@ -74,7 +74,7 @@ instance Show a => Display (Queue a) where
   display q = show q
 
 instance Semigroup (Queue a) where
-  a <> b = append a b
+  a ++ b = append a b
 
 instance Monoid (Queue a) where
   empty = Queue [] [] 0

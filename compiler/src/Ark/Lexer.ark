@@ -527,7 +527,6 @@ singleKind c = match c with
   '{' -> Some LBRACE
   '}' -> Some RBRACE
   ',' -> Some COMMA
-  '`' -> Some BACKTICK
   ';' -> Some SEMI
   _ -> None
 

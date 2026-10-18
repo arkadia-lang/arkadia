@@ -55,7 +55,7 @@ spanAcc p (x :: xs) acc
   | p x = spanAcc p xs (x :: acc)
 spanAcc _ xs acc = (reverse acc, xs)
 
--- `break p` is `span (not << p)`.
+-- `break p` is `span (\x -> not (p x))`.
 break : (a -> Bool) -> List a -> (List a, List a)
 break p xs = span (\x -> not (p x)) xs
 
