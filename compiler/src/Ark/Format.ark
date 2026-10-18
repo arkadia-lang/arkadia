@@ -254,7 +254,7 @@ layoutColumns s lineOff =
   let lineDepth = newRef 0
   -- the new column of a continuation line starting with token i in the
   -- item of enc
-  let continuation enc i =
+  let continuation (enc : Ctx) i =
     let t = tokAt s i
     let c = col i
     let item = readRef enc.item
