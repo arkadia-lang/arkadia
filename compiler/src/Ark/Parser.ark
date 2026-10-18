@@ -413,7 +413,14 @@ whereBinds p =
             False -> loop ()
           False -> expect_ p DEDENT
       loop ()
-    False -> fail (tokPos (peek p)) "the bindings of a `where` clause go on the following lines, indented"
+    False ->
+      item ()
+      let more () = match accept p SEMI with
+        True ->
+          item ()
+          more ()
+        False -> ()
+      more ()
   match readRef sigs with
     (n, sp, _) :: _ -> fail sp "the signature for '${n}' lacks an accompanying binding"
     [] -> ()
