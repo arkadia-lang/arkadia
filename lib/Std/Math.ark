@@ -118,7 +118,8 @@ powAcc b n acc
   | odd n = powAcc (b * b) (n / 2) (acc * b)
   | otherwise = powAcc (b * b) (n / 2) acc
 
--- Floored division: the remainder has the sign of the divisor (like `%`).
+-- Floored division: the remainder has the sign of the divisor (like `mod`;
+-- `/` and `%` truncate toward zero).
 divMod : Int -> Int -> (Int, Int)
 divMod a b =
   let m = mod a b
