@@ -18,3 +18,5 @@ jobs:
         run: nix develop --command just test
       - name: Bootstrap the ark command
         run: nix develop --command just build && bin/ark version
+      - name: Package the release archives
+        run: nix develop --command just dist
