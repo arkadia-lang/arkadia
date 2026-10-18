@@ -69,6 +69,7 @@ type cancelScope struct {
 	done      chan struct{} // closed by cancel
 	mu        sync.Mutex
 	children  map[*cancelScope]struct{} // open scopes that inherit from it
+	hooks     map[*func()]struct{}      // functions to call when it is cancelled
 }
 
 // newScope opens a scope that inherits the cancellation of parent (nil
@@ -98,11 +99,63 @@ func (s *cancelScope) cancel() {
 	}
 	close(s.done)
 	s.mu.Lock()
-	children := s.children
-	s.children = nil
+	children, hooks := s.children, s.hooks
+	s.children, s.hooks = nil, nil
 	s.mu.Unlock()
+	for f := range hooks {
+		(*f)()
+	}
 	for c := range children {
 		c.cancel()
+	}
+}
+
+// onCancel arranges for f to be called when the scope is cancelled (at
+// once if it already is) until stop is called. Blocking operations that
+// cannot wait for a channel use it to interrupt themselves.
+func (s *cancelScope) onCancel(f func()) (stop func()) {
+	s.mu.Lock()
+	if s.cancelled.Load() {
+		s.mu.Unlock()
+		f()
+		return func() {}
+	}
+	if s.hooks == nil {
+		s.hooks = map[*func()]struct{}{}
+	}
+	key := &f
+	s.hooks[key] = struct{}{}
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		delete(s.hooks, key)
+		s.mu.Unlock()
+	}
+}
+
+// interruptible runs a blocking operation that interrupt makes return
+// early. If the computation is cancelled meanwhile, it calls restore (to
+// undo the effect of interrupt) and unwinds. interrupt is never called
+// after the operation has returned.
+func interruptible(ev *Ev, interrupt func(), op func(), restore func()) {
+	var mu sync.Mutex
+	finished, interrupted := false, false
+	stop := ev.cs.onCancel(func() {
+		mu.Lock()
+		if !finished {
+			interrupted = true
+			interrupt()
+		}
+		mu.Unlock()
+	})
+	op()
+	stop()
+	mu.Lock()
+	finished = true
+	mu.Unlock()
+	if interrupted {
+		restore()
+		unwind(ev)
 	}
 }
 

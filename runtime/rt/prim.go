@@ -28,15 +28,21 @@ func (e *ArkError) Error() string { return e.Msg }
 type ExitSignal struct{ Code int }
 
 // output is the buffered standard output, shared by all tasks: each write
-// (a whole line for println) is atomic.
+// (a whole line for println) is atomic. Buffered output is flushed before
+// the program blocks on input or I/O, and at the latest flushDelay after
+// it was written, so that the output of tasks shows up while others wait.
 type output struct {
-	mu sync.Mutex
-	w  *bufio.Writer
+	mu        sync.Mutex
+	w         *bufio.Writer
+	scheduled bool // a flush is scheduled
 }
+
+const flushDelay = 50 * time.Millisecond
 
 func (o *output) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.schedule()
 	return o.w.Write(p)
 }
 
@@ -46,12 +52,22 @@ func (o *output) write(s string, newline bool) {
 	if newline {
 		o.w.WriteByte('\n')
 	}
+	o.schedule()
 	o.mu.Unlock()
+}
+
+// schedule arranges for a flush; o.mu is held.
+func (o *output) schedule() {
+	if !o.scheduled {
+		o.scheduled = true
+		time.AfterFunc(flushDelay, o.flush)
+	}
 }
 
 func (o *output) flush() {
 	o.mu.Lock()
 	o.w.Flush()
+	o.scheduled = false
 	o.mu.Unlock()
 }
 

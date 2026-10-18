@@ -6,13 +6,14 @@
 --   curl -X PATCH localhost:8080/api/todos/1
 --   curl -X DELETE localhost:8080/api/todos/1
 --
--- The TODO list lives in a State effect handled around the whole server:
--- handlers run one at a time, so they can share it without locking.
+-- Requests are handled in parallel, each in a task of its own. The TODO
+-- list is a Shared value (Std.Mutex): every change holds its lock, and a
+-- change that halts (404) leaves the list untouched.
 module Main
 
 import Std.Http
 import Std.Json as Json
-import Std.State as St
+import Std.Mutex
 
 type Todo = Todo { id : Int, title : String, done : Bool }
   deriving (Json.ToJson)
@@ -24,58 +25,55 @@ type NewTodo = NewTodo { title : String }
 -- the todos, newest first
 type Store = Store { nextId : Int, todos : List Todo }
 
--- A handler that uses the store.
-alias App e = Request -> <IO, Fail, Halt, St.State Store | e> Response
-
 -- The :id parameter, or 400.
 idParam : Request -> <Halt> Int
 idParam req = parseInt (param "id" req) |> orHalt (badRequest "id must be a number")
 
-listTodos : App e
-listTodos _ = jsonOf (reverse (St.get ()).todos)
+listTodos : Shared Store -> Handler e
+listTodos store _ = jsonOf (reverse (readShared store).todos)
 
-createTodo : App e
-createTodo req =
+createTodo : Shared Store -> Handler e
+createTodo store req =
   let new : NewTodo = bodyAs req |> orHaltWith (\e -> badRequest "invalid body: ${e}")
-  let store = St.get ()
-  let todo = Todo { id = store.nextId, title = new.title, done = False }
-  St.put (Store { nextId = store.nextId + 1, todos = todo :: store.todos })
+  let todo = updateShared store (\s ->
+    let todo = Todo { id = s.nextId, title = new.title, done = False }
+    (Store { nextId = s.nextId + 1, todos = todo :: s.todos }, todo))
   withStatus 201 (jsonOf todo)
 
 -- Apply f to the todo with the request's id; 404 if there is none.
-updateTodo : (Todo -> <> List Todo) -> Request -> <St.State Store, Halt> Todo
-updateTodo f req =
+updateTodo : (Todo -> <> List Todo) -> Shared Store -> Request -> <IO, Halt> Todo
+updateTodo f store req =
   let id = idParam req
-  let store = St.get ()
-  let todo = find (\t -> t.id == id) store.todos |> orHalt notFound
-  St.put { store | todos = concatMap (\t -> match t.id == id with
-    True -> f t
-    False -> [t]) store.todos }
-  todo
+  updateShared store (\s ->
+    let todo = find (\t -> t.id == id) s.todos |> orHalt notFound
+    let todos = concatMap (\t -> match t.id == id with
+      True -> f t
+      False -> [t]) s.todos
+    ({ s | todos = todos }, todo))
 
-toggleTodo : App e
-toggleTodo req =
-  let todo = updateTodo (\t -> [{ t | done = not t.done }]) req
+toggleTodo : Shared Store -> Handler e
+toggleTodo store req =
+  let todo = updateTodo (\t -> [{ t | done = not t.done }]) store req
   jsonOf { todo | done = not todo.done }
 
-deleteTodo : App e
-deleteTodo req =
-  let _ = updateTodo (\_ -> []) req
+deleteTodo : Shared Store -> Handler e
+deleteTodo store req =
+  let _ = updateTodo (\_ -> []) store req
   noContent
 
 hello : Handler e
 hello req = text "Hello, ${withDefault "world" (query "name" req)}!"
 
-app : App e
-app = logRequests (router (scope "/api"
-  [ get "/todos" listTodos
-  , post "/todos" createTodo
-  , patch "/todos/:id" toggleTodo
-  , delete "/todos/:id" deleteTodo
+app : Shared Store -> Handler e
+app store = logRequests (router (scope "/api"
+  [ get "/todos" (listTodos store)
+  , post "/todos" (createTodo store)
+  , patch "/todos/:id" (toggleTodo store)
+  , delete "/todos/:id" (deleteTodo store)
   , get "/hello" hello
   ] ++ [staticDir "/" "public"]))
 
 main () =
   let port = withDefault "8080" (getEnv "PORT")
-  let _ = St.runState (Store { nextId = 1, todos = [] }) (\_ -> serve ":${port}" app)
-  ()
+  let store = newShared (Store { nextId = 1, todos = [] })
+  serve ":${port}" (app store)

@@ -6,12 +6,9 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"runtime"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -42,8 +39,9 @@ type Listener struct{ L net.Listener }
 
 // Conn is a TCP connection with a buffered reader for line input.
 type Conn struct {
-	C net.Conn
-	R *bufio.Reader
+	C        net.Conn
+	R        *bufio.Reader
+	deadline time.Time // set by NetSetTimeout
 }
 
 func newConn(c net.Conn) *Conn { return &Conn{C: c, R: bufio.NewReader(c)} }
@@ -58,9 +56,23 @@ func NetListen(addr Value) Value {
 	return Ok(&Listener{L: l})
 }
 
-func NetAccept(l Value) Value {
+// The blocking operations on sockets are cancellation points: cancelling
+// the computation sets a deadline in the past, which makes them return,
+// and then puts back the deadline of the program.
+
+type deadliner interface{ SetDeadline(time.Time) error }
+
+func NetAccept(ev *Ev, l Value) Value {
 	Flush()
-	c, err := l.(*Listener).L.Accept()
+	ln := l.(*Listener).L
+	var c net.Conn
+	var err error
+	interrupt, restore := func() {}, func() {}
+	if d, ok := ln.(deadliner); ok {
+		interrupt = func() { d.SetDeadline(time.Unix(1, 0)) }
+		restore = func() { d.SetDeadline(time.Time{}) }
+	}
+	interruptible(ev, interrupt, func() { c, err = ln.Accept() }, restore)
 	if err != nil {
 		return errString(err)
 	}
@@ -74,19 +86,37 @@ func NetCloseListener(l Value) Value {
 	return Unit
 }
 
-func NetConnect(addr, timeout Value) Value {
-	c, err := net.DialTimeout("tcp", addr.(string), seconds(timeout))
+func NetConnect(ev *Ev, addr, timeout Value) Value {
+	ctx, cancel := context.WithTimeout(context.Background(), seconds(timeout))
+	defer cancel()
+	var c net.Conn
+	var err error
+	var d net.Dialer
+	interruptible(ev, cancel, func() { c, err = d.DialContext(ctx, "tcp", addr.(string)) }, func() {
+		if c != nil {
+			c.Close()
+		}
+	})
 	if err != nil {
 		return errString(err)
 	}
 	return Ok(newConn(c))
 }
 
+// connIO runs a blocking operation on a connection as a cancellation
+// point.
+func connIO(ev *Ev, c *Conn, op func()) {
+	interruptible(ev, func() { c.C.SetDeadline(time.Unix(1, 0)) }, op, func() { c.C.SetDeadline(c.deadline) })
+}
+
 // NetRead reads up to n bytes; the empty string means end of input.
-func NetRead(c, n Value) Value {
+func NetRead(ev *Ev, cv, n Value) Value {
 	Flush()
+	c := cv.(*Conn)
 	buf := make([]byte, max(n.(int64), 1))
-	k, err := c.(*Conn).R.Read(buf)
+	var k int
+	var err error
+	connIO(ev, c, func() { k, err = c.R.Read(buf) })
 	if k == 0 && err != nil && !errors.Is(err, io.EOF) {
 		return errString(err)
 	}
@@ -94,9 +124,12 @@ func NetRead(c, n Value) Value {
 }
 
 // NetReadAll reads until the peer closes the connection.
-func NetReadAll(c Value) Value {
+func NetReadAll(ev *Ev, cv Value) Value {
 	Flush()
-	b, err := io.ReadAll(c.(*Conn).R)
+	c := cv.(*Conn)
+	var b []byte
+	var err error
+	connIO(ev, c, func() { b, err = io.ReadAll(c.R) })
 	if err != nil {
 		return errString(err)
 	}
@@ -104,9 +137,12 @@ func NetReadAll(c Value) Value {
 }
 
 // NetReadLine reads a line without its "\n" or "\r\n"; None at end of input.
-func NetReadLine(c Value) Value {
+func NetReadLine(ev *Ev, cv Value) Value {
 	Flush()
-	s, err := c.(*Conn).R.ReadString('\n')
+	c := cv.(*Conn)
+	var s string
+	var err error
+	connIO(ev, c, func() { s, err = c.R.ReadString('\n') })
 	if err != nil && !errors.Is(err, io.EOF) {
 		return errString(err)
 	}
@@ -117,8 +153,11 @@ func NetReadLine(c Value) Value {
 	return Ok(Some(s))
 }
 
-func NetWrite(c, s Value) Value {
-	if _, err := io.WriteString(c.(*Conn).C, s.(string)); err != nil {
+func NetWrite(ev *Ev, cv, s Value) Value {
+	c := cv.(*Conn)
+	var err error
+	connIO(ev, c, func() { _, err = io.WriteString(c.C, s.(string)) })
+	if err != nil {
 		return errString(err)
 	}
 	return Ok(Unit)
@@ -139,12 +178,14 @@ func NetCloseWrite(c Value) Value {
 
 // NetSetTimeout sets a deadline for reads and writes, in seconds from now;
 // zero or less removes it.
-func NetSetTimeout(c, secs Value) Value {
+func NetSetTimeout(cv, secs Value) Value {
+	c := cv.(*Conn)
 	var t time.Time
 	if secs.(float64) > 0 {
 		t = time.Now().Add(seconds(secs))
 	}
-	c.(*Conn).C.SetDeadline(t)
+	c.deadline = t
+	c.C.SetDeadline(t)
 	return Unit
 }
 
@@ -178,205 +219,6 @@ func stringList(xs []string) Value {
 		vs[i] = x
 	}
 	return SliceToList(vs)
-}
-
-// ---------------------------------------------------------------- HTTP server
-
-// The Go HTTP server accepts connections and reads requests on its own
-// goroutines and queues them; the Arkadia program takes them one at a time
-// with HttpNext and answers with HttpRespond, which hands the response back
-// to the connection's goroutine. Arkadia code therefore runs on a single
-// goroutine, as effect handlers require, while slow clients only occupy Go
-// goroutines.
-
-// HttpServer is a running HTTP server.
-type HttpServer struct {
-	srv    *http.Server
-	addr   string
-	queue  chan *Exchange
-	closed chan struct{}
-	once   sync.Once
-}
-
-// Exchange is one request waiting for its response.
-type Exchange struct {
-	req  *http.Request
-	body string
-	resp chan httpResponse
-	done bool
-}
-
-type httpResponse struct {
-	status  int
-	headers [][2]string
-	body    string
-}
-
-// MaxBodyBytes limits the size of request bodies.
-const MaxBodyBytes = 32 << 20
-
-func HttpListen(addr Value) Value {
-	l, err := net.Listen("tcp", addr.(string))
-	if err != nil {
-		return errString(err)
-	}
-	s := &HttpServer{addr: l.Addr().String(), queue: make(chan *Exchange), closed: make(chan struct{})}
-	s.srv = &http.Server{Handler: s, ReadHeaderTimeout: 30 * time.Second}
-	go s.srv.Serve(l)
-	return Ok(s)
-}
-
-func (s *HttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
-	if err != nil {
-		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
-		return
-	}
-	ex := &Exchange{req: r, body: string(b), resp: make(chan httpResponse, 1)}
-	select {
-	case s.queue <- ex:
-	case <-s.closed:
-		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
-		return
-	case <-r.Context().Done():
-		return
-	}
-	select {
-	case resp := <-ex.resp:
-		h := w.Header()
-		for _, kv := range resp.headers {
-			h.Add(kv[0], kv[1])
-		}
-		w.WriteHeader(resp.status)
-		io.WriteString(w, resp.body)
-	case <-r.Context().Done():
-	}
-}
-
-// HttpNext waits for the next request: Some (exchange, method, path, raw
-// query, headers, body, remote address), or None once the server is closed.
-func HttpNext(sv Value) Value {
-	s := sv.(*HttpServer)
-	Flush()
-	select {
-	case ex := <-s.queue:
-		r := ex.req
-		return Some(Tuple(ex, r.Method, r.URL.Path, r.URL.RawQuery, headerList(r.Header, r.Host), ex.body, r.RemoteAddr))
-	case <-s.closed:
-		return None
-	}
-}
-
-// headerList flattens headers into (name, value) pairs sorted by name.
-// Go keeps the Host header apart from the others; it is put back here.
-func headerList(h http.Header, host string) Value {
-	names := make([]string, 0, len(h)+1)
-	for k := range h {
-		names = append(names, k)
-	}
-	if host != "" {
-		names = append(names, "Host")
-	}
-	sort.Strings(names)
-	var out []Value
-	for _, k := range names {
-		if k == "Host" && h.Get("Host") == "" {
-			out = append(out, Tuple("Host", host))
-			continue
-		}
-		for _, v := range h[k] {
-			out = append(out, Tuple(k, v))
-		}
-	}
-	return SliceToList(out)
-}
-
-func pairs(l Value) [][2]string {
-	var out [][2]string
-	for _, p := range ListToSlice(l) {
-		d := p.(*D2)
-		out = append(out, [2]string{d.A.(string), d.B.(string)})
-	}
-	return out
-}
-
-// HttpNoExchange stands for the exchange of a request built in the program
-// (for testing handlers); responding to it does nothing.
-func HttpNoExchange() Value { return (*Exchange)(nil) }
-
-// HttpRespond sends the response of an exchange. Only the first response
-// of an exchange is sent.
-func HttpRespond(exv, status, headers, body Value) Value {
-	ex := exv.(*Exchange)
-	if ex == nil || ex.done {
-		return Unit
-	}
-	ex.done = true
-	ex.resp <- httpResponse{status: int(status.(int64)), headers: pairs(headers), body: body.(string)}
-	return Unit
-}
-
-func HttpServerAddr(s Value) Value { return s.(*HttpServer).addr }
-
-// HttpClose stops the server: HttpNext returns None from now on.
-func HttpClose(sv Value) Value {
-	s := sv.(*HttpServer)
-	s.once.Do(func() {
-		close(s.closed)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		go func() {
-			s.srv.Shutdown(ctx)
-		}()
-	})
-	return Unit
-}
-
-// ---------------------------------------------------------------- HTTP client
-
-var httpClient = &http.Client{
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return errors.New("stopped after 10 redirects")
-		}
-		return nil
-	},
-}
-
-// HttpFetch performs a request: Ok (status, headers, body) or Err message.
-func HttpFetch(method, rawURL, headers, body, timeout Value) Value {
-	Flush()
-	ctx := context.Background()
-	if t := timeout.(float64); t > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, seconds(timeout))
-		defer cancel()
-	}
-	var rd io.Reader
-	if b := body.(string); b != "" {
-		rd = strings.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method.(string), rawURL.(string), rd)
-	if err != nil {
-		return errString(err)
-	}
-	for _, kv := range pairs(headers) {
-		if strings.EqualFold(kv[0], "Host") {
-			req.Host = kv[1]
-			continue
-		}
-		req.Header.Add(kv[0], kv[1])
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return errString(err)
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return errString(err)
-	}
-	return Ok(Tuple(int64(resp.StatusCode), headerList(resp.Header, ""), string(b)))
 }
 
 // ---------------------------------------------------------------- URLs

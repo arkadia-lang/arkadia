@@ -1,20 +1,23 @@
 -- TCP sockets and host names.
 --
 --   import Std.Net as Net
---   -- an echo server, one connection at a time
+--   import Std.Task
+--
+--   -- an echo server, each connection in a task of its own
 --   echo l = match Net.accept l with
 --     Ok conn ->
---       Net.forEachLine conn (\line -> Net.writeLine conn line)
---       Net.close conn
+--       fork (\_ ->
+--         let _ = Net.forEachLine conn (\line -> Net.writeLine conn line)
+--         Net.close conn)
 --       echo l
 --     Err e -> eprintln e
 --
 --   main () = match Net.listen "127.0.0.1:7000" with
---     Ok l -> echo l
+--     Ok l -> runAsync (\_ -> echo l)
 --     Err e -> eprintln e
 --
--- Reads block the whole program; a server handles one connection at a time.
--- For HTTP, use Std.Http, which reads requests concurrently.
+-- Accepting, connecting, reading and writing wait for the network without
+-- holding up other tasks, and are cancellation points (see Std.Task).
 module Std.Net
 
 type Listener
@@ -23,21 +26,21 @@ type Conn
 -- Listen on "host:port" (":8080" for every interface, port 0 for any free port).
 foreign listen : String -> <IO> Result String Listener = "rt.NetListen"
 -- Wait for the next connection.
-foreign accept : Listener -> <IO> Result String Conn = "rt.NetAccept"
+foreign accept : Listener -> <IO> Result String Conn = "ev:rt.NetAccept"
 -- The address actually bound, e.g. "127.0.0.1:43521".
 foreign listenerAddress : Listener -> <IO> String = "rt.NetListenerAddr"
 foreign closeListener : Listener -> <IO> Unit = "rt.NetCloseListener"
 
 -- Connect to "host:port", giving up after the timeout in seconds.
-foreign connectTimeout : String -> Float -> <IO> Result String Conn = "rt.NetConnect"
+foreign connectTimeout : String -> Float -> <IO> Result String Conn = "ev:rt.NetConnect"
 
 -- Read up to n bytes as they arrive; "" means the peer closed the connection.
-foreign read : Conn -> Int -> <IO> Result String String = "rt.NetRead"
+foreign read : Conn -> Int -> <IO> Result String String = "ev:rt.NetRead"
 -- Read until the peer closes the connection.
-foreign readAll : Conn -> <IO> Result String String = "rt.NetReadAll"
+foreign readAll : Conn -> <IO> Result String String = "ev:rt.NetReadAll"
 -- Read a line without its line ending; None at end of input.
-foreign readLine : Conn -> <IO> Result String (Option String) = "rt.NetReadLine"
-foreign write : Conn -> String -> <IO> Result String Unit = "rt.NetWrite"
+foreign readLine : Conn -> <IO> Result String (Option String) = "ev:rt.NetReadLine"
+foreign write : Conn -> String -> <IO> Result String Unit = "ev:rt.NetWrite"
 foreign close : Conn -> <IO> Unit = "rt.NetClose"
 -- Stop sending (the peer reads end of input) but keep reading.
 foreign closeWrite : Conn -> <IO> Unit = "rt.NetCloseWrite"
