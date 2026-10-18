@@ -1,5 +1,83 @@
--- Additional string functions.
+-- String functions, meant to be imported qualified:
+--
+--   import Std.String as String
+--   String.split "," "a,b,c"                 -- ["a", "b", "c"]
+--   "  Hi " |> String.trim |> String.toLower  -- "hi"
+--   String.padLeft 5 '0' "42"                -- "00042"
+--
+-- The module repeats the string functions of the Prelude (`length`,
+-- `split`, `join`, `trim`, ...) so that every string operation can be
+-- written `String.name`.
 module Std.String
+
+-- ===================================================================
+-- From the Prelude
+-- ===================================================================
+
+-- The number of characters (`byteLength` counts UTF-8 bytes).
+foreign length : String -> Int = "rt.StringLength"
+foreign chars : String -> List Char = "rt.StringChars"
+foreign fromChars : List Char -> String = "rt.StringFromChars"
+foreign fromChar : Char -> String = "rt.CharToString"
+
+-- join ", " ["a", "b"] == "a, b"
+foreign join : String -> List String -> String = "rt.StringJoin"
+
+-- split "," "a,b" == ["a", "b"]
+foreign split : String -> String -> List String = "rt.StringSplit"
+foreign trim : String -> String = "rt.StringTrim"
+foreign toUpper : String -> String = "rt.StringToUpper"
+foreign toLower : String -> String = "rt.StringToLower"
+
+-- contains "ell" "hello" == True
+foreign contains : String -> String -> Bool = "rt.StringContains"
+foreign startsWith : String -> String -> Bool = "rt.StringStartsWith"
+foreign endsWith : String -> String -> Bool = "rt.StringEndsWith"
+
+-- replace from to s replaces every occurrence of from.
+foreign replace : String -> String -> String -> String = "rt.StringReplace"
+
+-- The characters from index start up to (not including) end.
+foreign substring : Int -> Int -> String -> String = "rt.StringSubstring"
+foreign toInt : String -> Option Int = "rt.ParseInt"
+foreign toFloat : String -> Option Float = "rt.ParseFloat"
+
+lines : String -> List String
+lines s = Prelude.lines s
+
+unlines : List String -> String
+unlines ls = Prelude.unlines ls
+
+words : String -> List String
+words s = Prelude.words s
+
+unwords : List String -> String
+unwords ws = Prelude.unwords ws
+
+concat : List String -> String
+concat ss = join "" ss
+
+-- ===================================================================
+-- Characters
+-- ===================================================================
+
+-- Apply a function to every character.
+map : (Char -> Char) -> String -> String
+map f s = fromChars (mapList f (chars s))
+
+-- Keep the characters satisfying p.
+filter : (Char -> Bool) -> String -> String
+filter p s = fromChars (Prelude.filter p (chars s))
+
+any : (Char -> Bool) -> String -> Bool
+any p s = Prelude.any p (chars s)
+
+all : (Char -> Bool) -> String -> Bool
+all p s = Prelude.all p (chars s)
+
+-- ===================================================================
+-- More functions
+-- ===================================================================
 
 foreign indexOf : String -> String -> Option Int = "rt.StringIndexOf"
 foreign repeat : Int -> String -> String = "rt.StringRepeat"
@@ -9,10 +87,10 @@ foreign trimStart : String -> String = "rt.StringTrimStart"
 foreign trimEnd : String -> String = "rt.StringTrimEnd"
 
 padLeft : Int -> Char -> String -> String
-padLeft n c s = repeat (n - stringLength s) (charToString c) ++ s
+padLeft n c s = repeat (n - length s) (fromChar c) ++ s
 
 padRight : Int -> Char -> String -> String
-padRight n c s = s ++ repeat (n - stringLength s) (charToString c)
+padRight n c s = s ++ repeat (n - length s) (fromChar c)
 
 isEmpty : String -> Bool
 isEmpty s = s == ""
@@ -20,7 +98,7 @@ isEmpty s = s == ""
 capitalize : String -> String
 capitalize s = match chars s with
   [] -> ""
-  c :: cs -> toUpper (charToString c) ++ fromChars cs
+  c :: cs -> toUpper (fromChar c) ++ fromChars cs
 
 foreign lastIndexOf : String -> String -> Option Int = "rt.StringLastIndexOf"
 -- Split around the first occurrence of the separator.
@@ -31,7 +109,7 @@ foreign replaceFirst : String -> String -> String -> String = "rt.StringReplaceF
 -- Remove the given characters from both ends: trimChars "-*" "--a*" == "a"
 foreign trimChars : String -> String -> String = "rt.StringTrimChars"
 foreign equalIgnoringCase : String -> String -> Bool = "rt.StringEqualFold"
--- Length in UTF-8 bytes (`stringLength` counts characters).
+-- Length in UTF-8 bytes (`length` counts characters).
 foreign byteLength : String -> Int = "rt.StringByteLength"
 
 -- The first n characters.
@@ -39,32 +117,32 @@ take : Int -> String -> String
 take n s = substring 0 n s
 
 drop : Int -> String -> String
-drop n s = substring n (stringLength s) s
+drop n s = substring n (length s) s
 
 takeEnd : Int -> String -> String
 takeEnd n s =
-  let len = stringLength s
+  let len = length s
   substring (len - n) len s
 
 dropEnd : Int -> String -> String
-dropEnd n s = substring 0 (stringLength s - n) s
+dropEnd n s = substring 0 (length s - n) s
 
 stripPrefix : String -> String -> Option String
 stripPrefix pre s
-  | startsWith pre s = Some (drop (stringLength pre) s)
+  | startsWith pre s = Some (drop (length pre) s)
   | otherwise = None
 
 stripSuffix : String -> String -> Option String
 stripSuffix suf s
-  | endsWith suf s = Some (dropEnd (stringLength suf) s)
+  | endsWith suf s = Some (dropEnd (length suf) s)
   | otherwise = None
 
 -- Pad on both sides to the given width (extra padding goes on the right).
 center : Int -> Char -> String -> String
 center n c s =
-  let total = n - stringLength s
+  let total = n - length s
   let left = total / 2
-  padRight n c (padLeft (stringLength s + left) c s)
+  padRight n c (padLeft (length s + left) c s)
 
 -- Only whitespace (or empty).
 isBlank : String -> Bool
@@ -77,7 +155,7 @@ splitLines s = lines (replace "\r\n" "\n" s)
 uncapitalize : String -> String
 uncapitalize s = match chars s with
   [] -> ""
-  c :: cs -> toLower (charToString c) ++ fromChars cs
+  c :: cs -> toLower (fromChar c) ++ fromChars cs
 
 -- Break text into lines of at most `width` characters at spaces. Words
 -- longer than the width get a line of their own.
@@ -89,5 +167,5 @@ wrap width s = match words s with
 private wrapAcc : Int -> List String -> String -> List String -> List String
 wrapAcc _ [] line acc = line :: acc
 wrapAcc width (w :: ws) line acc
-  | stringLength line + 1 + stringLength w <= width = wrapAcc width ws (line ++ " " ++ w) acc
+  | length line + 1 + length w <= width = wrapAcc width ws (line ++ " " ++ w) acc
   | otherwise = wrapAcc width ws w (line :: acc)
