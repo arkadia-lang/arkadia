@@ -1,6 +1,6 @@
 -- Persistent priority queues (leftist min-heaps).
 --
---   import Std.Heap as Heap
+--   import Std.Heap
 --   let h = Heap.fromList [5, 1, 4]
 --   Heap.pop h   -- Some (1, <heap of 4, 5>)
 --

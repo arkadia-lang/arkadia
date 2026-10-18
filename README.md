@@ -5,7 +5,7 @@
 構造化された軽量タスクがすべてのプロセッサで並列に動き、純粋なループを含むどんな計算も非同期にキャンセルできます。
 
 ```haskell
-import Std.State
+import Std.State (..)
 
 counter : Unit -> <State Int, IO> Unit
 counter () =
@@ -174,7 +174,7 @@ effect Yield a where
 ### タスクと並列実行
 
 ```haskell
-import Std.Task
+import Std.Task (..)
 import Std.Time (sleep)
 
 fib : Int -> Int
@@ -286,28 +286,30 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 
 モジュールの公開インターフェースは `ark doc Std.Map` のように表示できます。
 
-`Std.List`・`Std.Math` などを除くデータ型のモジュールは、`import Std.String as String` のように**修飾付きで import する**前提で設計されています。
-Prelude にある関数もそれぞれのモジュールから同じ名前（または型に即した名前）で使えるので、操作は `String.split`・`Option.withDefault`・`Map.map` のように一通り修飾名で書けます。
-修飾名の `Option.map`・`Result.map`・`Map.map`・`Array.map` などは、`Functor` の `map` と違ってエフェクトを起こす関数も受け取ります。
+`import Std.String` は `String.split` のように**修飾名だけ**を使えるようにします。非修飾で使いたい名前は `import Std.State (..)` や `import Std.Time (sleep)` のように明示します。
+`Std.State`・`Std.Task`・`Std.Http`・`Std.List` などエフェクトや DSL のモジュールは `(..)` で、`Std.String`・`Std.Map`・`Std.Option` などデータ型のモジュールは修飾名で使う前提で設計されています。
+
+`map`・`andThen`（`>>=`）・`length`・`isEmpty`・`toList`・`foldl` などは型クラス（`Functor` / `Monad` / `Foldable`）のメソッドで、`Option`・`Result`・`Map`・`Array`・`Queue`・`Set` で同じ名前のまま使えます。各モジュールに同名の別関数はありません。
+これらのメソッドは渡された関数をその場で呼ぶので、エフェクトを起こす関数も渡せます。
 `Map`・`Set`・`Array`・`Queue`・`Heap` は `<>` で結合でき（`Monoid`）、タプルやコレクションは `"${x}"` で文字列に埋め込めます。
 
 ```haskell
-import Std.String as String
-import Std.Option as Option
-import Std.Map as Map
+import Std.String
+import Std.Map
 
 main () =
   let ages = Map.fromList [("ann", "30"), ("bob", "x")]
-  let parsed = Map.map String.toInt ages                 -- Map String (Option Int)
-  println "${Map.map (Option.withDefault 0) parsed}"     -- Map.fromList [("ann", 30), ("bob", 0)]
-  println (String.join ", " (Map.keys ages))             -- ann, bob
+  let parsed = map String.toInt ages                 -- Map String (Option Int)
+  println "${map (withDefault 0) parsed}"            -- Map.fromList [("ann", 30), ("bob", 0)]
+  println (String.join ", " (Map.keys ages))         -- ann, bob
+  println "${length ages} ${map String.length (Some "abc")}"  -- 2 Some 3
 ```
 
 ### HTTP サーバ
 
 ```haskell
-import Std.Http
-import Std.Json as Json
+import Std.Http (..)
+import Std.Json
 import Std.Task (cancelOnInterrupt)
 
 hello : Handler e
@@ -335,14 +337,14 @@ main () =
 - `request "GET" "/users/1" ""` でリクエストを作り `runHandler` に渡せば、サーバを立てずにハンドラやルータをテストできます。
 - `bodyAs req` は JSON の本文を `FromJson` の型に変換し、`jsonOf x` は `ToJson` の値を JSON で返します。
 - クライアントは `httpGet` / `httpPost` / `postJson` / `getJson` / `getAs` / `fetch`。
-- `Std.State` の `get` / `put` と名前が重なるので、両方使うときは片方を `import Std.State as St` のように修飾付きで import してください。
+- `Std.State` の `get` / `put` と名前が重なるので、両方使うときは片方を `import Std.State as St` のように修飾名だけで import してください。
 
 ## サンプル
 
 - [`examples/parallel.ark`](examples/parallel.ark) — タスクによるデータ並列・チャネルのパイプライン・純粋なループのキャンセル
 - [`examples/scheduler.ark`](examples/scheduler.ark) — エフェクトで実装した協調スレッド
 - [`examples/json.ark`](examples/json.ark) — State と Fail エフェクトによる JSON パーサ
-- [`examples/calculator.ark`](examples/calculator.ark) — モナディックなパーサコンビネータ（高カインド）
+- [`examples/calculator.ark`](examples/calculator.ark) — エフェクトによるパーサ（`Std.Parser`）と `Result` モナドによる評価
 - [`examples/lisp.ark`](examples/lisp.ark) — クロージャ付きの小さな Lisp インタプリタ
 - [`examples/http/server.ark`](examples/http/server.ark) — JSON API と静的ページの TODO アプリ（`cd examples/http && ark run server.ark`）
 

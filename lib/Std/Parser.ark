@@ -2,7 +2,7 @@
 -- computation that reads the input with the `ParseInput` effect and reports
 -- errors with `Fail`; a failed alternative restores the input it consumed.
 --
---   import Std.Parser
+--   import Std.Parser (..)
 --
 --   numbers : Unit -> <ParseInput, Fail> List Int
 --   numbers () =

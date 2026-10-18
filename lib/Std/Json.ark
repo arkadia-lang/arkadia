@@ -1,6 +1,6 @@
 -- JSON values: parsing, printing and queries.
 --
---   import Std.Json as Json
+--   import Std.Json
 --   match Json.parse "{\"name\": \"Arkadia\", \"tags\": [\"strict\"]}" with
 --     Ok v -> Json.field "name" v >>= Json.asString   -- Some "Arkadia"
 --     Err e -> ...

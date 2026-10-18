@@ -1,6 +1,6 @@
 -- Tasks: computations that run in parallel on all processors.
 --
---   import Std.Task
+--   import Std.Task (..)
 --
 --   main () = runAsync (\_ ->
 --     let a = spawn (\_ -> fib 32)

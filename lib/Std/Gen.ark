@@ -2,7 +2,7 @@
 -- performs `yield`; consumers decide how many values to pull, so infinite
 -- generators are fine as long as the consumer stops.
 --
---   import Std.Gen
+--   import Std.Gen (..)
 --   naturals : Unit -> <Yield Int> a
 --   naturals () = iterateGen (+ 1) 0
 --

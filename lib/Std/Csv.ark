@@ -1,7 +1,7 @@
 -- CSV (RFC 4180): quoted fields may contain separators, quotes ("") and
 -- line breaks.
 --
---   import Std.Csv as Csv
+--   import Std.Csv
 --   match Csv.parse "name,age\nann,30\n" with
 --     Ok rows -> Csv.records rows   -- [[("name", "ann"), ("age", "30")]]
 --     Err e -> ...

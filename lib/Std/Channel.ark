@@ -1,6 +1,6 @@
 -- Channels: queues that carry values between tasks (see Std.Task).
 --
---   import Std.Task
+--   import Std.Task (..)
 --   import Std.Channel as Chan
 --
 --   main () =

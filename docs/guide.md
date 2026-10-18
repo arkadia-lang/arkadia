@@ -89,11 +89,22 @@ main () =                  -- `=` の後の字下げ → ブロック
 ```haskell
 module Data.Queue
 
-import Std.Map              -- 全ての名前を非修飾で、かつ Map.x として使える
-import Std.Map as M         -- 修飾名 M.x のみ
-import Std.Map (insert, Map) -- 指定した名前だけを非修飾で
-import Std.Map (Map(..))    -- 型とその構築子
+import Std.Map               -- 修飾名 Map.x（と Std.Map.x）のみ
+import Std.Map as M          -- 修飾名 M.x のみ
+import Std.Map (insert, Map) -- 修飾名に加えて、指定した名前を非修飾で
+import Std.Map (Map(..))     -- 型とその構築子
+import Std.State (..)        -- 全ての名前を非修飾で
 ```
+
+修飾名はパスの最後の要素（`Std.Map` なら `Map`）なので、`as` は別の名前を付けたいときだけ書きます。
+非修飾の名前は、ファイル先頭の import に `(..)` か名前の一覧として必ず現れます。
+`Std.State`・`Std.Task`・`Std.Http` などエフェクトや DSL のモジュールは `(..)` で、`Std.String`・`Std.Map` などデータ型のモジュールは修飾名で使う前提で設計されています。
+
+別々のモジュールが同じ名前を非修飾で持ち込むと（`Std.State (..)` と `Std.Http (..)` の `get` など）、その名前を非修飾で**使ったときだけ**曖昧さのエラーになります。
+モジュール自身のトップレベル定義は import した名前より優先されます。
+import したモジュールにある名前を修飾せずに使うと、エラーに `did you mean String.splitOnce?` のような候補が出ます。
+
+`map` や `length` のような型クラスのメソッドはどの型でも同じ名前を使い、モジュールごとの同名の関数はありません（「8. 型クラス」）。
 
 宣言（またはその型シグネチャ）の直前に続く `--` コメントはドキュメントとして扱われ、`ark doc` やエディタのホバーに表示されます。ファイル先頭のコメントはモジュールの説明になります。
 
@@ -214,7 +225,7 @@ alias Point = (Float, Float)
 | 構築子が複数の型 | 引数の無い構築子は `"Admin"`、レコードは `{"tag": "Circle", "radius": 1}`、それ以外は `{"tag": "Polygon", "values": [...]}` |
 
 ```haskell
-import Std.Json as Json
+import Std.Json
 
 type User = User { name : String, age : Int, email : Option String }
   deriving (Show, Json.ToJson, Json.FromJson)
@@ -349,10 +360,14 @@ instance Eq a => Eq (List a) where   -- 文脈付きインスタンス
 - 曖昧な型変数は `Unit` に既定化されます。
 - 実装は辞書渡しで、静的に決まるインスタンスのメソッド呼び出しは直接呼び出し（`Int` の算術は Go の演算）に最適化されます。
 
-### Functor / Applicative / Monad と純粋性
+### Functor / Applicative / Monad / Foldable とエフェクト
 
-`Functor`, `Applicative`, `Monad` のメソッドは **純粋な関数**（`<>`）を受け取ります。パーサや状態変換子のように、受け取った関数を「後で」実行するインスタンスでも健全にするためです。
-エフェクトを起こす関数でリストを写すには `mapList`、`Option`・`Result`・`Map`・`Array` などには修飾名の `Option.map` などを、走査には `forEach` / `foldl` / `traverse` を使います（`Foldable` と `Traversable` は関数をその場で呼ぶのでエフェクト多相です）。
+`Functor`・`Applicative`・`Monad`・`Foldable`・`Traversable` のメソッドは受け取った関数を**その場で**呼ぶので、エフェクトを起こす関数も渡せます（`map (\x -> println x; x) xs`）。
+`List`・`Option`・`Result`・`Map`・`Array`・`Queue`・`Set`（`Foldable` のみ）はどれも同じ `map` / `>>=`（`andThen`）/ `foldl` / `length` / `isEmpty` / `toList` を使います。
+`Foldable` の `toList`・`length`・`isEmpty` は畳み込みによる既定の実装を持ち、インスタンスはより速い実装で上書きできます（`Array` の `length` は定数時間）。
+
+受け取った関数を保存して「後で」呼ぶ型（関数を包んだパーサや状態変換子など）は、その時点で呼び出し元のハンドラが無くなっているかもしれないので、これらのインスタンスにはできません（型検査で弾かれます）。
+そうした計算はエフェクトで表します。たとえば `Std.Parser` は `ParseInput` / `Fail` エフェクトによるパーサです。
 
 ## 9. 代数的エフェクト
 
@@ -429,7 +444,7 @@ Arkadia の型検査器はこのような箇所を検出し、呼び出しの周
 `Std.Task` のタスクは、すべてのプロセッサで並列に動く計算です。
 
 ```haskell
-import Std.Task
+import Std.Task (..)
 
 main () = runAsync (\_ ->
   let a = spawn (\_ -> fib 32)        -- タスクを開始して Task Int を得る
@@ -481,6 +496,7 @@ foreign sqrt : Float -> Float = "rt.FloatSqrt"
 
 `foreign` は Go の関数を Arkadia の関数として束縛します。Go 側の関数は引数の数だけ `rt.Value`（= `any`）を受け取り、`rt.Value` を返します。
 パッケージの `native/*.go`（`package main`、`import rt "arkprog/rt"`）に関数を置くと、`foreign` から参照できます。
+`private foreign` とすると公開せずに束縛でき、型クラスのメソッドを Go で実装するときなどに使えます。
 
 高階の foreign 関数（関数を引数に取るもの）と、ターゲットを `"ev:pkg.Func"` と書いた foreign 関数は、最初の引数に呼び出し元のエビデンス `ev *rt.Ev` も受け取ります。
 Arkadia の関数値はこれを渡して `rt.Apply1(ev, f, x)` のように呼び出します。

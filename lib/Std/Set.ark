@@ -1,6 +1,6 @@
 -- Persistent ordered sets, meant to be imported qualified:
 --
---   import Std.Set as Set
+--   import Std.Set
 --   let s = Set.fromList [3, 1, 2]
 --   Set.member 2 s            -- True
 --   s <> Set.fromList [4]     -- union

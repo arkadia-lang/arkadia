@@ -1,6 +1,6 @@
 -- Persistent ordered maps (AVL trees), meant to be imported qualified:
 --
---   import Std.Map as Map
+--   import Std.Map
 --   let m = Map.fromList [(1, "one"), (2, "two")]
 --   Map.lookup 1 m                     -- Some "one"
 --   map toUpper m                      -- Map.fromList [(1, "ONE"), (2, "TWO")]

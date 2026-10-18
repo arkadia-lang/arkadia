@@ -3,7 +3,7 @@
 -- than once when tasks update the same reference at the same time, so
 -- they are pure.
 --
---   import Std.Atomic
+--   import Std.Atomic (..)
 --   let hits = newAtomic 0
 --   runAsync (\_ -> forEach [1 .. 100] (\_ -> fork (\_ -> modifyAtomic hits (+ 1))))
 --   readAtomic hits   -- 100

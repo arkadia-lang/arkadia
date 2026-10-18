@@ -1,6 +1,6 @@
 -- Mutual exclusion between tasks (see Std.Task).
 --
---   import Std.Mutex
+--   import Std.Mutex (..)
 --   let accounts = newShared (Map.fromList [("ann", 100), ("bob", 0)])
 --   updateShared accounts (\m ->
 --     let amount = Map.findWithDefault 0 "ann" m

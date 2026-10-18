@@ -1,7 +1,7 @@
 -- TCP sockets and host names.
 --
---   import Std.Net as Net
---   import Std.Task
+--   import Std.Net
+--   import Std.Task (..)
 --
 --   -- an echo server, each connection in a task of its own
 --   echo l = match Net.accept l with
