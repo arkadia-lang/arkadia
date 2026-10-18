@@ -1,0 +1,86 @@
+-- Parallel tasks: work split across all processors, a pipeline of tasks
+-- connected by channels, and cancellation of computations that run too
+-- long, even pure loops.
+module Main
+
+import Std.Task
+import Std.Channel as Chan
+import Std.Atomic
+import Std.Time (sleep)
+
+-- ------------------------------------------------------------ data parallelism
+
+isPrime : Int -> Bool
+isPrime n
+  | n < 2 = False
+  | otherwise = noDivisor n 2
+
+noDivisor : Int -> Int -> Bool
+noDivisor n d
+  | d * d > n = True
+  | n % d == 0 = False
+  | otherwise = noDivisor n (d + 1)
+
+-- The primes in [lo, hi).
+countPrimes : Int -> Int -> Int
+countPrimes lo hi = length (filter isPrime (range lo hi))
+
+-- Count the primes below n in chunks, one task per chunk.
+parallelPrimes : Int -> Int -> <IO> Int
+parallelPrimes n chunks =
+  let size = n / chunks
+  sum (parMap (\i -> countPrimes (i * size) ((i + 1) * size)) (range 0 chunks))
+
+-- ------------------------------------------------------------ a pipeline
+
+-- A producer, a pool of workers squaring numbers and a consumer, connected
+-- by channels. Closing a channel tells the next stage that it is done.
+pipeline : Int -> Int -> <IO> Int
+pipeline n workers =
+  let inputs = Chan.newChannel 64
+  let outputs = Chan.newChannel 64
+  runAsync (\_ ->
+    fork (\_ -> Chan.sendAll inputs [1 .. n])
+    let pool = mapList (\_ -> spawn (\_ -> Chan.forEachMessage inputs (\x -> Chan.send outputs (x * x)))) (range 0 workers)
+    fork (\_ ->
+      forEach pool await
+      Chan.closeChannel outputs)
+    sum (Chan.drain outputs))
+
+-- ------------------------------------------------------------ cancellation
+
+-- The Collatz sequence of n never reaches 0: this search never ends.
+collatzZero : Int -> Int
+collatzZero n
+  | n == 0 = n
+  | n % 2 == 0 = collatzZero (n / 2)
+  | otherwise = collatzZero (3 * n + 1)
+
+-- Tasks that check in with a shared counter until they are cancelled.
+workUntilCancelled : Atomic Int -> Int -> <IO> Unit
+workUntilCancelled progress n =
+  modifyAtomic progress (+ 1)
+  sleep 0.001
+  workUntilCancelled progress (n + 1)
+
+main () =
+  println "processors: at least one? ${show (numProcessors () >= 1)}"
+  println "primes below 100000: ${parallelPrimes 100000 8}"
+  println "sum of squares of 1..1000: ${pipeline 1000 4}"
+  match timeout 0.1 (\_ -> collatzZero 27) with
+    Some _ -> println "found"
+    None -> println "the endless search was cancelled after 0.1s"
+  let progress = newAtomic 0
+  let outcomes = runAsync (\_ ->
+    let tasks = mapList (\_ -> spawn (\_ -> workUntilCancelled progress 0)) [1 .. 4]
+    sleep 0.05
+    forEach tasks cancel
+    mapList awaitOutcome tasks)
+  println "outcomes: ${show outcomes}"
+  println "the workers made progress: ${show (readAtomic progress > 0)}"
+  let winner = race [\_ -> collatzZero 27, \_ -> countPrimes 0 1000, \_ ->
+    sleep 10.0
+    0]
+  println "first to finish: ${winner} primes below 1000"
+  let (a, b) = both (\_ -> countPrimes 0 5000) (\_ -> countPrimes 5000 10000)
+  println "both: ${a} + ${b} = ${a + b}"
