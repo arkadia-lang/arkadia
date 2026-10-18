@@ -7,11 +7,11 @@ module Main
 -- doc
 f x =   -- trailing   
     -- inside
-    x   + 1   -- inline
+    x   {- inline -}   + 1
 -- before g
 g = """
   raw   text   
 """   
--- multi   
---    line
+{- multi   
+     line -}
 h = 1

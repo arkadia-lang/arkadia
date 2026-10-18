@@ -49,7 +49,7 @@ type TokKind
   | COMMA | SEMI | BACKSLASH | EQUALS | BAR | ARROW | COLON | DARROW | AT | UNDERSCORE
   | FIELD | FIELDFN
   | KwModule | KwImport | KwAs | KwType | KwAlias | KwClass | KwInstance | KwEffect | KwWhere
-  | KwLet | KwMatch | KwWith | KwHandle | KwReturn | KwForeign
+  | KwLet | KwIn | KwMatch | KwWith | KwHandle | KwReturn | KwForeign
   | KwInfixl | KwInfixr | KwInfix | KwPrivate | KwTest | KwDeriving
 
 instance Eq TokKind where
@@ -65,6 +65,7 @@ keywordKind s = match s with
   "effect" -> Some KwEffect
   "where" -> Some KwWhere
   "let" -> Some KwLet
+  "in" -> Some KwIn
   "match" -> Some KwMatch
   "with" -> Some KwWith
   "handle" -> Some KwHandle
@@ -116,6 +117,7 @@ kindName k = match k with
   KwEffect -> "'effect'"
   KwWhere -> "'where'"
   KwLet -> "'let'"
+  KwIn -> "'in'"
   KwMatch -> "'match'"
   KwWith -> "'with'"
   KwHandle -> "'handle'"

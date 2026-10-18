@@ -1058,7 +1058,12 @@ stmt : P -> <Exn Diag, IO> Stmt
 stmt p = match at p KwLet with
   True ->
     let lp = tokPos (next p)
-    SLet (letBind p lp)
+    let b = letBind p lp
+    match at p KwIn with
+      True ->
+        skip p
+        SExpr (ELet lp [b] (body p))
+      False -> SLet b
   False -> SExpr (expr p)
 
 -- Statements separated by ';' on one line.
@@ -1084,7 +1089,16 @@ block p =
   let whereOK = readRef (pWhereOK p)
   writeRef (pWhereOK p) False
   let loop acc =
-    let s = stmt p
+    let s = match at p KwLet with
+      True ->
+        let lp = tokPos (next p)
+        let b = letBind p lp
+        match at p KwIn with
+          True ->
+            skip p
+            SExpr (ELet lp [b] (body p))
+          False -> SLet b
+      False -> SExpr (expr p)
     match accept p NEWLINE || accept p SEMI with
       True
         | at p KwWhere -> match whereOK with
@@ -1237,7 +1251,14 @@ blockExpr p =
       let ret = newRef None
       let ops = blockItems p (\_ -> handlerClause p ret)
       EHandle (tokPos t) hbody (readRef ret) (filterMap id ops) (newRef "")
-    KwLet -> inlineBlock p
+    KwLet ->
+      skip p
+      let b = letBind p (tokPos t)
+      match at p NEWLINE && tokKind (peekN p 1) == KwIn with
+        True -> skip p
+        False -> ()
+      expect_ p KwIn
+      ELet (tokPos t) [b] (body p)
     _ -> unexpected p "expression"
 
 -- One handler clause; the return clause is stored in ret.
