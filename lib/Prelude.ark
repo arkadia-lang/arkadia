@@ -471,13 +471,15 @@ any p xs = foldl (\acc x -> acc || p x) False xs
 elem : (Foldable t, Eq a) => a -> t a -> Bool
 elem x xs = any (\y -> y == x) xs
 
-maximum : Ord a => List a -> Option a
-maximum [] = None
-maximum (x :: xs) = Some (foldl max x xs)
+maximum : (Foldable t, Ord a) => t a -> Option a
+maximum xs = foldl (\acc x -> match acc with
+  None -> Some x
+  Some m -> Some (max m x)) None xs
 
-minimum : Ord a => List a -> Option a
-minimum [] = None
-minimum (x :: xs) = Some (foldl min x xs)
+minimum : (Foldable t, Ord a) => t a -> Option a
+minimum xs = foldl (\acc x -> match acc with
+  None -> Some x
+  Some m -> Some (min m x)) None xs
 
 -- List instances
 
