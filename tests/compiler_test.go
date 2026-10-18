@@ -209,8 +209,14 @@ func TestNewProject(t *testing.T) {
 	if want := "Hello, Arkadia!\n"; string(out) != want {
 		t.Errorf("ark run printed %q, want %q", out, want)
 	}
+	// the template keeps its test next to the code it tests
+	if _, err := os.Stat(filepath.Join(proj, "tests")); !os.IsNotExist(err) {
+		t.Errorf("ark new created a tests directory")
+	}
 	if out, stderr, err := arkWith(ark, nil, proj, "test"); err != nil {
 		t.Errorf("ark test: %v\n%s%s", err, out, stderr)
+	} else if !bytes.Contains(out, []byte("all 1 tests passed")) {
+		t.Errorf("ark test did not run the template's test:\n%s", out)
 	}
 	if out, stderr, err := arkWith(ark, nil, proj, "fmt", "-check"); err != nil {
 		t.Errorf("ark fmt -check: %v\n%s%s", err, out, stderr)

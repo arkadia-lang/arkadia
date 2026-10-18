@@ -475,8 +475,7 @@ cmdNew argv = match argv with
       let files =
         [ (manifestName, "[package]\nname = ${show name}\nversion = \"0.1.0\"\ndescription = \"\"\n\n[dependencies]\n# mylib = { path = \"../mylib\" }\n")
         , ("src/Main.ark", "module Main\n\nimport Greeting\n\nmain () =\n  println (Greeting.greet \"Arkadia\")\n")
-        , ("src/Greeting.ark", "module Greeting\n\ngreet : String -> String\ngreet name = \"Hello, \${name}!\"\n")
-        , ("tests/GreetingTest.ark", "module GreetingTest\n\nimport Greeting\n\ntest \"greet says hello\" =\n  assertEq (Greeting.greet \"world\") \"Hello, world!\"\n")
+        , ("src/Greeting.ark", "module Greeting\n\n-- Greet someone by name.\ngreet : String -> String\ngreet name = \"Hello, \${name}!\"\n\ntest \"greet says hello\" =\n  assertEq (greet \"world\") \"Hello, world!\"\n")
         , (".gitignore", "/bin/\n")
         ]
       let write (rel, content) acc = match acc with
