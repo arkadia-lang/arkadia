@@ -42,7 +42,7 @@
 
 負の数リテラル: `-` の直後に数字があり、`-` が式の直後に無い（行頭・開き括弧・演算子・`,` などの後にある）ならリテラルになります（`[-1, 2]`、`x = -1`）。式の直後の `-` は減算です（`x-1`、`x - 1`）。式の直後に空白を空けて `-1` と書くと、減算か負の数の引数かが紛らわしいのでエラーになります（`x - 1` か `f (-1)` と書きます）。
 
-予約語: `module import as type alias class instance effect where let in match with handle return foreign infixl infixr infix private test deriving`（`as`, `alias`, `test`, `deriving` は文脈によってのみ予約語）
+予約語: `module import as type alias class instance effect where let match with handle return foreign infixl infixr infix private test deriving`（`as`, `alias`, `test`, `deriving` は文脈によってのみ予約語）
 
 タブ文字はインデントに使えません（スペースのみ）。
 
@@ -307,7 +307,7 @@ vzip (VCons x xs) (VCons y ys) = VCons (x, y) (vzip xs ys)
 | 演算子を関数として | `(+)`, `foldl (+) 0 xs` |
 | セクション | `(+ 1)`, `(10 -)` |
 | ラムダ | `\x y -> x + y`, `\(a, b) -> a` |
-| let | `let x = 1` (ブロック内の文), `let x = 1 in x + 1` |
+| let | `let x = 1`（ブロック内の文。続く文から見える） |
 | ローカル関数 | `let go acc n = ...`（再帰可） |
 | ローカル値 | `let x = x + 1`（値の束縛は非再帰。右辺の `x` は外側の `x`） |
 | パターン束縛 | `let (x, y) = pair` |

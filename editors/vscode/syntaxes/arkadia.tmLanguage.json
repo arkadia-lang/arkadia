@@ -77,7 +77,7 @@
     },
     "keywords": {
       "patterns": [
-        { "name": "keyword.control.arkadia", "match": "\\b(match|with|handle|return|let|in|where)\\b" },
+        { "name": "keyword.control.arkadia", "match": "\\b(match|with|handle|return|let|where)\\b" },
         { "name": "keyword.declaration.arkadia", "match": "\\b(module|import|as|type|alias|class|instance|effect|foreign|infixl|infixr|infix|deriving|test)\\b" },
         { "name": "storage.modifier.arkadia", "match": "\\bprivate\\b" },
         { "name": "constant.language.arkadia", "match": "\\b(True|False|otherwise)\\b" }
