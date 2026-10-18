@@ -10,7 +10,17 @@ effect Random where
 randomInt : Int -> Int -> <Random> Int
 randomInt lo hi
   | lo > hi = error "Std.Random.randomInt: empty range [${lo}, ${hi}]"
+  | hi - lo + 1 <= 0 = randomWide lo hi
   | otherwise = lo + mod (shiftRightUnsigned (nextInt ()) 1) (hi - lo + 1)
+
+-- A range too wide for its size to fit in an Int: draw until one falls
+-- inside (at least half of all draws do).
+private randomWide : Int -> Int -> <Random> Int
+randomWide lo hi =
+  let x = nextInt ()
+  match lo <= x && x <= hi with
+    True -> x
+    False -> randomWide lo hi
 
 -- A float in [0, 1).
 randomFloat : Unit -> <Random> Float
