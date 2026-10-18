@@ -194,6 +194,29 @@ func TestUnitTests(t *testing.T) {
 	}
 }
 
+// TestNewProject creates a project with `ark new` and checks that the
+// template runs, passes its tests and is formatted.
+func TestNewProject(t *testing.T) {
+	dir := t.TempDir()
+	if _, stderr, err := arkWith(ark, nil, dir, "new", "hello"); err != nil {
+		t.Fatalf("ark new: %v\n%s", err, stderr)
+	}
+	proj := filepath.Join(dir, "hello")
+	out, stderr, err := arkWith(ark, nil, proj, "run")
+	if err != nil {
+		t.Fatalf("ark run: %v\n%s", err, stderr)
+	}
+	if want := "Hello, Arkadia!\n"; string(out) != want {
+		t.Errorf("ark run printed %q, want %q", out, want)
+	}
+	if out, stderr, err := arkWith(ark, nil, proj, "test"); err != nil {
+		t.Errorf("ark test: %v\n%s%s", err, out, stderr)
+	}
+	if out, stderr, err := arkWith(ark, nil, proj, "fmt", "-check"); err != nil {
+		t.Errorf("ark fmt -check: %v\n%s%s", err, out, stderr)
+	}
+}
+
 func format(t *testing.T, src []byte) string {
 	t.Helper()
 	got, stderr, err := runArk(src, "fmt", "-")
