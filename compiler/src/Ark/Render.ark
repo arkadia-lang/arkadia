@@ -102,7 +102,12 @@ renderDiags : Map.Map String String -> List Diag -> Bool -> <IO> String
 renderDiags srcs errs color =
   let Style red bold blue reset = style color
   let one (Diag p msg notes) =
-    let head = bold ++ posString p ++ ":" ++ reset ++ " " ++ red ++ "error:" ++ reset ++ " " ++ bold ++ msg ++ reset ++ "\n"
+    -- errors without a position (such as a missing main) show no 0:0
+    let location = match p with
+      Pos "" 0 _ -> ""
+      Pos f 0 _ -> bold ++ f ++ ":" ++ reset ++ " "
+      _ -> bold ++ posString p ++ ":" ++ reset ++ " "
+    let head = location ++ red ++ "error:" ++ reset ++ " " ++ bold ++ msg ++ reset ++ "\n"
     let snippet = match posLine p > 0 with
       False -> ""
       True -> match sourceLine srcs (posFile p) (posLine p) with

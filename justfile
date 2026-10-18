@@ -63,3 +63,31 @@ fixpoint: build
     cmp bin/ark.go.txt bin/ark2.go.txt
     cmp bin/ark bin/ark2
     @echo "fixpoint OK: ark reproduces itself"
+
+# Package bin/ark with lib/ and runtime/rt into dist/arkadia-VERSION-OS-ARCH.tar.gz
+# for each release target (the compiler is cross-compiled from the Go code
+# that bin/ark generates for itself).
+dist: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(bin/ark version | cut -d' ' -f2)
+    # staged outside the repository, where go test ./... would see the copied runtime
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    work=$tmp/go
+    rm -rf dist
+    (cd compiler && ../bin/ark build -work "$work" -o "$work/ark")
+    for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+        os=${target%/*} arch=${target#*/}
+        name=arkadia-$version-$os-$arch
+        pkg=$tmp/$name
+        mkdir -p "$pkg/bin" "$pkg/runtime/rt"
+        (cd "$work" && GOOS=$os GOARCH=$arch GOWORK=off GOFLAGS=-mod=mod go build -trimpath -ldflags='-s -w' -o "$pkg/bin/ark" .)
+        cp -r lib "$pkg/lib"
+        find runtime/rt -name '*.go' ! -name '*_test.go' -exec cp {} "$pkg/runtime/rt/" \;
+        cp LICENSE README.md CHANGELOG.md "$pkg/"
+        mkdir -p dist
+        tar -C "$tmp" -czf "dist/$name.tar.gz" "$name"
+        echo "dist/$name.tar.gz"
+    done
+    (cd dist && sha256sum *.tar.gz > SHA256SUMS)
