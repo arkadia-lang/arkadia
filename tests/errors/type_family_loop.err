@@ -1,0 +1,1 @@
+the reduction of type family 'Loop' may not terminate: the arguments of 'Loop' in this equation must be smaller than its patterns and contain no type family

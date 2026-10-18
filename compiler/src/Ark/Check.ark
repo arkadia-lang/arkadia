@@ -285,16 +285,85 @@ gadtCtor c ti p name fs re =
 -- ================================================================ type families
 
 processFamilies : Checker -> List Decl -> <IO> Unit
-processFamilies c decls = forEach decls (\d -> match d with
-  DFamily _ name _ _ _ eqs -> match ownType c name with
-    None -> ()
-    Some ti ->
-      let fam = Map.findWithDefault (FamInfo (typeInfoName ti) 0 []) (typeInfoName ti) (readRef (gFamilies (cG c)))
-      let converted = filterMap (familyEq c ti (famArity fam)) eqs
-      modifyRef (gFamilies (cG c)) (Map.insert (typeInfoName ti) (FamInfo (typeInfoName ti) (famArity fam) converted))
-      let TypeInfo _ kref _ _ _ _ _ = ti
-      writeRef kref (defaultKind (readRef kref))
-  _ -> ())
+processFamilies c decls =
+  let families = filterMap (\d -> match d with
+    DFamily _ name _ _ _ eqs -> match ownType c name with
+      Some ti -> Some (ti, eqs)
+      None -> None
+    _ -> None) decls
+  forEach families (\(ti, eqs) ->
+    let fam = Map.findWithDefault (FamInfo (typeInfoName ti) 0 []) (typeInfoName ti) (readRef (gFamilies (cG c)))
+    let converted = filterMap (familyEq c ti (famArity fam)) eqs
+    modifyRef (gFamilies (cG c)) (Map.insert (typeInfoName ti) (FamInfo (typeInfoName ti) (famArity fam) converted))
+    let TypeInfo _ kref _ _ _ _ _ = ti
+    writeRef kref (defaultKind (readRef kref)))
+  -- once all equations are known: the families may call each other
+  forEach families (\(ti, _) -> checkTermination c (typeInfoName ti))
+
+-- Reject equations whose reduction may not terminate. In a right-hand
+-- side, an application of a family that can lead back to this one must
+-- have arguments without type families, smaller than the patterns and
+-- using no variable more often than they do.
+private checkTermination : Checker -> String -> <IO> Unit
+checkTermination c name = match Map.lookup name (readRef (gFamilies (cG c))) with
+  None -> ()
+  Some fam -> forEach (famEqs fam) (\(FamEq p nv pats rhs) ->
+    let ok (callee, args) =
+      not (reaches c [] [callee] name) || allOf (\a -> isEmpty (famCalls c a)) args && typesSize args < typesSize pats && allOf (\i -> occurrences i args <= occurrences i pats) (range 0 nv)
+    match find (\call -> not (ok call)) (famCalls c rhs) with
+      Some (callee, _) -> errorf c p "the reduction of type family '${shortName name}' may not terminate: the arguments of '${shortName callee}' in this equation must be smaller than its patterns and contain no type family"
+      None -> ())
+
+-- The applications of type families in a type (with their arguments up to
+-- the arity of the family).
+private famCalls : Checker -> Type -> <IO> List (String, List Type)
+famCalls c t0 = match prune t0 with
+  TFun a e r -> famCalls c a ++ famCalls c e ++ famCalls c r
+  TRowExt l r -> famCalls c l ++ famCalls c r
+  t ->
+    let (h, args) = headOf t
+    let inner = concat (map (famCalls c) args)
+    match h with
+      TCon n _ -> match Map.lookup n (readRef (gFamilies (cG c))) with
+        Some fam -> (n, take (famArity fam) args) :: inner
+        None -> inner
+      _ -> inner
+
+-- Whether a family in todo leads to family target through the right-hand
+-- sides of the equations.
+private reaches : Checker -> List String -> List String -> String -> <IO> Bool
+reaches c seen todo target = match todo with
+  [] -> False
+  n :: rest
+    | n == target -> True
+    | elem n seen -> reaches c seen rest target
+    | otherwise ->
+        let callees = match Map.lookup n (readRef (gFamilies (cG c))) with
+          Some fam -> concat (map (\(FamEq _ _ _ r) -> map fst (famCalls c r)) (famEqs fam))
+          None -> []
+        reaches c (n :: seen) (callees ++ rest) target
+
+private typesSize : List Type -> <IO> Int
+typesSize ts = foldl (\acc t -> acc + typeSize t) 0 ts
+
+private typeSize : Type -> <IO> Int
+typeSize t = match prune t with
+  TApp f a -> typeSize f + typeSize a
+  TFun a e r -> 1 + typeSize a + typeSize e + typeSize r
+  TRowExt l r -> typeSize l + typeSize r
+  _ -> 1
+
+-- The number of occurrences of pattern variable i in types.
+private occurrences : Int -> List Type -> <IO> Int
+occurrences i ts = foldl (\acc t -> acc + occursIn i t) 0 ts
+
+private occursIn : Int -> Type -> <IO> Int
+occursIn i t = match prune t with
+  TGen j | i == j -> 1
+  TApp f a -> occursIn i f + occursIn i a
+  TFun a e r -> occursIn i a + occursIn i e + occursIn i r
+  TRowExt l r -> occursIn i l + occursIn i r
+  _ -> 0
 
 -- Convert an equation `F p1 .. pn = t`. The patterns are built from
 -- constructors and distinct type variables; t may only use those variables.

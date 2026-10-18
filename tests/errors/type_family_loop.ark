@@ -1,0 +1,7 @@
+type family Loop (a : Type) : Type where
+  Loop a = Loop a
+
+f : Loop Int -> Int
+f x = x
+
+main () = println "x"
