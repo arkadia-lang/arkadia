@@ -664,11 +664,22 @@ unify c a0 b0 =
     True -> ()
     False -> match (a, b) with
       (TMeta ma, TMeta mb) | readRef (metaLevelRef mb) > readRef (metaLevelRef ma) -> bindMetaC c mb a
-      (TMeta ma, _) -> bindMetaC c ma b
+      (TMeta ma, _) ->
+        let b2 = reduceAround c ma b
+        match sameVar a b2 with
+          True -> ()
+          False -> bindMetaC c ma b2
       (_, TMeta _) -> unify c b a
       _ -> match (whnfStep c a, whnfStep c b) with
         (None, None) -> unifyStruct c a b
         (ra, rb) -> unify c (withDefault a ra) (withDefault b rb)
+
+-- The type t that meta m is bound to: when m occurs in t, the type
+-- families of t are reduced first (`Elem (List a)` is `a`).
+private reduceAround : Checker -> Meta -> Type -> <IO> Type
+reduceAround c m t = match not (isEmpty (readRef (gFamilies (cG c)))) && hasMeta (metasOf t) m with
+  True -> reduceFamilies c t
+  False -> t
 
 private unifyStruct : Checker -> Type -> Type -> <Exn String, IO> Unit
 unifyStruct c a b = match (a, b) with
