@@ -1,34 +1,36 @@
-# 変更履歴
+# Changelog
 
-このプロジェクトの主な変更を記録します。書式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、
-バージョン番号は [Semantic Versioning](https://semver.org/lang/ja/) に従います。
-1.0 になるまでは、マイナーバージョンの更新で互換性のない変更が入ることがあります。
+**English** | [日本語](CHANGELOG.ja.md)
+
+All notable changes to this project are recorded here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and version numbers follow [Semantic Versioning](https://semver.org/).
+Until 1.0, a minor version update may include breaking changes.
 
 ## [Unreleased]
 
-### 言語
+### Language
 
-- 正格評価・静的型付け・全関数カリー化。制御は `match`・ガード・再帰のみ（自己末尾呼び出しはループに最適化）
-- インデントによるブロック、`where` 節、`let`、演算子の定義と結合性、文字列補間 `"${x}"`
-- 代数的データ型、レコード（フィールド参照・アクセサ関数・更新・パターン）、網羅性検査
-- 型クラス（スーパークラス・デフォルト実装・`deriving (Eq, Ord, Show)`）と高カインド型
-- インデックス型: データ型のカインドとしての利用、GADT、閉じた型族
-- 代数的エフェクト: 行多相のエフェクト型、ディープハンドラ、エビデンス渡しによる実装、末尾再開ハンドラの高速パス
-- 構造化された並列タスク（`Std.Task`）。キャンセル・タイムアウト・失敗の伝播と、コンパイラが挿入するキャンセルポイント
-- Go への FFI（`foreign` 宣言とパッケージの `native/*.go`）
+- Strict evaluation, static typing, every function curried. Control flow is only `match`, guards and recursion (self tail calls are optimized to loops)
+- Indentation-based blocks, `where` clauses, `let`, operator definitions and fixity, string interpolation `"${x}"`
+- Algebraic data types, records (field access, accessor functions, update, patterns), exhaustiveness checking
+- Type classes (superclasses, default implementations, `deriving (Eq, Ord, Show)`) and higher-kinded types
+- Indexed types: data types used as kinds, GADTs, closed type families
+- Algebraic effects: row-polymorphic effect types, deep handlers, implementation by evidence passing, a fast path for tail-resumptive handlers
+- Structured parallel tasks (`Std.Task`). Propagation of cancellation, timeouts and failures, and cancellation points inserted by the compiler
+- FFI to Go (`foreign` declarations and a package's `native/*.go`)
 
-### ツールチェーン
+### Toolchain
 
-- `ark` コマンド: `new` / `build` / `run` / `check` / `test` / `fmt` / `doc` / `repl` / `emit` / `lsp` / `version`
-- `ark.toml` による依存管理（path / git）と `ark.lock`
-- Language Server と VS Code 拡張（診断・ホバー・定義ジャンプ・フォーマット）
-- セルフホスト: コンパイラは Arkadia で書かれ、自分自身のビルドで固定点に達する
+- The `ark` command: `new` / `build` / `run` / `check` / `test` / `fmt` / `doc` / `repl` / `emit` / `lsp` / `version`
+- Dependency management with `ark.toml` (path / git) and `ark.lock`
+- Language Server and VS Code extension (diagnostics, hover, go to definition, formatting)
+- Self-hosting: the compiler is written in Arkadia and reaches a fixed point when building itself
 
-### 標準ライブラリ
+### Standard library
 
-- `Prelude` と `Std.*` の各モジュール: エフェクト（State / Reader / Writer / Exn / Gen / Random）、
-  コレクション（List / Map / Set / Array / Queue / Heap / MArray / HashMap）、テキスト（String / Char / Regex / Format / Csv / Json）、
-  数値（Math / Bits / BigInt）、バイナリ（Bytes / Encoding / Crypto）、入出力（IO / Path / Time / Ref / Args）、
-  並行性（Task / Channel / Atomic / Mutex）、ネットワーク（Net / Url / Http のサーバとクライアント）
+- `Prelude` and the `Std.*` modules: effects (State / Reader / Writer / Exn / Gen / Random),
+  collections (List / Map / Set / Array / Queue / Heap / MArray / HashMap), text (String / Char / Regex / Format / Csv / Json),
+  numbers (Math / Bits / BigInt), binary data (Bytes / Encoding / Crypto), I/O (IO / Path / Time / Ref / Args),
+  concurrency (Task / Channel / Atomic / Mutex), networking (Net / Url / Http server and client)
 
 [Unreleased]: https://github.com/arkadia-lang/arkadia/commits/main

@@ -85,7 +85,7 @@ dist: build
         (cd "$work" && GOOS=$os GOARCH=$arch GOWORK=off GOFLAGS=-mod=mod go build -trimpath -ldflags='-s -w' -o "$pkg/bin/ark" .)
         cp -r lib "$pkg/lib"
         find runtime/rt -name '*.go' ! -name '*_test.go' -exec cp {} "$pkg/runtime/rt/" \;
-        cp LICENSE README.md CHANGELOG.md "$pkg/"
+        cp LICENSE README.md README.ja.md CHANGELOG.md CHANGELOG.ja.md "$pkg/"
         mkdir -p dist
         tar -C "$tmp" -czf "dist/$name.tar.gz" "$name"
         echo "dist/$name.tar.gz"

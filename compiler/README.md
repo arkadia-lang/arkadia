@@ -1,32 +1,34 @@
-# compiler — Arkadia コンパイラ `ark`
+# compiler — the Arkadia compiler `ark`
 
-`compiler/` は Arkadia コンパイラ `ark` の本体で、Arkadia 自身で書かれています。
-Go で書かれたブートストラップ用コンパイラ（[`../bootstrap`](../bootstrap)）で最初の一段をビルドし、
-以降は自分自身でビルドします。ブートストラップは固定点に達します。
+**English** | [日本語](README.ja.md)
+
+`compiler/` is the Arkadia compiler `ark` itself, written in Arkadia.
+Its first stage is built with the bootstrap compiler written in Go ([`../bootstrap`](../bootstrap)),
+and from then on it builds itself. The bootstrap reaches a fixed point.
 
 ```
 bin/ark0 (Go)  ──build──▶  bin/ark1  ──build──▶  bin/ark  ──build──▶  bin/ark2
                                │                     │                    │
-                               └──── emit した Go コードはすべて同一、bin/ark と bin/ark2 のバイナリも同一 ────┘
+                               └──── all emitted Go code is identical; bin/ark and bin/ark2 are identical binaries ────┘
 ```
 
-## ビルドとテスト
+## Building and testing
 
 ```sh
 just build        # bin/ark0 → bin/ark1 → bin/ark
-just fixpoint     # bin/ark で自分自身をビルドし、各世代の生成コードとバイナリが一致することを確認
-just test         # テストスイート（../tests/compiler_test.go）
+just fixpoint     # build itself with bin/ark and check that each generation's generated code and binary match
+just test         # test suite (../tests/compiler_test.go)
 ```
 
-`go test ./...` に含まれる `tests/compiler_test.go` は、上と同じ手順で自分自身がビルドしたコンパイラを作り、次を検査します。
+`tests/compiler_test.go`, which is part of `go test ./...`, builds a compiler that was built by itself, following the same steps as above, and checks that:
 
-- 自分自身のソースについて、ブートストラップ用コンパイラがビルドした段と同一のコードを生成する（固定点）
-- `tests/run` と `examples` の全プログラムの出力が `.out` と一致する
-- `tests/errors` の全プログラムについて、期待されるコンパイルエラーを報告する
-- `tests/fmt` の整形例と、リポジトリの全ソース（およびインデントを崩したもの）を安定して整形する
-- `tests/unit` の単体テストが通る
+- for its own sources, it generates the same code as the stage built by the bootstrap compiler (fixed point)
+- the output of every program in `tests/run` and `examples` matches its `.out`
+- it reports the expected compile error for every program in `tests/errors`
+- it formats the examples in `tests/fmt` and every source in the repository (and versions of them with broken indentation) stably
+- the unit tests in `tests/unit` pass
 
-## 使い方
+## Usage
 
 ```sh
 bin/ark run examples/json.ark
@@ -34,44 +36,44 @@ bin/ark new hello && cd hello && ../bin/ark run && ../bin/ark test
 bin/ark build | run | check | test | fmt | emit | doc | repl | lsp | new | version
 ```
 
-標準ライブラリ（`lib/`）と Go ランタイム（`runtime/rt`）は `$ARKADIA_ROOT`、
-または実行ファイルの親ディレクトリから探します（`bin/ark` ならリポジトリのルート）。
+The standard library (`lib/`) and the Go runtime (`runtime/rt`) are looked up in `$ARKADIA_ROOT`,
+or in the parent directory of the executable (the repository root for `bin/ark`).
 
-## 構成
+## Structure
 
-| モジュール | 内容 |
+| Module | Contents |
 |---|---|
-| `Ark.Ast` | トークン・構文木（型検査器が埋める `Ref` 付き）・型・カインド・各種 Info |
-| `Ark.Lexer` | 字句解析・レイアウト規則 |
-| `Ark.Format` | ソースの整形（`ark fmt`） |
-| `Ark.Parser` | 再帰下降パーサ（エラーは `Exn` エフェクトで脱出） |
-| `Ark.Fixity` | 演算子の結合性解決・負号/セクション/補間の脱糖 |
-| `Ark.Types` | カインド・型の操作、型の表示、単一化（エフェクト行）、検査器の状態、名前解決、型式の変換 |
-| `Ark.Infer` | 式・パターン・束縛の型推論、制約解決、汎化 |
-| `Ark.Check` | 宣言（型・エフェクト・クラス・インスタンス・deriving）とモジュール単位の検査 |
-| `Ark.Exhaust` | 網羅性検査 |
-| `Ark.Loader` / `Ark.Render` | モジュールの読み込み・エラー表示 |
-| `Ark.Core` / `Ark.Lower` | 中間言語 Core とその生成 |
-| `Ark.Opt` / `Ark.Codegen` | Core の最適化と Go コード生成（エビデンス渡し、キャンセルポイントの挿入） |
-| `Ark.Project` / `Ark.Build` | `ark.toml`（path / git 依存、`ark.lock`）、Go モジュールの生成と `go build` |
-| `Ark.Repl` / `Ark.Lsp` / `Ark.Json` | REPL、Language Server |
+| `Ark.Ast` | Tokens, syntax tree (with `Ref`s filled in by the type checker), types, kinds, and various Info |
+| `Ark.Lexer` | Lexing and the layout rule |
+| `Ark.Format` | Source formatting (`ark fmt`) |
+| `Ark.Parser` | Recursive-descent parser (errors escape with the `Exn` effect) |
+| `Ark.Fixity` | Operator fixity resolution, desugaring of negation, sections and interpolation |
+| `Ark.Types` | Operations on kinds and types, type display, unification (effect rows), checker state, name resolution, conversion of type expressions |
+| `Ark.Infer` | Type inference for expressions, patterns and bindings, constraint solving, generalization |
+| `Ark.Check` | Checking declarations (types, effects, classes, instances, deriving) and whole modules |
+| `Ark.Exhaust` | Exhaustiveness checking |
+| `Ark.Loader` / `Ark.Render` | Module loading and error display |
+| `Ark.Core` / `Ark.Lower` | The Core intermediate language and its generation |
+| `Ark.Opt` / `Ark.Codegen` | Core optimization and Go code generation (evidence passing, insertion of cancellation points) |
+| `Ark.Project` / `Ark.Build` | `ark.toml` (path / git dependencies, `ark.lock`), Go module generation and `go build` |
+| `Ark.Repl` / `Ark.Lsp` / `Ark.Json` | REPL, Language Server |
 | `Main` | CLI |
 
-## 開発メモ
+## Development notes
 
-- **ブートストラップの制約**: `compiler/src` と、それが import する標準ライブラリのモジュールは、
-  ブートストラップ用コンパイラ（凍結）でもビルドできる必要があります。新しい言語機能は `compiler/` に実装しますが、
-  それをコンパイラ自身のソースや、コンパイラが import する標準ライブラリのモジュールで使うには、先にブートストラップ用コンパイラを更新する必要があります。
-  ブートストラップ用コンパイラは凍結したランタイム（`bootstrap/runtime/rt`）を使うので、`runtime/rt` は自由に変更できます。
-  ただし `native/*.go` は両方のランタイムに対してコンパイルされるため、両者に共通の API（値の表現など）だけを使います。
-- **可変状態**: 型検査器のメタ変数・カインド変数、辞書の解、検査結果の注釈などは
-  `Ref`（`newRef` / `readRef` / `writeRef`、`<IO>` エフェクト付き）で表します。
-- **呼び出し規約**: 生成される関数はすべて、呼び出し元のエビデンス `ev *rt.Ev`（ハンドラのフレームと実行中のタスク）を最初の引数に取ります。
-  foreign 関数は、高階のもの（関数を引数に取る）とターゲットを `"ev:pkg.Func"` と書いたものだけがエビデンスを受け取ります。
-  キャンセルポイント `rt.Poll(ev)` は、ループする関数・未知の呼び出し（関数値・エフェクト操作・高階の foreign）をする関数・大域的な参照グラフで再帰する関数の入口に置きます（`Ark.Codegen` の `pollLine`）。
-- **エラー**: パーサの脱出と単一化の失敗は `Std.Exn` の `throw` / `try` で表します
-  （どちらも継続を捨てるハンドラなので、ランタイムでは panic/recover の高速パスで動きます）。
-- **FFI**（`native/native.go`）は標準ライブラリにない汎用の機能だけに限っています:
-  可変参照、Go と同じ数値リテラルの解釈と浮動小数の表示、パス操作、`go/format` による整形、
-  外部コマンドの実行、LSP 用の標準入出力。コンパイラのロジックはすべて Arkadia で書かれています。
-- `native/go.mod` は native ファイルをリポジトリの Go モジュールから除外するためのものです。
+- **Bootstrap constraint**: `compiler/src` and the standard library modules it imports must also be buildable
+  by the (frozen) bootstrap compiler. New language features are implemented in `compiler/`, but to use one in the compiler's own sources,
+  or in standard library modules the compiler imports, the bootstrap compiler has to be updated first.
+  The bootstrap compiler uses a frozen runtime (`bootstrap/runtime/rt`), so `runtime/rt` can be changed freely.
+  However, `native/*.go` is compiled against both runtimes, so it uses only the API common to both (value representation, etc.).
+- **Mutable state**: the type checker's meta variables and kind variables, dictionary solutions, annotations from checking, etc.
+  are represented with `Ref` (`newRef` / `readRef` / `writeRef`, with the `<IO>` effect).
+- **Calling convention**: every generated function takes the caller's evidence `ev *rt.Ev` (the handler frames and the running task) as its first argument.
+  Among foreign functions, only higher-order ones (taking functions as arguments) and those whose target is written `"ev:pkg.Func"` receive the evidence.
+  The cancellation point `rt.Poll(ev)` is placed at the entry of functions that loop, make unknown calls (function values, effect operations, higher-order foreign functions), or recurse in the global reference graph (`pollLine` in `Ark.Codegen`).
+- **Errors**: parser escapes and unification failures are expressed with `throw` / `try` from `Std.Exn`
+  (both are handlers that discard the continuation, so at runtime they take the panic/recover fast path).
+- **FFI** (`native/native.go`) is limited to general-purpose functionality missing from the standard library:
+  mutable references, parsing numeric literals and printing floats the same way as Go, path operations, formatting with `go/format`,
+  running external commands, and standard I/O for the LSP. All compiler logic is written in Arkadia.
+- `native/go.mod` exists to exclude the native files from the repository's Go module.

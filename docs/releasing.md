@@ -1,20 +1,22 @@
-# リリース手順
+# Release procedure
 
-1. バージョン番号を更新する（3 か所）
-   - `compiler/src/Main.ark` の `version`（`ark version` が表示する値。リリースのタグと一致する必要がある）
-   - `compiler/ark.toml` の `version`
-   - `editors/vscode/package.json` の `version`
-2. `CHANGELOG.md` の `## [Unreleased]` の下の内容を、その直後に作る新しいバージョンの節 `## [X.Y.Z] - YYYY-MM-DD`（リリース日）に移し、
-   `[Unreleased]` は空にする。末尾のリンクも更新する
+**English** | [日本語](releasing.ja.md)
+
+1. Update the version number (3 places)
+   - `version` in `compiler/src/Main.ark` (the value `ark version` prints; it must match the release tag)
+   - `version` in `compiler/ark.toml`
+   - `version` in `editors/vscode/package.json`
+2. Move the contents under `## [Unreleased]` in `CHANGELOG.md` into a new version section `## [X.Y.Z] - YYYY-MM-DD` (the release date) created right after it,
+   and leave `[Unreleased]` empty. Update the links at the end as well. Do the same in `CHANGELOG.ja.md`
 
    ```markdown
    [Unreleased]: https://github.com/arkadia-lang/arkadia/compare/vX.Y.Z...HEAD
    [X.Y.Z]: https://github.com/arkadia-lang/arkadia/releases/tag/vX.Y.Z
    ```
 
-   （0.1.0 より後のバージョンは `[X.Y.Z]: https://github.com/arkadia-lang/arkadia/compare/v<前のバージョン>...vX.Y.Z` にし、既存の行は残す）
-3. PR を作って CI が通ったら main にマージする
-4. main の最新コミットにタグを付けて push する
+   (for versions after 0.1.0, use `[X.Y.Z]: https://github.com/arkadia-lang/arkadia/compare/v<previous version>...vX.Y.Z` and keep the existing lines)
+3. Open a PR, and merge it into main once CI passes
+4. Tag the latest commit on main and push the tag
 
    ```sh
    git switch main && git pull
@@ -22,8 +24,8 @@
    git push origin vX.Y.Z
    ```
 
-5. Release ワークフロー（`.github/workflows/release.yml`）が検査・テストの後、`just dist` のアーカイブ
-   （`arkadia-X.Y.Z-{linux,darwin}-{amd64,arm64}.tar.gz` と `SHA256SUMS`）と CHANGELOG の該当節を載せた
-   GitHub Release を作成する。タグと `ark version` が一致しない場合や CHANGELOG に節が無い場合は失敗する
+5. After checks and tests, the Release workflow (`.github/workflows/release.yml`) creates a GitHub Release with the `just dist` archives
+   (`arkadia-X.Y.Z-{linux,darwin}-{amd64,arm64}.tar.gz` and `SHA256SUMS`) and the corresponding section of `CHANGELOG.md`.
+   It fails if the tag does not match `ark version` or if the CHANGELOG has no section for the version
 
-アーカイブはローカルでも `just dist` で `dist/` に作れます。
+The archives can also be built locally into `dist/` with `just dist`.

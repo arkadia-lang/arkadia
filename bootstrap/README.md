@@ -1,34 +1,36 @@
-# bootstrap — ブートストラップ用コンパイラ
+# bootstrap — the bootstrap compiler
 
-`bootstrap/` は Go で書かれた Arkadia コンパイラで、Arkadia で書かれた本体（[`../compiler`](../compiler)）を
-最初にビルドするためだけに使います。
+**English** | [日本語](README.ja.md)
+
+`bootstrap/` is an Arkadia compiler written in Go, used only to build the compiler written in Arkadia ([`../compiler`](../compiler))
+for the first time.
 
 ```sh
-just bootstrap    # bin/ark0 をビルド
-just build        # bin/ark0 で compiler/ をビルド（bin/ark1）し、bin/ark1 で再ビルド（bin/ark）
+just bootstrap    # build bin/ark0
+just build        # build compiler/ with bin/ark0 (bin/ark1), then rebuild it with bin/ark1 (bin/ark)
 ```
 
-本体と同じコマンド（`build` / `run` / `emit` など）を備えていますが、日常の開発には `bin/ark` を使ってください。
+It has the same commands as the main compiler (`build` / `run` / `emit`, etc.), but use `bin/ark` for everyday development.
 
-## 方針
+## Policy
 
-- **凍結**: 言語の機能追加や修正は `compiler/` に入れ、ここには入れません。
-  変更するのは、`compiler/src`（とそれが import する標準ライブラリのモジュール）をビルドできなくなるときだけです。
-- **テスト**: ここには独自の統合テストを置きません。`tests/compiler_test.go` が、
-  このコンパイラでビルドした本体が自分自身を再ビルドして固定点に達することを検査します。
-- 標準ライブラリ（`lib/`）はリポジトリのものを埋め込んで使います。Go ランタイムは、エビデンス渡しに移行する前の
-  `runtime/rt` を凍結した複製（[`runtime/rt`](runtime/rt)）を埋め込みます。このコンパイラが生成するコードはその呼び出し規約に従い、
-  ビルドしたプログラム（セルフホストコンパイラの第 1 段）は一度に一つのゴルーチンだけで動きます。
+- **Frozen**: language features and fixes go into `compiler/`, not here.
+  This compiler is changed only when it can no longer build `compiler/src` (and the standard library modules it imports).
+- **Tests**: no integration tests of its own live here. `tests/compiler_test.go` checks that
+  the main compiler built with this one rebuilds itself and reaches a fixed point.
+- It embeds the repository's standard library (`lib/`). For the Go runtime it embeds a frozen copy ([`runtime/rt`](runtime/rt))
+  of `runtime/rt` from before the move to evidence passing. The code this compiler generates follows that calling convention,
+  and the programs it builds (the first stage of the self-hosted compiler) run on only one goroutine at a time.
 
-## 構成
+## Structure
 
 ```
 cmd/ark            CLI
-internal/syntax    字句解析（レイアウト規則）・構文解析・演算子優先順位・脱糖
-internal/types     カインド推論・型推論（HM + 型クラス + エフェクト行）・網羅性検査
-internal/core      中間言語 Core への変換（辞書・パターン・ハンドラ）
-internal/codegen   Core の最適化と Go コード生成
-internal/driver    モジュール読み込み・パッケージ管理・ビルド・テスト
-internal/lsp       Language Server Protocol 実装
-runtime/rt         生成コードにリンクされるランタイム（凍結）
+internal/syntax    lexing (layout rule), parsing, operator precedence, desugaring
+internal/types     kind inference, type inference (HM + type classes + effect rows), exhaustiveness checking
+internal/core      translation to the Core intermediate language (dictionaries, patterns, handlers)
+internal/codegen   Core optimization and Go code generation
+internal/driver    module loading, package management, building, testing
+internal/lsp       Language Server Protocol implementation
+runtime/rt         runtime linked into generated code (frozen)
 ```
