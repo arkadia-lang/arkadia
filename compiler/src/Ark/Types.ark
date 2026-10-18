@@ -42,6 +42,7 @@ kindString k0 = match pruneKind k0 with
       _ -> kindString a
     from ++ " -> " ++ kindString b
   KVar i _ -> "k${i}"
+  KData n -> shortName n
 
 unifyKind : Kind -> Kind -> <IO> Bool
 unifyKind a0 b0 =
@@ -58,6 +59,7 @@ unifyKind a0 b0 =
     (KStar, KStar) -> True
     (KRow, KRow) -> True
     (KEffect, KEffect) -> True
+    (KData x, KData y) -> x == y
     (KArrow f1 t1, KArrow f2 t2) -> unifyKind f1 f2 && unifyKind t1 t2
     _ -> False
 
@@ -418,12 +420,14 @@ type LocalVar = LocalVar Pos String (Option Scheme) Type (Option (Ref (List Stri
 -- A wanted constraint.
 type Wanted = Wanted ClassInfo Type DictRef Pos
 
--- A given constraint and its dictionary.
-type Given = Given ClassInfo Type DictExpr
+-- A given constraint and its dictionary, or a type equation assumed in a
+-- match arm (a rigid type variable, by id, equals a type).
+type Given = Given ClassInfo Type DictExpr | GivenEq Int Type
 
 -- A pattern match to check for exhaustiveness: position, description,
--- rows of patterns, whether each row is guarded.
-type MatchSite = MatchSite Pos String (List (List Pattern)) (List Bool)
+-- rows of patterns, whether each row is guarded, the types of the columns
+-- and the givens at the match.
+type MatchSite = MatchSite Pos String (List (List Pattern)) (List Bool) (List Type) (List Given)
 
 -- The type checker of one module.
 type Checker = Checker
@@ -660,16 +664,22 @@ unify c a0 b0 =
       (TMeta ma, TMeta mb) | readRef (metaLevelRef mb) > readRef (metaLevelRef ma) -> bindMetaC c mb a
       (TMeta ma, _) -> bindMetaC c ma b
       (_, TMeta _) -> unify c b a
-      _ | isRow a || isRow b -> unifyRows c a b
-      (TCon x _, TCon y _) | x == y -> ()
-      (TApp f1 a1, TApp f2 a2) ->
-        unify c f1 f2
-        unify c a1 a2
-      (TFun a1 e1 r1, TFun a2 e2 r2) ->
-        unify c a1 a2
-        unify c e1 e2
-        unify c r1 r2
-      _ -> throw ""
+      _ -> match (whnfStep c a, whnfStep c b) with
+        (None, None) -> unifyStruct c a b
+        (ra, rb) -> unify c (withDefault a ra) (withDefault b rb)
+
+private unifyStruct : Checker -> Type -> Type -> <Exn String, IO> Unit
+unifyStruct c a b = match (a, b) with
+  _ | isRow a || isRow b -> unifyRows c a b
+  (TCon x _, TCon y _) | x == y -> ()
+  (TApp f1 a1, TApp f2 a2) ->
+    unify c f1 f2
+    unify c a1 a2
+  (TFun a1 e1 r1, TFun a2 e2 r2) ->
+    unify c a1 a2
+    unify c e1 e2
+    unify c r1 r2
+  _ -> throw ""
 
 -- Match the labels of la against lb (by effect name), unifying matched
 -- pairs. Returns the unmatched labels of la and the unused labels of lb.
@@ -785,6 +795,256 @@ subRow c a b =
               _ -> match missing with
                 [] -> throw "effect rows do not match"
                 _ -> missingEffect missing tb
+
+-- ================================================================ type equations and families
+
+-- The type that a rigid type variable is assumed to equal in the current
+-- match arm.
+givenEq : Checker -> Int -> <IO> Option Type
+givenEq c i = givenEqAcc (readRef (cGivens c)) i
+
+private givenEqAcc : List Given -> Int -> Option Type
+givenEqAcc gs i = match gs with
+  [] -> None
+  GivenEq j t :: rest -> match i == j with
+    True -> Some t
+    False -> givenEqAcc rest i
+  _ :: rest -> givenEqAcc rest i
+
+-- One step towards the head normal form of a pruned type: a rigid type
+-- variable replaced by the type it is assumed to equal, or an application
+-- of a type family reduced.
+whnfStep : Checker -> Type -> <IO> Option Type
+whnfStep c t = match t with
+  TSkol i _ _ _ -> givenEq c i
+  TApp _ _ -> reduceFamily c t
+  TCon _ _ -> reduceFamily c t
+  _ -> None
+
+whnf : Checker -> Type -> <IO> Type
+whnf c t0 =
+  let t = prune t0
+  match whnfStep c t with
+    Some t2 -> whnf c t2
+    None -> t
+
+-- Reduce a type everywhere (for messages).
+normalize : Checker -> Type -> <IO> Type
+normalize c t0 = match whnf c t0 with
+  TApp f a ->
+    let f2 = normalize c f
+    TApp f2 (normalize c a)
+  TFun a e r ->
+    let a2 = normalize c a
+    let e2 = normalize c e
+    TFun a2 e2 (normalize c r)
+  TRowExt l r ->
+    let l2 = normalize c l
+    TRowExt l2 (normalize c r)
+  t -> t
+
+-- Reduce the applications of type families everywhere (for messages).
+reduceFamilies : Checker -> Type -> <IO> Type
+reduceFamilies c t0 =
+  let t = prune t0
+  match reduceFamily c t with
+    Some t2 -> reduceFamilies c t2
+    None -> match t with
+      TApp f a ->
+        let f2 = reduceFamilies c f
+        TApp f2 (reduceFamilies c a)
+      TFun a e r ->
+        let a2 = reduceFamilies c a
+        let e2 = reduceFamilies c e
+        TFun a2 e2 (reduceFamilies c r)
+      TRowExt l r ->
+        let l2 = reduceFamilies c l
+        TRowExt l2 (reduceFamilies c r)
+      _ -> t
+
+isFamily : Checker -> String -> <IO> Bool
+isFamily c name = Map.member name (readRef (gFamilies (cG c)))
+
+-- Whether a type in head normal form is an application of a type family
+-- that cannot be reduced (yet).
+isStuck : Checker -> Type -> <IO> Bool
+isStuck c t =
+  let (h, _) = headOf t
+  match h with
+    TCon n _ -> isFamily c n
+    _ -> False
+
+-- The result of matching an equation of a type family: it applies, it can
+-- never apply, or it cannot be decided yet.
+type FamMatch = FMatch | FApart | FStuck
+
+-- Reduce an application of a type family by its first equation that
+-- applies. An equation is skipped only when it can never apply.
+reduceFamily : Checker -> Type -> <IO> Option Type
+reduceFamily c t =
+  let fams = readRef (gFamilies (cG c))
+  match isEmpty fams with
+    True -> None
+    False ->
+      let (h, args) = headOf t
+      match h with
+        TCon n _ -> match Map.lookup n fams with
+          Some fam | length args >= famArity fam ->
+            let ar = famArity fam
+            match reduceEqs c (famEqs fam) (take ar args) with
+              Some r -> Some (mkAppT r (drop ar args))
+              None -> None
+          _ -> None
+        _ -> None
+
+private reduceEqs : Checker -> List FamEq -> List Type -> <IO> Option Type
+reduceEqs c eqs args = match eqs with
+  [] -> None
+  FamEq _ nv pats rhs :: rest ->
+    let sub = newRef Map.empty
+    match matchPats c sub pats args with
+      FMatch -> Some (substGen rhs (map (\i -> Map.findWithDefault TRowEmpty i (readRef sub)) (range 0 nv)))
+      FApart -> reduceEqs c rest args
+      FStuck -> None
+
+private matchPats : Checker -> Ref (Map.Map Int Type) -> List Type -> List Type -> <IO> FamMatch
+matchPats c sub pats args =
+  let step acc (pt, a) = match acc with
+    FApart -> FApart
+    _ -> match matchPat c sub pt a with
+      FMatch -> acc
+      r -> r
+  foldl step FMatch (zip pats args)
+
+private matchPat : Checker -> Ref (Map.Map Int Type) -> Type -> Type -> <IO> FamMatch
+matchPat c sub pat arg = match pat with
+  TGen i ->
+    modifyRef sub (Map.insert i arg)
+    FMatch
+  _ ->
+    let a = whnf c arg
+    let (ph, pargs) = headOf pat
+    let (ah, aargs) = headOf a
+    match (ph, ah) with
+      (TCon pn _, TCon an _)
+        | isFamily c an -> FStuck
+        | pn != an || length pargs != length aargs -> FApart
+        | otherwise -> matchPats c sub pargs aargs
+      (TCon _ _, TFun _ _ _) -> FApart
+      _ -> FStuck
+
+-- Make the type of a matched value (a) and the result type of a
+-- constructor pattern (b) equal, assuming equations for the rigid type
+-- variables of a (GADT matching). own: the metas instantiating the
+-- constructor's type variables; other metas are unified when bindOuter,
+-- and otherwise left alone. Throws when no value of type a can be built
+-- with the constructor.
+refine : Checker -> List Int -> Bool -> Type -> Type -> <Exn String, IO> Unit
+refine c own bindOuter a0 b0 =
+  let a = whnf c a0
+  let b = whnf c b0
+  let isOwn m = elem (metaId m) own
+  let outer _ = match bindOuter with
+    True -> unify c a b
+    False -> ()
+  match sameVar a b with
+    True -> ()
+    False -> match (a, b) with
+      (TMeta ma, _) | isOwn ma -> bindMeta ma b
+      (_, TMeta mb) | isOwn mb -> bindMeta mb a
+      (TMeta _, _) -> outer ()
+      (_, TMeta _) -> outer ()
+      _ -> match isRow a || isRow b with
+        True -> outer ()
+        False -> match isStuck c a || isStuck c b with
+          True -> ()
+          False -> match (a, b) with
+            (TSkol i _ _ _, _) -> assume c i b
+            (_, TSkol i _ _ _) -> assume c i a
+            (TCon x _, TCon y _) | x == y -> ()
+            (TApp f1 x1, TApp f2 x2) ->
+              refine c own bindOuter f1 f2
+              refine c own bindOuter x1 x2
+            (TFun x1 e1 r1, TFun x2 e2 r2) ->
+              refine c own bindOuter x1 x2
+              refine c own bindOuter e1 e2
+              refine c own bindOuter r1 r2
+            _ -> throw "inaccessible"
+
+-- Assume that rigid type variable i equals t in the current match arm.
+private assume : Checker -> Int -> Type -> <Exn String, IO> Unit
+assume c i t = match skolOccurs c i t with
+  True -> throw "inaccessible"
+  False -> modifyRef (cGivens c) (\gs -> GivenEq i t :: gs)
+
+private skolOccurs : Checker -> Int -> Type -> <IO> Bool
+skolOccurs c i t0 = match whnf c t0 with
+  TSkol j _ _ _ -> i == j
+  TApp f a -> skolOccurs c i f || skolOccurs c i a
+  TFun a e r -> skolOccurs c i a || skolOccurs c i e || skolOccurs c i r
+  TRowExt l r -> skolOccurs c i l || skolOccurs c i r
+  _ -> False
+
+-- The argument types and the result of a curried function type.
+splitFun : Int -> Type -> <IO> (List Type, Type)
+splitFun n t = splitFunAcc n t []
+
+private splitFunAcc : Int -> Type -> List Type -> <IO> (List Type, Type)
+splitFunAcc n t acc = match n == 0 with
+  True -> (reverse acc, t)
+  False -> match prune t with
+    TFun a _ r -> splitFunAcc (n - 1) r (a :: acc)
+    _ -> error "splitFun: not a function type"
+
+-- Instantiate constructor ci for a matched value of type t: the types of
+-- its fields, assuming the equations it implies (pushed on the givens), or
+-- None when no value of type t can be built with ci. The type variables of
+-- the constructor left unknown are existential and become rigid.
+ctorFieldsAt : Checker -> CtorInfo -> Type -> Bool -> <IO> Option (List Type)
+ctorFieldsAt c ci t bindOuter =
+  let Scheme kinds names _ st = ctorScheme ci
+  let metas = map (newMetaV c) kinds
+  -- these metas are all bound here: binding them to rigid type variables
+  -- of any scope is fine
+  forEach metas (\m -> writeRef (metaLevelRef m) maxLevel)
+  let (fields, res) = splitFun (ctorArity ci) (substGen st (map TMeta metas))
+  match try (\_ -> refine c (map metaId metas) bindOuter t res) with
+    Err _ -> None
+    Ok _ ->
+      forEach (indexed metas) (\(i, m) -> match readRef (metaRef m) with
+        None ->
+          let name = match i < length names with
+            True -> at i names
+            False -> ""
+          writeRef (metaRef m) (Some (newSkolem c name (metaKind m)))
+        Some _ -> ())
+      Some fields
+
+private maxLevel : Int
+maxLevel = 1000000000
+
+-- Whether matching constructor ci may refine the type of the matched
+-- value: its result is not its type applied to distinct parameters, or it
+-- has existential type variables (it was declared with a signature).
+ctorRefines : Global -> CtorInfo -> <IO> Bool
+ctorRefines g ci = match Map.lookup (ctorTypeName ci) (readRef (gTypes g)) with
+  None -> False
+  Some ti ->
+    let np = length (typeInfoParams ti)
+    let Scheme kinds _ _ st = ctorScheme ci
+    let (_, res) = splitFun (ctorArity ci) st
+    let (_, args) = headOf res
+    let plainArgs = length args == np && allOf (\(i, a) -> match a with
+      TGen j -> i == j
+      _ -> False) (indexed args)
+    let extra = anyOf (\(i, k) -> i >= np && not (isRowKind k)) (indexed kinds)
+    not plainArgs || extra
+
+-- Whether some constructor of a data type may refine its parameters.
+typeRefines : Global -> String -> <IO> Bool
+typeRefines g name = match Map.lookup name (readRef (gTypes g)) with
+  Some ti -> anyOf (ctorRefines g) (typeInfoCtors ti)
+  None -> False
 
 -- ================================================================ builtins
 
@@ -1312,11 +1572,23 @@ convApp c con args env =
   let (p, qual, name) = match con with
     TConE cp q n -> (cp, q, n)
     _ -> error "convApp: not a constructor"
-  let headRes = match lookupTypeName c p qual name with
-    None -> Err (freshPair c)
-    Some (TEType ti) -> Ok (TCon (typeInfoName ti) (typeInfoKind ti), typeInfoKind ti, args)
-    Some (TEEffect ei) -> Ok (TCon (effectName ei) (effectKind ei), effectKind ei, args)
-    Some (TEAlias (AliasInfo _ params body _ ascope expanding))
+  let entry = match promotedCtor c qual name with
+    Some ci -> Ok ci
+    None -> Err (lookupTypeName c p qual name)
+  let headRes = match entry with
+    Ok ci -> match promotedKind c ci with
+      Some k -> Ok (TCon (promotedName ci) k, k, args)
+      None ->
+        errorf c p "constructor '${name}' cannot be used in a type: only constructors of a type without parameters whose fields are such types can"
+        Err (freshPair c)
+    Err None -> Err (freshPair c)
+    Err (Some (TEType ti)) ->
+      match Map.lookup (typeInfoName ti) (readRef (gFamilies (cG c))) with
+        Some fam | length args < famArity fam -> errorf c p "type family '${name}' must be applied to ${famArity fam} argument(s)"
+        _ -> ()
+      Ok (TCon (typeInfoName ti) (typeInfoKind ti), typeInfoKind ti, args)
+    Err (Some (TEEffect ei)) -> Ok (TCon (effectName ei) (effectKind ei), effectKind ei, args)
+    Err (Some (TEAlias (AliasInfo _ params body _ ascope expanding)))
       | length args < length params ->
           errorf c p "type alias '${name}' expects ${length params} arguments"
           Err (freshPair c)
@@ -1340,13 +1612,64 @@ convApp c con args env =
           let (h, k) = convType c2 body sub
           writeRef expanding False
           Ok (h, k, drop (length params) args)
-    Some (TEClass _) ->
+    Err (Some (TEClass _)) ->
       errorf c p "'${name}' is a class, not a type"
       Err (freshPair c)
-    Some (TEAmbig _) -> Err (freshPair c)
+    Err (Some (TEAmbig _)) -> Err (freshPair c)
   match headRes with
     Err r -> r
     Ok (head, k0, rest) -> applyArgs c name head k0 rest env
+
+-- A data constructor named in a type (where no type has that name).
+private promotedCtor : Checker -> String -> String -> <IO> Option CtorInfo
+promotedCtor c qual name = match qual with
+  "" -> match Map.member name (readRef (scopeTypes (cScope c))) with
+    True -> None
+    False -> match Map.lookup name (readRef (scopeCtors (cScope c))) with
+      Some (CEctor ci) -> Some ci
+      _ -> None
+  _ -> match Map.lookup qual (readRef (scopeQuals (cScope c))) with
+    Some exs | not (anyOf (\ex -> Map.member name (readRef (exportsTypes ex))) exs) -> firstSome exs (\ex -> Map.lookup name (readRef (exportsCtors ex)))
+    _ -> None
+
+-- The name of a data constructor used as a type.
+promotedName : CtorInfo -> String
+promotedName ci = "'" ++ ctorName ci
+
+-- The kind of a data constructor used as a type: its fields and its result
+-- are types without parameters, used as kinds.
+promotedKind : Checker -> CtorInfo -> <IO> Option Kind
+promotedKind c ci = match Map.lookup (ctorTypeName ci) (readRef (gTypes (cG c))) with
+  Some ti | isEmpty (typeInfoParams ti) && not (isFamily c (typeInfoName ti)) ->
+    let kinds = map (\f -> match prune f with
+      TCon n _ | not (isFamily c n) -> match Map.lookup n (readRef (gTypes (cG c))) with
+        Some fti | isEmpty (typeInfoParams fti) -> Some (KData n)
+        _ -> None
+      _ -> None) (ctorFields ci)
+    match allOf isSome kinds with
+      True -> Some (foldr (\k acc -> KArrow k acc) (KData (typeInfoName ti)) (filterMap id kinds))
+      False -> None
+  _ -> None
+
+-- Convert a written kind: Type, Row, Effect, a data type without
+-- parameters, or an arrow between kinds.
+convKind : Checker -> TypeExpr -> <IO> Kind
+convKind c te = match te with
+  TConE _ "" "Type" -> KStar
+  TConE _ "" "Row" -> KRow
+  TConE _ "" "Effect" -> KEffect
+  TConE p q n -> match lookupTypeName c p q n with
+    Some (TEType ti) | isEmpty (typeInfoParams ti) && not (isFamily c (typeInfoName ti)) -> KData (typeInfoName ti)
+    Some _ ->
+      errorf c p "'${n}' cannot be used as a kind: only Type, Row, Effect and data types without parameters can"
+      KStar
+    None -> KStar
+  TFunE _ a None r ->
+    let ka = convKind c a
+    KArrow ka (convKind c r)
+  _ ->
+    errorf c (typePos te) "invalid kind"
+    KStar
 
 private applyArgs : Checker -> String -> Type -> Kind -> List TypeExpr -> TvEnv -> <IO> (Type, Kind)
 applyArgs c name head k args env = match args with

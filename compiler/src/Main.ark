@@ -315,7 +315,7 @@ cmdDoc root argv = match argv with
           let file = match Prelude.find (\m -> moduleName m == name) mods with
             Some m -> moduleFile m
             None -> ""
-          print (moduleDoc (loaderSources l) file ex)
+          print (moduleDoc g (loaderSources l) file ex)
           0
         None -> failMsg "unknown module ${name}"
   _ ->
@@ -435,17 +435,24 @@ trimEnd s = fromChars (reverse (dropWhile (\c -> c == ' ') (reverse (chars s))))
 
 -- The public interface of a module, with documentation comments from its
 -- source file.
-moduleDoc : Map.Map String String -> String -> Exports -> <IO> String
-moduleDoc srcs file ex =
+moduleDoc : Global -> Map.Map String String -> String -> Exports -> <IO> String
+moduleDoc g srcs file ex =
   let mod = exportsModule ex
   let doc p n = docText (docComment srcs p n)
   let types = concatStrings (map (\(n, t) -> match t with
     TEType ti | startsWith (mod ++ ".") (typeInfoName ti) ->
-      let ctors = map (ctorString ti) (typeInfoCtors ti)
-      let ctorText = match ctors with
-        [] -> ""
-        _ -> " = " ++ joinWith " | " ctors
-      "\ntype " ++ joinWith " " (n :: typeInfoParams ti) ++ ctorText ++ "\n" ++ doc (typeInfoPos ti) n
+      let header = joinWith " " (n :: typeInfoParams ti)
+      match (Map.member (typeInfoName ti) (readRef (gFamilies g)), typeRefines g (typeInfoName ti)) with
+        (True, _) -> "\ntype family " ++ header ++ "\n" ++ doc (typeInfoPos ti) n
+        (_, True) ->
+          let sigs = map (\ci -> "  ${ctorShort ci} : ${schemeString (ctorScheme ci)}\n") (typeInfoCtors ti)
+          "\ntype " ++ header ++ " where\n" ++ doc (typeInfoPos ti) n ++ concatStrings sigs
+        _ ->
+          let ctors = map (ctorString ti) (typeInfoCtors ti)
+          let ctorText = match ctors with
+            [] -> ""
+            _ -> " = " ++ joinWith " | " ctors
+          "\ntype " ++ header ++ ctorText ++ "\n" ++ doc (typeInfoPos ti) n
     TEClass cl | classModule cl == mod ->
       "\nclass ${n}\n" ++ doc (classPos cl) n ++ concatStrings (map (\m -> "  ${methodName m} : ${schemeString (methodScheme m)}\n") (classMethods cl))
     TEEffect ei | effectModule ei == mod ->

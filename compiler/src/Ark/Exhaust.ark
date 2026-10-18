@@ -15,6 +15,9 @@ sconName (SCon n _ _ _) = n
 sconArity : SCon -> Int
 sconArity (SCon _ _ a _) = a
 
+sconType : SCon -> String
+sconType (SCon _ _ _ tn) = tn
+
 -- A simplified pattern: wildcard, constructor or literal.
 type SPat = SWild | SCtor SCon (List SPat) | SLit String
 
@@ -62,8 +65,10 @@ litKey l = match l with
 checkMatches : Checker -> <IO> Unit
 checkMatches c = forEach (reverse (readRef (cMatches c))) (checkSite c)
 
+-- The analysis runs with the givens of the match and the types of its
+-- columns, whose unknown types are made rigid: it must not bind them.
 private checkSite : Checker -> MatchSite -> <IO> Unit
-checkSite c (MatchSite p what rows guarded) =
+checkSite c (MatchSite p what rows guarded types givens) =
   let g = cG c
   let kept = filterMap id (map (\(r, gd) -> match gd with
     True -> None
@@ -71,11 +76,40 @@ checkSite c (MatchSite p what rows guarded) =
   let n = match rows with
     r :: _ -> length r
     [] -> 0
-  match missing g kept n with
+  let rigid = newRef Map.empty
+  let tys = match length types == n with
+    True -> map (\t -> Some (rigidCopy c rigid t)) types
+    False -> replicate n None
+  let saved = readRef (cGivens c)
+  writeRef (cGivens c) givens
+  let result = missing c kept tys n
+  writeRef (cGivens c) saved
+  match result with
     None -> ()
     Some w ->
       let parts = map (\x -> showSPat x (n > 1)) w
       errorf c p "non-exhaustive patterns in ${what}: the case `${joinWith " " parts}` is not handled"
+
+-- A copy of a type with its unbound metas replaced by rigid variables.
+private rigidCopy : Checker -> Ref (Map.Map Int Type) -> Type -> <IO> Type
+rigidCopy c rigid t0 = match prune t0 with
+  TMeta m -> match Map.lookup (metaId m) (readRef rigid) with
+    Some t -> t
+    None ->
+      let t = newSkolem c "" (metaKind m)
+      modifyRef rigid (Map.insert (metaId m) t)
+      t
+  TApp f a ->
+    let f2 = rigidCopy c rigid f
+    TApp f2 (rigidCopy c rigid a)
+  TFun a e r ->
+    let a2 = rigidCopy c rigid a
+    let e2 = rigidCopy c rigid e
+    TFun a2 e2 (rigidCopy c rigid r)
+  TRowExt l r ->
+    let l2 = rigidCopy c rigid l
+    TRowExt l2 (rigidCopy c rigid r)
+  t -> t
 
 showSPat : SPat -> Bool -> String
 showSPat p atom = match p with
@@ -113,15 +147,16 @@ defaultRows rows = filterMap (\r -> match r with
   SWild :: rest -> Some rest
   _ -> None) rows
 
--- A pattern vector not covered by rows, if any.
-missing : Global -> List (List SPat) -> Int -> <IO> Option (List SPat)
-missing g rows n = match n == 0 with
+-- A pattern vector not covered by rows, if any. tys holds the types of
+-- the columns (when known).
+missing : Checker -> List (List SPat) -> List (Option Type) -> Int -> <IO> Option (List SPat)
+missing c rows tys n = match n == 0 with
   True -> match rows with
     [] -> Some []
     _ -> None
   False ->
-    -- the type of the column (from the last constructor seen), the
-    -- constructors seen and whether a literal occurs
+    -- a constructor of the column's type, the constructors seen and
+    -- whether a literal occurs
     let addSeen s con = match elem (sconName con) s with
       True -> s
       False -> snoc s (sconName con)
@@ -129,25 +164,87 @@ missing g rows n = match n == 0 with
       SCtor con _ :: _ -> (Some con, addSeen s con, l)
       SLit _ :: _ -> (t, s, True)
       _ -> (t, s, l)) (None, [], False) rows
+    let rest = drop 1 tys
     match ti with
       Some con0 ->
-        let all = siblings g con0
-        match length seen == length all with
-          True -> firstMissing g rows n all
-          False -> match missing g (defaultRows rows) (n - 1) with
+        let all = possibleCons c con0 (columnType tys)
+        match allOf (\con -> elem (sconName con) seen) all with
+          True -> firstMissing c rows tys n all
+          False -> match missing c (defaultRows rows) rest (n - 1) with
             None -> None
             Some w -> match find (\con -> not (elem (sconName con) seen)) all with
               Some con -> Some (SCtor con (wilds (sconArity con)) :: w)
               None -> Some (SWild :: w)
-      None -> match missing g (defaultRows rows) (n - 1) with
+      None -> match missing c (defaultRows rows) rest (n - 1) with
         None -> None
         Some w -> Some (SWild :: w)
 
-private firstMissing : Global -> List (List SPat) -> Int -> List SCon -> <IO> Option (List SPat)
-firstMissing g rows n cons = match cons with
+private columnType : List (Option Type) -> Option Type
+columnType tys = match tys with
+  t :: _ -> t
+  [] -> None
+
+private firstMissing : Checker -> List (List SPat) -> List (Option Type) -> Int -> List SCon -> <IO> Option (List SPat)
+firstMissing c rows tys n cons = match cons with
   [] -> None
   con :: rest ->
     let a = sconArity con
-    match missing g (specialize rows con) (a + n - 1) with
+    let saved = readRef (cGivens c)
+    let fields = conFieldTypes c con (columnType tys)
+    let r = missing c (specialize rows con) (fields ++ drop 1 tys) (a + n - 1)
+    writeRef (cGivens c) saved
+    match r with
       Some w -> Some (SCtor con (take a w) :: drop a w)
-      None -> firstMissing g rows n rest
+      None -> firstMissing c rows tys n rest
+
+private sconInfo : Global -> SCon -> <IO> Option CtorInfo
+sconInfo g (SCon name _ _ tn) = match Map.lookup tn (readRef (gTypes g)) with
+  Some ti -> find (\ci -> ctorName ci == name) (typeInfoCtors ti)
+  None -> None
+
+-- The constructors of the type of con0 that can build a value of type t:
+-- matching a constructor that refines types may be impossible.
+private possibleCons : Checker -> SCon -> Option Type -> <IO> List SCon
+possibleCons c con0 t =
+  let g = cG c
+  let all = siblings g con0
+  match t with
+    Some ty | not (startsWith "tuple" (sconType con0)) && typeRefines g (sconType con0) -> filter (\con -> match sconInfo g con with
+      None -> True
+      Some ci ->
+        let saved = readRef (cGivens c)
+        let ok = isSome (ctorFieldsAt c ci ty False)
+        writeRef (cGivens c) saved
+        ok) all
+    _ -> all
+
+-- The types of the fields of con in a value of type t, assuming the
+-- equations implied by matching it (pushed on the givens).
+private conFieldTypes : Checker -> SCon -> Option Type -> <IO> List (Option Type)
+conFieldTypes c con t =
+  let g = cG c
+  let unknown = replicate (sconArity con) None
+  match t with
+    None -> unknown
+    Some ty -> match startsWith "tuple" (sconType con) with
+      True ->
+        let (_, args) = headOf (whnf c ty)
+        match length args == sconArity con with
+          True -> map Some args
+          False -> unknown
+      False -> match sconInfo g con with
+        None -> unknown
+        Some ci -> match typeRefines g (ctorTypeName ci) with
+          True -> match ctorFieldsAt c ci ty False with
+            Some fs -> map Some fs
+            None -> unknown
+          False ->
+            let (_, args) = headOf (whnf c ty)
+            match length args == length (paramsOf g ci) with
+              True -> map (\f -> Some (substGen f args)) (ctorFields ci)
+              False -> unknown
+
+private paramsOf : Global -> CtorInfo -> <IO> List String
+paramsOf g ci = match Map.lookup (ctorTypeName ci) (readRef (gTypes g)) with
+  Some ti -> typeInfoParams ti
+  None -> []

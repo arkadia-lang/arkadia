@@ -194,6 +194,7 @@ type Kind
   | KEffect
   | KArrow Kind Kind
   | KVar Int (Ref (Option Kind))
+  | KData String                    -- a promoted data type (by global name)
 
 -- ================================================================ types
 
@@ -315,6 +316,19 @@ indexOfName name (n :: ns) i
 
 ctorTypePos : CtorInfo -> Pos
 ctorTypePos (CtorInfo _ _ _ _ _ _ _ _ _ p _) = p
+
+-- A closed type family: global name, arity and equations (tried in order).
+type FamInfo = FamInfo String Int (List FamEq)
+
+famArity : FamInfo -> Int
+famArity (FamInfo _ n _) = n
+
+famEqs : FamInfo -> List FamEq
+famEqs (FamInfo _ _ eqs) = eqs
+
+-- An equation of a type family: position, number of pattern variables,
+-- argument patterns and right-hand side (pattern variables are TGen).
+type FamEq = FamEq Pos Int (List Type) Type
 
 -- name, params, body, module, defining scope, expanding
 type AliasInfo = AliasInfo String (List String) TypeExpr String Scope (Ref Bool)
@@ -565,45 +579,49 @@ type Global = Global
   (Ref Int)
   Bool                                  -- collect identifier information
   (Ref (List IdentInfo))                -- identifier information (reversed)
+  (Ref (Map.Map String FamInfo))        -- type families
 
 newGlobal : Bool -> <IO> Global
-newGlobal collect = Global (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef 0) collect (newRef [])
+newGlobal collect = Global (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef Map.empty) (newRef []) (newRef 0) collect (newRef []) (newRef Map.empty)
 
 gModules : Global -> Ref (Map.Map String Exports)
-gModules (Global m _ _ _ _ _ _ _ _ _ _) = m
+gModules (Global m _ _ _ _ _ _ _ _ _ _ _) = m
 
 gInstances : Global -> Ref (Map.Map String (Map.Map String InstInfo))
-gInstances (Global _ i _ _ _ _ _ _ _ _ _) = i
+gInstances (Global _ i _ _ _ _ _ _ _ _ _ _) = i
 
 -- instances in reverse order of declaration
 gInstList : Global -> Ref (List InstInfo)
-gInstList (Global _ _ l _ _ _ _ _ _ _ _) = l
+gInstList (Global _ _ l _ _ _ _ _ _ _ _ _) = l
 
 gTypes : Global -> Ref (Map.Map String TypeInfo)
-gTypes (Global _ _ _ t _ _ _ _ _ _ _) = t
+gTypes (Global _ _ _ t _ _ _ _ _ _ _ _) = t
 
 gClasses : Global -> Ref (Map.Map String ClassInfo)
-gClasses (Global _ _ _ _ c _ _ _ _ _ _) = c
+gClasses (Global _ _ _ _ c _ _ _ _ _ _ _) = c
 
 gEffects : Global -> Ref (Map.Map String EffectInfo)
-gEffects (Global _ _ _ _ _ e _ _ _ _ _) = e
+gEffects (Global _ _ _ _ _ e _ _ _ _ _ _) = e
 
 gValues : Global -> Ref (Map.Map String ValueInfo)
-gValues (Global _ _ _ _ _ _ v _ _ _ _) = v
+gValues (Global _ _ _ _ _ _ v _ _ _ _ _) = v
 
 -- tests in reverse order of declaration
 gTests : Global -> Ref (List TestInfo)
-gTests (Global _ _ _ _ _ _ _ t _ _ _) = t
+gTests (Global _ _ _ _ _ _ _ t _ _ _ _) = t
 
 gNextId : Global -> Ref Int
-gNextId (Global _ _ _ _ _ _ _ _ n _ _) = n
+gNextId (Global _ _ _ _ _ _ _ _ n _ _ _) = n
 
 gCollectInfo : Global -> Bool
-gCollectInfo (Global _ _ _ _ _ _ _ _ _ c _) = c
+gCollectInfo (Global _ _ _ _ _ _ _ _ _ c _ _) = c
 
 -- identifier information in reverse order of recording
 gInfo : Global -> Ref (List IdentInfo)
-gInfo (Global _ _ _ _ _ _ _ _ _ _ i) = i
+gInfo (Global _ _ _ _ _ _ _ _ _ _ i _) = i
+
+gFamilies : Global -> Ref (Map.Map String FamInfo)
+gFamilies (Global _ _ _ _ _ _ _ _ _ _ _ f) = f
 
 freshId : Global -> <IO> Int
 freshId g = nextId (gNextId g)
@@ -880,13 +898,18 @@ sigName (Sig _ n _ _) = n
 sigSchemeE : Sig -> SchemeE
 sigSchemeE (Sig _ _ s _) = s
 
--- position, name, field types, field names (record constructors)
-type CtorDecl = CtorDecl Pos String (List TypeExpr) (Option (List String))
+-- position, name, field types, field names (record constructors), result
+-- type (constructors declared with a signature, `C : T1 -> T2 -> R`)
+type CtorDecl = CtorDecl Pos String (List TypeExpr) (Option (List String)) (Option TypeExpr)
+
+-- An equation `F t1 .. tn = t` of a type family.
+type FamEqE = FamEqE Pos TypeExpr TypeExpr
 
 type Decl
   = DSig Sig
   | DFun Pos Bind Bool
-  | DType Pos String (List String) (List CtorDecl) (List String) Bool
+  | DType Pos String (List String) (List (Option TypeExpr)) (List CtorDecl) (List String) Bool  -- parameter kinds
+  | DFamily Pos String (List String) (List (Option TypeExpr)) (Option TypeExpr) (List FamEqE)  -- params, their kinds, result kind
   | DAlias Pos String (List String) TypeExpr
   | DClass Pos String String (List PredE) (List Sig) (List Bind)
   | DInstance Pos (List PredE) String String TypeExpr (List Bind) Bool

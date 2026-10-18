@@ -272,7 +272,7 @@ decl p =
       match decl p with
         DFun pos b _ -> DFun pos b True
         DSig (Sig pos n s _) -> DSig (Sig pos n s True)
-        DType pos n ps cs ds _ -> DType pos n ps cs ds True
+        DType pos n ps ks cs ds _ -> DType pos n ps ks cs ds True
         DForeign pos n sc target _ -> DForeign pos n sc target True
         _ -> fail (tokPos t) "'private' is only allowed on functions, signatures, types and foreign declarations"
     KwType -> typeDecl p
@@ -491,35 +491,95 @@ rhs p sep = match at p BAR with
 typeDecl : P -> <Exn Diag, IO> Decl
 typeDecl p =
   let pos = tokPos (expect p KwType)
+  match atWord p "family" && tokKind (peekN p 1) == UIDENT with
+    True -> familyDecl p pos
+    False ->
+      let name = tokText (expect p UIDENT)
+      let (params, kinds) = typeParams p
+      let (ctors, deriv) = match accept p EQUALS with
+        False -> match accept p KwWhere with
+          True -> gadtBody p
+          False -> ([], [])
+        True -> match at p INDENT with
+          True ->
+            skip p
+            let loop cs ds =
+              let (cs2, ds2) = match atWord p "deriving" with
+                True -> (cs, derivingClause p)
+                False ->
+                  let _ = accept p BAR
+                  (ctorAlts p cs, ds)
+              match accept p NEWLINE with
+                True -> loop cs2 ds2
+                False ->
+                  expect_ p DEDENT
+                  (cs2, ds2)
+            loop [] []
+          False ->
+            let _ = accept p BAR
+            (ctorAlts p [], [])
+      let deriv2 = match atWord p "deriving" with
+        True -> derivingClause p
+        False -> deriv
+      DType pos name params kinds ctors deriv2 False
+
+-- Type parameters `a` or `(a : Kind)` and their kinds.
+typeParams : P -> <Exn Diag, IO> (List String, List (Option TypeExpr))
+typeParams p =
+  let loop acc = match peekKind p with
+    LIDENT | not (atWord p "deriving") -> loop ((tokText (next p), None) :: acc)
+    LPAREN | tokKind (peekN p 1) == LIDENT && tokKind (peekN p 2) == COLON ->
+      skip p
+      let n = tokText (next p)
+      skip p
+      let k = typ p
+      expect_ p RPAREN
+      loop ((n, Some k) :: acc)
+    _ -> reverse acc
+  unzip (loop [])
+
+-- The constructor signatures `C : T1 -> .. -> R` of `type T a where`, and
+-- a final `deriving` clause.
+private gadtBody : P -> <Exn Diag, IO> (List CtorDecl, List String)
+gadtBody p =
+  expect_ p INDENT
+  let items = blockItems p (\_ -> match atWord p "deriving" with
+    True -> Err (derivingClause p)
+    False ->
+      let t = expect p UIDENT
+      expect_ p COLON
+      let (fields, res) = match schemeTop p with
+        SchemeE [] ty -> splitArrows ty []
+        SchemeE (PredE pp _ _ _ :: _) _ -> fail pp "constructors cannot have class constraints"
+      Ok (CtorDecl (tokPos t) (tokText t) fields None (Some res)))
+  (filterMap okOf items, concat (filterMap errOf items))
+
+-- Split a constructor signature into its argument types and its result.
+private splitArrows : TypeExpr -> List TypeExpr -> <Exn Diag> (List TypeExpr, TypeExpr)
+splitArrows t acc = match t with
+  TFunE pos a eff r -> match eff with
+    Some _ -> fail pos "constructor arguments cannot have effects"
+    None -> splitArrows r (a :: acc)
+  _ -> (reverse acc, t)
+
+-- `type family F (a : K) .. : K where` followed by equations `F t .. = t`.
+private familyDecl : P -> Pos -> <Exn Diag, IO> Decl
+familyDecl p pos =
+  skip p
   let name = tokText (expect p UIDENT)
-  let paramLoop acc = match at p LIDENT && not (atWord p "deriving") with
-    True -> paramLoop (tokText (next p) :: acc)
-    False -> reverse acc
-  let params = paramLoop []
-  let (ctors, deriv) = match accept p EQUALS with
-    False -> ([], [])
-    True -> match at p INDENT with
-      True ->
-        skip p
-        let loop cs ds =
-          let (cs2, ds2) = match atWord p "deriving" with
-            True -> (cs, derivingClause p)
-            False ->
-              let _ = accept p BAR
-              (ctorAlts p cs, ds)
-          match accept p NEWLINE with
-            True -> loop cs2 ds2
-            False ->
-              expect_ p DEDENT
-              (cs2, ds2)
-        loop [] []
-      False ->
-        let _ = accept p BAR
-        (ctorAlts p [], [])
-  let deriv2 = match atWord p "deriving" with
-    True -> derivingClause p
-    False -> deriv
-  DType pos name params ctors deriv2 False
+  let (params, kinds) = typeParams p
+  let res = match accept p COLON with
+    True -> Some (typ p)
+    False -> None
+  let eqs = match accept p KwWhere with
+    True ->
+      expect_ p INDENT
+      blockItems p (\_ ->
+        let lhs = btype p
+        expect_ p EQUALS
+        FamEqE (typePos lhs) lhs (typeTop p))
+    False -> []
+  DFamily pos name params kinds res eqs
 
 -- Parse `C1 .. | C2 ..` appending to the constructors so far.
 ctorAlts : P -> List CtorDecl -> <Exn Diag, IO> List CtorDecl
@@ -554,12 +614,12 @@ ctorDecl p =
       -- record constructor: C { f : T, g, h : U }
       let (types, names) = recordFields p [] []
       expect_ p RBRACE
-      CtorDecl (tokPos t) (tokText t) types (Some names)
+      CtorDecl (tokPos t) (tokText t) types (Some names) None
     False ->
       let loop acc = match startsTypeAtom p && not (atWord p "deriving") with
         True -> loop (typeAtom p :: acc)
         False -> reverse acc
-      CtorDecl (tokPos t) (tokText t) (loop []) None
+      CtorDecl (tokPos t) (tokText t) (loop []) None None
 
 -- Field declarations `f, g : T, h : U` up to the closing brace.
 recordFields : P -> List TypeExpr -> List String -> <Exn Diag, IO> (List TypeExpr, List String)

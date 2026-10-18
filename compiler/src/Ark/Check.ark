@@ -35,7 +35,9 @@ runChecker c m =
     False ->
       let decls = moduleDecls m
       let classes = collectTypeNames c decls
+      applyKindAnnotations c decls
       inferDataKinds c decls
+      processFamilies c decls
       processEffects c decls
       processClasses c decls classes
       match hasErrors c with
@@ -98,7 +100,7 @@ addCtors c ti names fields =
   let res = mkAppT (TCon (typeInfoName ti) k) (map TGen (range 0 n))
   let total = length names
   forEach (indexed (zip names fields)) (\(i, (name, fs)) ->
-    let ci = CtorInfo (sym c name) name (typeInfoName ti) (typeInfoModule ti) total i (length fs) (ctorSchemeOf (replicate n KStar) fs res) fs (typeInfoPos ti) None
+    let ci = CtorInfo (sym c name) name (typeInfoName ti) (typeInfoModule ti) total i (length fs) (ctorSchemeOf (replicate n KStar) [] fs res) fs (typeInfoPos ti) None
     let TypeInfo _ _ _ ctors _ _ _ = ti
     modifyRef ctors (\cs -> snoc cs ci)
     modifyRef (scopeCtors (cScope c)) (Map.insert name (CEctor ci))
@@ -108,11 +110,11 @@ addCtors c ti names fields =
 
 -- The type of a constructor function. Every arrow gets its own effect
 -- variable: applying a constructor has no effect.
-ctorSchemeOf : List Kind -> List Type -> Type -> Scheme
-ctorSchemeOf paramKinds fields res =
+ctorSchemeOf : List Kind -> List String -> List Type -> Type -> Scheme
+ctorSchemeOf paramKinds names fields res =
   let np = length paramKinds
   let t = foldr (\(i, f) acc -> TFun f (TGen (np + i)) acc) res (indexed fields)
-  Scheme (paramKinds ++ replicate (length fields) KRow) [] [] t
+  Scheme (paramKinds ++ replicate (length fields) KRow) names [] t
 
 -- ================================================================ type-level names
 
@@ -121,11 +123,22 @@ collectTypeNames : Checker -> List Decl -> <IO> Map.Map String ClassInfo
 collectTypeNames c decls =
   let g = cG c
   foldl (\classes d -> match d with
-    DType p name params _ _ _ ->
+    DType p name params _ _ _ _ ->
       let kinds = map (\_ -> newKVar g) params
       let k = foldr (\pk acc -> KArrow pk acc) KStar kinds
       let ti = TypeInfo (sym c name) (newRef k) params (newRef []) False (cMod c) p
       modifyRef (gTypes g) (Map.insert (sym c name) ti)
+      defineType c name (TEType ti) p
+      classes
+    DFamily p name params _ _ _ ->
+      let kinds = map (\_ -> newKVar g) params
+      let k = foldr (\pk acc -> KArrow pk acc) (newKVar g) kinds
+      let ti = TypeInfo (sym c name) (newRef k) params (newRef []) False (cMod c) p
+      modifyRef (gTypes g) (Map.insert (sym c name) ti)
+      modifyRef (gFamilies g) (Map.insert (sym c name) (FamInfo (sym c name) (length params) []))
+      match params with
+        [] -> errorf c p "type family '${name}' must have parameters"
+        _ -> ()
       defineType c name (TEType ti) p
       classes
     DAlias p name params body ->
@@ -150,10 +163,73 @@ ownType c name = match Map.lookup name (readRef (scopeTypes (cScope c))) with
   Some (TEType ti) | typeInfoModule ti == cMod c -> Some ti
   _ -> None
 
+-- Give the parameters of data types and type families their written
+-- kinds.
+applyKindAnnotations : Checker -> List Decl -> <IO> Unit
+applyKindAnnotations c decls = forEach decls (\d -> match d with
+  DType p name _ kinds _ _ _ -> annotateKinds c p name kinds None
+  DFamily p name _ kinds res _ -> annotateKinds c p name kinds (Some res)
+  _ -> ())
+
+private annotateKinds : Checker -> Pos -> String -> List (Option TypeExpr) -> Option (Option TypeExpr) -> <IO> Unit
+annotateKinds c p name kinds res = match ownType c name with
+  None -> ()
+  Some ti ->
+    let k = typeInfoKind ti
+    let pks = paramKinds k (length kinds)
+    forEach (zip kinds pks) (\(ke, pk) -> match ke with
+      Some e ->
+        let wk = convKind c e
+        match unifyKind pk wk with
+          True -> ()
+          False -> errorf c (typePos e) "kind mismatch for a parameter of '${name}'"
+      None -> ())
+    match res with
+      Some r ->
+        let rk = match r with
+          Some e -> convKind c e
+          None -> KStar
+        match unifyKind (resultKind k (length kinds)) rk with
+          True -> ()
+          False -> errorf c p "kind mismatch for the result of '${name}'"
+      None -> ()
+
+-- The result kind of a kind with n parameters.
+private resultKind : Kind -> Int -> <IO> Kind
+resultKind k n = match n <= 0 with
+  True -> k
+  False -> match pruneKind k with
+    KArrow _ r -> resultKind r (n - 1)
+    _ -> k
+
+-- A data type declaration with its converted constructors: for each
+-- constructor its field types and, when declared with a signature, the
+-- names and the environment of its type variables and its result type.
+type DataDecl = DataDecl TypeInfo (List CtorDecl) (List (List Type, Option (TvEnv, Type))) Bool
+
 inferDataKinds : Checker -> List Decl -> <IO> Unit
 inferDataKinds c decls =
+  -- the types that can be used as kinds come first: their constructors
+  -- may appear in the other declarations
+  let (early, late) = partition (isPromotable c) (filter (\d -> match d with
+    DType _ _ _ _ _ _ _ -> True
+    _ -> False) decls)
+  inferDataGroup c early
+  inferDataGroup c late
+
+-- A type without parameters whose constructors have only fields of types
+-- without arguments (like `type Nat = Z | S Nat`).
+private isPromotable : Checker -> Decl -> Bool
+isPromotable c d = match d with
+  DType _ _ [] _ ctors _ _ -> allOf (\(CtorDecl _ _ fs named res) -> isNone named && isNone res && allOf (\f -> match f with
+    TConE _ _ _ -> True
+    _ -> False) fs) ctors
+  _ -> False
+
+private inferDataGroup : Checker -> List Decl -> <IO> Unit
+inferDataGroup c decls =
   let pending = filterMap id (map (\d -> match d with
-    DType p name params ctors _ priv -> match ownType c name with
+    DType p name params _ ctors _ priv -> match ownType c name with
       None -> None
       Some ti ->
         let env = newTvEnv True arrowPure
@@ -164,28 +240,118 @@ inferDataKinds c decls =
           let _ = addGen env pn k
           ())
         writeRef (envFixed env) True
-        let fields = map (\(CtorDecl _ _ fs _) -> map (\f -> convStar c f env) fs) ctors
-        Some (ti, params, ctors, fields, priv)
+        let convs = map (\(CtorDecl cp cname fs _ res) -> match res with
+          None -> (map (\f -> convStar c f env) fs, None)
+          Some re -> gadtCtor c ti cp cname fs re) ctors
+        Some (DataDecl ti ctors convs priv)
     _ -> None) decls)
-  forEach pending (\(ti, params, ctors, fields, priv) ->
+  forEach pending (\(DataDecl ti ctors convs priv) ->
     let TypeInfo tname kref _ ctorsRef _ _ tpos = ti
     let k = defaultKind (readRef kref)
     writeRef kref k
-    let n = length params
+    let n = length (typeInfoParams ti)
     let res = mkAppT (TCon tname k) (map TGen (range 0 n))
     let pks = paramKinds k n
     let total = length ctors
-    forEach (indexed (zip ctors fields)) (\(i, (CtorDecl cp cname _ named, fs)) ->
-      let ci = CtorInfo (sym c cname) cname tname (cMod c) total i (length fs) (ctorSchemeOf pks fs res) fs tpos named
+    forEach (indexed (zip ctors convs)) (\(i, (CtorDecl cp cname _ named _, (fs, sig))) ->
+      let sc = match sig with
+        None -> ctorSchemeOf pks [] fs res
+        Some (cenv, cres) ->
+          let names = envNames cenv
+          ctorSchemeOf (map (\nm -> defaultKind (envKindOf cenv nm)) names) names fs cres
+      let ci = CtorInfo (sym c cname) cname tname (cMod c) total i (length fs) sc fs tpos named
       modifyRef ctorsRef (\cs -> snoc cs ci)
       defineCtor c cname ci cp priv)
     checkFieldDecls c ctors (readRef ctorsRef) (shortName tname))
+
+-- Convert the signature `C : T1 -> .. -> R` of a constructor of ti. Its
+-- type variables are implicitly quantified; R must be ti applied to as
+-- many types as ti has parameters.
+private gadtCtor : Checker -> TypeInfo -> Pos -> String -> List TypeExpr -> TypeExpr -> <IO> (List Type, Option (TvEnv, Type))
+gadtCtor c ti p name fs re =
+  let env = newTvEnv True arrowPure
+  let fields = map (\f -> convStar c f env) fs
+  let res = convStar c re env
+  let (h, args) = headOf res
+  let n = length (typeInfoParams ti)
+  let ok = match h with
+    TCon hn _ -> hn == typeInfoName ti && length args == n
+    _ -> False
+  match ok with
+    True -> ()
+    False -> errorf c (typePos re) "the result type of constructor '${name}' must be ${shortName (typeInfoName ti)} applied to ${n} type(s)"
+  (fields, Some (env, res))
+
+-- ================================================================ type families
+
+processFamilies : Checker -> List Decl -> <IO> Unit
+processFamilies c decls = forEach decls (\d -> match d with
+  DFamily _ name _ _ _ eqs -> match ownType c name with
+    None -> ()
+    Some ti ->
+      let fam = Map.findWithDefault (FamInfo (typeInfoName ti) 0 []) (typeInfoName ti) (readRef (gFamilies (cG c)))
+      let converted = filterMap (familyEq c ti (famArity fam)) eqs
+      modifyRef (gFamilies (cG c)) (Map.insert (typeInfoName ti) (FamInfo (typeInfoName ti) (famArity fam) converted))
+      let TypeInfo _ kref _ _ _ _ _ = ti
+      writeRef kref (defaultKind (readRef kref))
+  _ -> ())
+
+-- Convert an equation `F p1 .. pn = t`. The patterns are built from
+-- constructors and distinct type variables; t may only use those variables.
+private familyEq : Checker -> TypeInfo -> Int -> FamEqE -> <IO> Option FamEq
+familyEq c ti n (FamEqE p lhs rhs) =
+  let fname = shortName (typeInfoName ti)
+  let args = match lhs with
+    TAppE _ (TConE _ "" h) as | h == fname -> Some as
+    TConE _ "" h | h == fname -> Some []
+    _ -> None
+  match args with
+    None ->
+      errorf c p "an equation of type family '${fname}' must start with '${fname}'"
+      None
+    Some as
+      | length as != n ->
+          errorf c p "type family '${fname}' has ${n} parameter(s), but this equation has ${length as} argument(s)"
+          None
+      | otherwise ->
+          let env = newTvEnv True arrowPure
+          let k = typeInfoKind ti
+          let pks = paramKinds k n
+          let pats = map (\(a, pk) -> famPattern c env a pk) (zip as pks)
+          writeRef (envFixed env) True
+          let (rt, rk) = convType c rhs env
+          match unifyKind (resultKind k n) rk with
+            True -> ()
+            False -> errorf c (typePos rhs) "kind mismatch: the result of '${fname}' has kind ${kindString (resultKind k n)}, but this has kind ${kindString rk}"
+          Some (FamEq p (length (envNames env)) pats rt)
+
+-- A pattern of a type family equation.
+private famPattern : Checker -> TvEnv -> TypeExpr -> Kind -> <IO> Type
+famPattern c env te k =
+  match te with
+    TVarE p v | Map.member v (readRef (envVars env)) -> errorf c p "type variable '${v}' occurs twice in the patterns of this equation"
+    _ -> ()
+  let (t, tk) = convType c te env
+  match unifyKind k tk with
+    True -> ()
+    False -> errorf c (typePos te) "kind mismatch: expected ${kindString k}, but this has kind ${kindString tk}"
+  match patternOk c t with
+    True -> ()
+    False -> errorf c (typePos te) "a pattern of a type family equation can only contain type constructors and type variables"
+  t
+
+private patternOk : Checker -> Type -> <IO> Bool
+patternOk c t = match prune t with
+  TGen _ -> True
+  TCon n _ -> not (isFamily c n)
+  TApp f a -> patternOk c f && patternOk c a
+  _ -> False
 
 -- Reject duplicate field names, and a field shared by several
 -- constructors with different types.
 private checkFieldDecls : Checker -> List CtorDecl -> List CtorInfo -> String -> <IO> Unit
 checkFieldDecls c decls ctors tname =
-  let step types (CtorDecl cp _ _ _, ci) =
+  let step types (CtorDecl cp _ _ _ _, ci) =
     let names = withDefault [] (ctorFieldNames ci)
     let field (seen, ts) (j, f) = match elem f seen with
       True ->
@@ -308,10 +474,11 @@ appE f args = mkApp (exprPos f) f args
 
 deriveInstances : Checker -> List Decl -> <IO> List Decl
 deriveInstances c decls = concat (map (\d -> match d with
-  DType p name params ctors deriv _ | not (isEmpty deriv) -> match ownType c name with
+  DType p name params _ ctors deriv _ | not (isEmpty deriv) -> match ownType c name with
     None -> []
     Some ti ->
       let pks = paramKinds (typeInfoKind ti) (length params)
+      let refines = typeRefines (cG c) (typeInfoName ti)
       filterMap (\cls ->
         let isJson = cls == "ToJson" || cls == "FromJson"
         let qual = match isJson with
@@ -326,6 +493,9 @@ deriveInstances c decls = concat (map (\d -> match d with
             | isEmpty ctors ->
                 errorf c p "cannot derive ${cls} for a type without constructors"
                 False
+            | cls == "FromJson" && refines ->
+                errorf c p "cannot derive FromJson for a type whose constructors refine its parameters"
+                False
             | otherwise -> True
         match ok with
           False -> None
@@ -336,9 +506,13 @@ deriveInstances c decls = concat (map (\d -> match d with
             let head = match params with
               [] -> TConE p "" name
               _ -> TAppE p (TConE p "" name) (map (TVarE p) params)
+            -- matching constructors that refine types needs a known type
+            let selfType = match refines with
+              True -> Some head
+              False -> None
             let bind = match cls with
               "Eq" -> Some (deriveEq p ctors)
-              "Ord" -> Some (deriveOrd p ctors)
+              "Ord" -> Some (deriveOrd p ctors selfType)
               "Show" -> Some (deriveShow p ctors)
               "ToJson" -> Some (deriveToJson p ctors)
               "FromJson" -> Some (deriveFromJson p name ctors)
@@ -351,7 +525,7 @@ deriveInstances c decls = concat (map (\d -> match d with
   _ -> []) decls)
 
 private ctorPat : Pos -> CtorDecl -> String -> <IO> (Pattern, List Expr)
-ctorPat p (CtorDecl _ name fields _) prefix =
+ctorPat p (CtorDecl _ name fields _ _) prefix =
   let names = map (\i -> prefix ++ show i) (range 0 (length fields))
   let pat = mkPCon p "" name (map (mkPVar p) names)
   (pat, map (ev p) names)
@@ -378,8 +552,8 @@ deriveEq p ctors =
     False -> arms
   simpleBind p "==" ["x$", "y$"] (EMatch p (pairScrut p) arms2)
 
-private deriveOrd : Pos -> List CtorDecl -> <IO> Bind
-deriveOrd p ctors =
+private deriveOrd : Pos -> List CtorDecl -> Option TypeExpr -> <IO> Bind
+deriveOrd p ctors selfType =
   let arm cd =
     let (pa, va) = ctorPat p cd "a$"
     let (pb, vb) = ctorPat p cd "b$"
@@ -389,17 +563,20 @@ deriveOrd p ctors =
   match ctors with
     [_] -> simpleBind p "compare" ["x$", "y$"] (EMatch p (pairScrut p) arms)
     _ ->
-      let idxArms = map (\(i, CtorDecl _ name fields _) ->
+      let idxArms = map (\(i, CtorDecl _ name fields _ _) ->
         Arm p (mkPCon p "" name (map (\_ -> PWild p) fields)) (RBody (mkNum p i))) (indexed ctors)
       let idx = EMatch p (ev p "v$") idxArms
       let fallback = Arm p (PWild p) (RBody (appE (pv "compare") [appE (ev p "idx$") [ev p "x$"], appE (ev p "idx$") [ev p "y$"]]))
       let m = EMatch p (pairScrut p) (snoc arms fallback)
-      let body = EBlock p [SLet (simpleBind p "idx$" ["v$"] idx), SExpr m]
+      let sig = match selfType with
+        Some t -> Some (SchemeE [] (TFunE p t None (TConE p "#Prelude" "Int")))
+        None -> None
+      let body = EBlock p [SLet (withSig sig (simpleBind p "idx$" ["v$"] idx)), SExpr m]
       simpleBind p "compare" ["x$", "y$"] body
 
 private deriveShow : Pos -> List CtorDecl -> <IO> Bind
 deriveShow p ctors =
-  let arm (cd@(CtorDecl _ name _ named)) =
+  let arm (cd@(CtorDecl _ name _ named _)) =
     let (pa, va) = ctorPat p cd "a$"
     match named with
       Some fs ->
@@ -426,7 +603,7 @@ strLit p s = ELit p (LString s)
 private deriveToJson : Pos -> List CtorDecl -> <IO> Bind
 deriveToJson p ctors =
   let multi = length ctors > 1
-  let arm (cd@(CtorDecl _ name fields named)) =
+  let arm (cd@(CtorDecl _ name fields named _)) =
     let (pa, va) = ctorPat p cd "a$"
     let conv = map (\v -> appE (jv p "toJson") [v]) va
     let tag = ETuple p [strLit p "tag", appE (jc p "JString") [strLit p name]]
@@ -484,7 +661,7 @@ tagArm p name body = Arm p (okPat p (PLit p (LString name))) (RBody body)
 private deriveFromJson : Pos -> String -> List CtorDecl -> <IO> Bind
 deriveFromJson p typeName ctors =
   let multi = length ctors > 1
-  let decode (CtorDecl _ name fields named) = match named with
+  let decode (CtorDecl _ name fields named _) = match named with
     Some fs -> resultChain p (map (\f -> appE (jv p "fieldOf") [strLit p f, ev p "j$"]) fs) name
     None
       | isEmpty fields -> resultChain p [] name
@@ -496,9 +673,9 @@ deriveFromJson p typeName ctors =
           let okArm = Arm p (okPat p (mkPVar p "vs$")) (RBody (resultChain p results name))
           EMatch p scrut [err, okArm]
   let body = match ctors with
-    [cd@(CtorDecl _ name fields None)] | isEmpty fields -> tagMatch p typeName [tagArm p name (decode cd)]
+    [cd@(CtorDecl _ name fields None _)] | isEmpty fields -> tagMatch p typeName [tagArm p name (decode cd)]
     [cd] -> decode cd
-    _ -> tagMatch p typeName (map (\(cd@(CtorDecl _ name _ _)) -> tagArm p name (decode cd)) ctors)
+    _ -> tagMatch p typeName (map (\(cd@(CtorDecl _ name _ _ _)) -> tagArm p name (decode cd)) ctors)
   simpleBind p "fromJson" ["j$"] body
 
 -- ================================================================ instances
@@ -526,6 +703,9 @@ instanceHead c d p ctx cl headE binds =
         TGen gi -> not (anyOf (\(j, b) -> j < i && tgenIs b gi) (indexed args))
         _ -> False) (indexed args)
       match (h, distinct && length args == length (envNames env)) with
+        (TCon tc _, _) | isFamily c tc ->
+          errorf c (typePos headE) "instance head cannot be a type family"
+          None
         (TCon tc _, True) ->
           writeRef (envFixed env) True
           let names = envNames env
