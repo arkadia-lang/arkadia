@@ -366,6 +366,24 @@ instance Show a => Display (List a) where
 instance Show a => Display (Option a) where
   display = show
 
+instance Display Ordering where
+  display = show
+
+instance (Show a, Show b) => Display (a, b) where
+  display = show
+
+instance (Show a, Show b, Show c) => Display (a, b, c) where
+  display = show
+
+instance (Show a, Show b, Show c, Show d) => Display (a, b, c, d) where
+  display = show
+
+instance (Show a, Show b, Show c, Show d, Show e) => Display (a, b, c, d, e) where
+  display = show
+
+instance (Show a, Show b, Show c, Show d, Show e, Show f) => Display (a, b, c, d, e, f) where
+  display = show
+
 -- Helpers used by derived Show instances.
 foreign showArg : String -> String = "rt.ShowArg"
 
