@@ -86,6 +86,15 @@ describe : Vec n a -> Flag (IsZero n) -> String
 describe VNil Yes = "empty"
 describe (VCons _ _) No = "non-empty"
 
+-- a pattern whose head is a variable
+type family Elem (c : Type) : Type where
+  Elem (f a) = a
+
+firstElem : List Int -> Elem (List Int)
+firstElem xs = match xs with
+  x :: _ -> x
+  [] -> 0
+
 main () =
   let v = VCons 1 (VCons 2 VNil)
   let w = VCons 3 VNil
@@ -103,3 +112,4 @@ main () =
   println (joinWith ", " (map display [MkShowable 42 show, MkShowable "hi" (\s -> s ++ "!")]))
   println (describe VNil Yes)
   println (describe v No)
+  println (show (firstElem [7, 8]))

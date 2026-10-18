@@ -923,15 +923,17 @@ matchPat c sub pat arg = match pat with
     FMatch
   _ ->
     let a = whnf c arg
-    let (ph, pargs) = headOf pat
-    let (ah, aargs) = headOf a
-    match (ph, ah) with
-      (TCon pn _, TCon an _)
-        | isFamily c an -> FStuck
-        | pn != an || length pargs != length aargs -> FApart
-        | otherwise -> matchPats c sub pargs aargs
-      (TCon _ _, TFun _ _ _) -> FApart
-      _ -> FStuck
+    match isStuck c a with
+      True -> FStuck
+      False -> match (pat, a) with
+        (TCon pn _, TCon an _) -> match pn == an with
+          True -> FMatch
+          False -> FApart
+        -- the head of the pattern may be a variable (`f a`)
+        (TApp pf px, TApp af ax) -> matchPats c sub [pf, px] [af, ax]
+        (_, TMeta _) -> FStuck
+        (_, TSkol _ _ _ _) -> FStuck
+        _ -> FApart
 
 -- Make the type of a matched value (a) and the result type of a
 -- constructor pattern (b) equal, assuming equations for the rigid type
