@@ -1,0 +1,9 @@
+type Expr a where
+  IntE : Int -> Expr Int
+  BoolE : Bool -> Expr Bool
+
+eval e = match e with
+  IntE n -> n
+  BoolE _ -> 0
+
+main () = println "x"
