@@ -44,7 +44,7 @@ lowerModule l m =
   let L _ _ _ _ dicts foreigns ops effects = l
   forEach (moduleDecls m) (\d -> match d with
     DFun _ b _ -> topBind l b
-    DForeign _ name _ target -> match Map.lookup (moduleName m ++ "." ++ name) (readRef (gValues g)) with
+    DForeign _ name _ target _ -> match Map.lookup (moduleName m ++ "." ++ name) (readRef (gValues g)) with
       Some v ->
         let (goTarget, ev) = foreignTarget target (readRef (valueSchemeRef v))
         modifyRef foreigns (\fs -> Foreign (valueSym v) goTarget (valueArity v) ev :: fs)

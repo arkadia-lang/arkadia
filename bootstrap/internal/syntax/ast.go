@@ -480,10 +480,11 @@ type DEffect struct {
 	Ops    []*DSig
 }
 type DForeign struct {
-	P      Pos
-	Name   string
-	Scheme *SchemeE
-	Target string
+	P       Pos
+	Name    string
+	Scheme  *SchemeE
+	Target  string
+	Private bool
 }
 type DFixity struct {
 	P     Pos

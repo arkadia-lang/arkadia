@@ -652,7 +652,7 @@ func (c *Checker) processForeigns() {
 			continue
 		}
 		sc := c.sigScheme(df.Scheme)
-		c.defineValue(df.Name, &ValueInfo{Name: df.Name, Sym: c.sym(df.Name), Scheme: sc, Foreign: df.Target, Arity: arity(sc.Type), Pos: df.P}, false)
+		c.defineValue(df.Name, &ValueInfo{Name: df.Name, Sym: c.sym(df.Name), Scheme: sc, Foreign: df.Target, Arity: arity(sc.Type), Pos: df.P}, df.Private)
 	}
 }
 

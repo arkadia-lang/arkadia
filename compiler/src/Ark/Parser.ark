@@ -273,7 +273,8 @@ decl p =
         DFun pos b _ -> DFun pos b True
         DSig (Sig pos n s _) -> DSig (Sig pos n s True)
         DType pos n ps cs ds _ -> DType pos n ps cs ds True
-        _ -> fail (tokPos t) "'private' is only allowed on functions, signatures and types"
+        DForeign pos n sc target _ -> DForeign pos n sc target True
+        _ -> fail (tokPos t) "'private' is only allowed on functions, signatures, types and foreign declarations"
     KwType -> typeDecl p
     KwClass -> classDecl p
     KwInstance -> instanceDecl p
@@ -677,7 +678,7 @@ foreignDecl p =
   let sc = schemeTop p
   expect_ p EQUALS
   let target = tokStr (expect p STRING)
-  DForeign pos name sc target
+  DForeign pos name sc target False
 
 fixityDecl : P -> <Exn Diag, IO> Decl
 fixityDecl p =

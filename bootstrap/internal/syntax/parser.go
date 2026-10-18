@@ -271,8 +271,10 @@ func (p *parser) decl() Decl {
 			d.Private = true
 		case *DType:
 			d.Private = true
+		case *DForeign:
+			d.Private = true
 		default:
-			p.fail(t.Pos, "'private' is only allowed on functions, signatures and types")
+			p.fail(t.Pos, "'private' is only allowed on functions, signatures, types and foreign declarations")
 		}
 		return d
 	case KwType:

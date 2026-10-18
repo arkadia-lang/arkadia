@@ -562,9 +562,9 @@ tgenIs t i = match t with
 
 processForeigns : Checker -> List Decl -> <IO> Unit
 processForeigns c decls = forEach decls (\d -> match d with
-  DForeign p name se target ->
+  DForeign p name se target priv ->
     let sc = sigScheme c se
-    defineValue c name (ValueInfo name (sym c name) (newRef (Some sc)) None None target (arity (schemeType sc)) p None (newRef None)) False
+    defineValue c name (ValueInfo name (sym c name) (newRef (Some sc)) None None target (arity (schemeType sc)) p None (newRef None)) priv
   _ -> ())
 
 -- Returns the function bindings (binding, private) and the tests.

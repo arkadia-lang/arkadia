@@ -891,7 +891,7 @@ type Decl
   | DClass Pos String String (List PredE) (List Sig) (List Bind)
   | DInstance Pos (List PredE) String String TypeExpr (List Bind) Bool
   | DEffect Pos String (List String) (List Sig)
-  | DForeign Pos String SchemeE String
+  | DForeign Pos String SchemeE String Bool
   | DFixity Pos Int Int (List String)
   | DTest Pos String Expr (Ref String)
 
