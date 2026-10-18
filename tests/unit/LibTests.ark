@@ -1,5 +1,5 @@
 -- Unit tests for Std.Regex, Std.MArray, Std.HashMap, Std.BigInt,
--- Std.Encoding, Std.Crypto and Std.Args.
+-- Std.Bytes, Std.Encoding, Std.Crypto and Std.Args.
 module LibTests
 
 import Std.Regex as Re
@@ -8,6 +8,7 @@ import Std.HashMap as HM
 import Std.BigInt (BigInt, big)
 import Std.BigInt as Big
 import Std.Array as Array
+import Std.Bytes as Bytes
 import Std.Encoding (..)
 import Std.Crypto (..)
 import Std.Args (..)
@@ -79,15 +80,17 @@ test "big integers" =
   assertEq "${big 12}" "12"
 
 test "encodings and hashes" =
-  assertEq (base64Encode "hello", base64Decode "aGVsbG8=") ("aGVsbG8=", Ok "hello")
+  assertEq (base64Encode "hello", base64Decode "aGVsbG8=" |> andThen Bytes.toString) ("aGVsbG8=", Ok "hello")
   assertEq (base64UrlEncode "\u{ff}\u{fe}", hexEncode "hi") ("w7_Dvg", "6869")
-  assertEq (base64UrlDecode "w7_Dvg", hexDecode "6869") (Ok "\u{ff}\u{fe}", Ok "hi")
+  assertEq (base64UrlDecode "w7_Dvg", hexDecode "6869") (Ok (Bytes.fromString "\u{ff}\u{fe}"), Ok (Bytes.fromString "hi"))
+  assertEq (hexEncode (Bytes.fromList [0, 1, 254, 255]), hexDecode "00ff" |> map Bytes.toList) ("0001feff", Ok [0, 255])
   assert (isErr (base64Decode "!!")) "invalid base64"
   assertEq (sha256 "abc") "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
   assertEq (md5 "") "d41d8cd98f00b204e9800998ecf8427e"
   assertEq (sha1 "abc") "a9993e364706816aba3e25717850c26c9cd0d89d"
   assertEq (hmacSha256 "key" "The quick brown fox jumps over the lazy dog") "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
-  assertEq (stringLength (hexEncode (randomBytes 16)), stringLength (uuid ())) (32, 36)
+  assertEq (sha256 (Bytes.fromString "abc")) (sha256 "abc")
+  assertEq (Bytes.length (randomBytes 16), stringLength (hexEncode (randomBytes 16)), stringLength (uuid ())) (16, 32, 36)
   assertEq (stringLength (randomToken 32)) 43
 
 test "command-line arguments" =
@@ -123,3 +126,14 @@ test "csv" =
     Err e -> fail e
   assertEq (Csv.parseWith ';' "a;b\n1;2") (Ok [["a", "b"], ["1", "2"]])
   assert (isErr (Csv.parse "a,\"b\n")) "unterminated quote"
+
+test "bytes" =
+  let b = Bytes.fromString "hé"
+  assertEq (Bytes.toList b, Bytes.length b) ([104, 195, 169], 3)
+  assertEq (Bytes.toString b, Bytes.toString (Bytes.fromList [255])) (Ok "hé", Err "invalid UTF-8")
+  assertEq (Bytes.get 1 b, Bytes.get 3 b) (Some 195, None)
+  assertEq (Bytes.toList (Bytes.slice 1 10 b), Bytes.toList (b ++ Bytes.fromList [0])) ([195, 169], [104, 195, 169, 0])
+  assert (Bytes.isEmpty Bytes.empty && Bytes.fromList [1] < Bytes.fromList [2]) "empty and ordering"
+  assertEq (show (Bytes.fromList [1, 2])) "Bytes.fromList [1, 2]"
+  let m = HM.fromList [(Bytes.fromList [1], "one")]
+  assertEq (HM.lookup (Bytes.fromList [1]) m) (Some "one")

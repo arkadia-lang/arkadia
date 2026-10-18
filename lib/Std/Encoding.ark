@@ -1,17 +1,33 @@
--- Base64 and hexadecimal encodings of strings (as bytes in UTF-8).
+-- Base64 and hexadecimal encodings of binary data. Encoding accepts Bytes
+-- or a String (as its UTF-8 bytes); decoding gives Bytes, which
+-- `Bytes.toString` turns back into text.
 --
 --   import Std.Encoding (..)
---   base64Encode "hello"           -- "aGVsbG8="
---   base64Decode "aGVsbG8="        -- Ok "hello"
---   hexEncode "hi"                 -- "6869"
+--   import Std.Bytes as Bytes
+--   base64Encode "hello"                                -- "aGVsbG8="
+--   base64Decode "aGVsbG8=" |> andThen Bytes.toString   -- Ok "hello"
+--   hexEncode (Bytes.fromList [1, 255])                 -- "01ff"
 module Std.Encoding
 
-foreign base64Encode : String -> String = "rt.Base64Encode"
-foreign base64Decode : String -> Result String String = "rt.Base64Decode"
+import Std.Bytes (Bytes, ToBytes, toBytes)
+
+private foreign primBase64Encode : Bytes -> String = "rt.Base64Encode"
+private foreign primBase64UrlEncode : Bytes -> String = "rt.Base64URLEncode"
+private foreign primHexEncode : Bytes -> String = "rt.HexEncode"
+
+base64Encode : ToBytes a => a -> String
+base64Encode x = primBase64Encode (toBytes x)
+
+foreign base64Decode : String -> Result String Bytes = "rt.Base64Decode"
 
 -- The URL-safe alphabet without padding (as used by JWTs).
-foreign base64UrlEncode : String -> String = "rt.Base64URLEncode"
-foreign base64UrlDecode : String -> Result String String = "rt.Base64URLDecode"
+base64UrlEncode : ToBytes a => a -> String
+base64UrlEncode x = primBase64UrlEncode (toBytes x)
 
-foreign hexEncode : String -> String = "rt.HexEncode"
-foreign hexDecode : String -> Result String String = "rt.HexDecode"
+foreign base64UrlDecode : String -> Result String Bytes = "rt.Base64URLDecode"
+
+-- Two lowercase hexadecimal digits per byte.
+hexEncode : ToBytes a => a -> String
+hexEncode x = primHexEncode (toBytes x)
+
+foreign hexDecode : String -> Result String Bytes = "rt.HexDecode"

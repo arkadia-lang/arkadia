@@ -1,22 +1,37 @@
 -- Hash functions (as lowercase hex digests), HMAC and secure randomness.
+-- Hashes accept Bytes or a String (as its UTF-8 bytes).
 --
 --   import Std.Crypto (..)
 --   sha256 "abc"   -- "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 module Std.Crypto
 
+import Std.Bytes (Bytes, ToBytes, toBytes)
 import Std.Encoding (base64UrlEncode)
 
-foreign md5 : String -> String = "rt.Md5"
-foreign sha1 : String -> String = "rt.Sha1"
-foreign sha256 : String -> String = "rt.Sha256"
-foreign sha512 : String -> String = "rt.Sha512"
+private foreign primMd5 : Bytes -> String = "rt.Md5"
+private foreign primSha1 : Bytes -> String = "rt.Sha1"
+private foreign primSha256 : Bytes -> String = "rt.Sha256"
+private foreign primSha512 : Bytes -> String = "rt.Sha512"
+private foreign primHmacSha256 : Bytes -> Bytes -> String = "rt.HmacSha256"
+
+md5 : ToBytes a => a -> String
+md5 x = primMd5 (toBytes x)
+
+sha1 : ToBytes a => a -> String
+sha1 x = primSha1 (toBytes x)
+
+sha256 : ToBytes a => a -> String
+sha256 x = primSha256 (toBytes x)
+
+sha512 : ToBytes a => a -> String
+sha512 x = primSha512 (toBytes x)
 
 -- hmacSha256 key message
-foreign hmacSha256 : String -> String -> String = "rt.HmacSha256"
+hmacSha256 : (ToBytes k, ToBytes m) => k -> m -> String
+hmacSha256 key msg = primHmacSha256 (toBytes key) (toBytes msg)
 
--- n cryptographically secure random bytes. The result is binary, not
--- text; encode it (e.g. with hexEncode) before printing it.
-foreign randomBytes : Int -> <IO> String = "rt.RandomBytes"
+-- n cryptographically secure random bytes.
+foreign randomBytes : Int -> <IO> Bytes = "rt.RandomBytes"
 
 -- A random URL-safe token made from n random bytes (for session ids,
 -- API keys, ...).

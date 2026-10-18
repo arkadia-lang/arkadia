@@ -332,6 +332,11 @@ func writeKey(sb *strings.Builder, v Value) {
 			writeKey(sb, f)
 		}
 		sb.WriteByte(']')
+	case *Bytes:
+		sb.WriteString("y")
+		sb.WriteString(strconv.Itoa(len(x.S)))
+		sb.WriteByte(':')
+		sb.WriteString(x.S)
 	case *BigInt:
 		sb.WriteString("b")
 		sb.WriteString(x.N.String())
@@ -537,41 +542,41 @@ func BigCompare(a, b Value) Value { return Con0(bi(a).Cmp(bi(b)) + 1) }
 
 // ---------------------------------------------------------------- encodings & hashes
 
-func Base64Encode(s Value) Value    { return base64.StdEncoding.EncodeToString([]byte(s.(string))) }
-func Base64URLEncode(s Value) Value { return base64.RawURLEncoding.EncodeToString([]byte(s.(string))) }
+func Base64Encode(b Value) Value    { return base64.StdEncoding.EncodeToString([]byte(bs(b))) }
+func Base64URLEncode(b Value) Value { return base64.RawURLEncoding.EncodeToString([]byte(bs(b))) }
 
 func decodeResult(b []byte, err error) Value {
 	if err != nil {
 		return Err(err.Error())
 	}
-	return Ok(string(b))
+	return Ok(&Bytes{S: string(b)})
 }
 
 func Base64Decode(s Value) Value { return decodeResult(base64.StdEncoding.DecodeString(s.(string))) }
 func Base64URLDecode(s Value) Value {
 	return decodeResult(base64.RawURLEncoding.DecodeString(strings.TrimRight(s.(string), "=")))
 }
-func HexEncode(s Value) Value { return hex.EncodeToString([]byte(s.(string))) }
+func HexEncode(b Value) Value { return hex.EncodeToString([]byte(bs(b))) }
 func HexDecode(s Value) Value { return decodeResult(hex.DecodeString(s.(string))) }
 
-func digest(h hash.Hash, s Value) Value {
-	h.Write([]byte(s.(string)))
+func digest(h hash.Hash, b Value) Value {
+	h.Write([]byte(bs(b)))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func Md5(s Value) Value    { return digest(md5.New(), s) }
-func Sha1(s Value) Value   { return digest(sha1.New(), s) }
-func Sha256(s Value) Value { return digest(sha256.New(), s) }
-func Sha512(s Value) Value { return digest(sha512.New(), s) }
+func Md5(b Value) Value    { return digest(md5.New(), b) }
+func Sha1(b Value) Value   { return digest(sha1.New(), b) }
+func Sha256(b Value) Value { return digest(sha256.New(), b) }
+func Sha512(b Value) Value { return digest(sha512.New(), b) }
 
-func HmacSha256(key, s Value) Value { return digest(hmac.New(sha256.New, []byte(key.(string))), s) }
+func HmacSha256(key, b Value) Value { return digest(hmac.New(sha256.New, []byte(bs(key))), b) }
 
 func RandomBytes(n Value) Value {
 	b := make([]byte, max(n.(int64), 0))
 	if _, err := rand.Read(b); err != nil {
 		panic(&ArkError{Msg: "random: " + err.Error()})
 	}
-	return string(b)
+	return &Bytes{S: string(b)}
 }
 
 func UUID4(_ Value) Value {
