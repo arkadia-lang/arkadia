@@ -52,7 +52,7 @@ test "repetition and separators" =
   assertEq (runParser (\_ -> many (\_ -> optional digit)) "") (Ok [None])
 
 test "tokens" =
-  assertEq (runParser number "-12.5e2") (Ok -1250.0)
+  assertEq (runParser number "-12.5e2") (Ok (-1250.0))
   assertEq (runParser number "7") (Ok 7.0)
   assertEq (runParser identifier "_foo42") (Ok "_foo42")
   assertEq (runParser stringLiteral "\"a\\\"b\\n\"") (Ok "a\"b\n")

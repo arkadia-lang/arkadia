@@ -166,19 +166,16 @@ entailAcc gs cls t = match gs with
           Some path -> Some (foldl (\acc idx -> DictSuper acc idx) d path)
           None -> entailAcc rest cls t
 
--- Resolve a constraint on type variables that do not appear in any type by
--- defaulting them to Unit.
+-- Report a constraint on type variables that do not appear in any type:
+-- nothing determines which instance to use. After another error the type
+-- is usually undetermined because of it, so nothing more is reported.
 defaultAmbiguous : Checker -> Wanted -> <IO> Unit
 defaultAmbiguous c w =
   let Wanted cls ty _ p = w
-  forEach (metasOf ty) (\m -> match isStarKind (metaKind m) with
-    True -> writeRef (metaRef m) (Some (tUnit c))
-    False -> ())
-  match solve c [w] with
-    [] -> ()
-    _ ->
-      errorf c p "ambiguous type: cannot determine the type for constraint ${shortName (className cls)} ${typeString (zonk ty)}"
-      setSol w errDict
+  match errorCount c == 0 with
+    True -> errorf c p "ambiguous type: cannot determine the type for constraint ${shortName (className cls)} ${typeString (zonk ty)}; add a type annotation"
+    False -> ()
+  setSol w errDict
 
 flushRoot : Checker -> <IO> Unit
 flushRoot c =
@@ -980,7 +977,7 @@ fieldOf c p t name =
     _ -> noField ()
 
 private tryField : Checker -> FieldWanted -> <IO> Bool
-tryField c (FieldWanted p rec name res _ what slot) = match fieldOf c p rec name with
+tryField c (FieldWanted p rec name res what slot) = match fieldOf c p rec name with
   (False, _) -> False
   (True, None) -> True
   (True, Some (ti, ft)) ->
@@ -1007,7 +1004,7 @@ settleFields c lvl =
       writeRef (cFields c) keep
       match progress2 with
         True -> settleFields c lvl
-        False -> forEach keep (\(FieldWanted _ rec _ res _ _ _) ->
+        False -> forEach keep (\(FieldWanted _ rec _ res _ _) ->
           lowerLevels rec lvl
           lowerLevels res lvl)
 
@@ -1024,37 +1021,25 @@ private fallbackField : Checker -> Int -> List FieldWanted -> List FieldWanted -
 fallbackField c lvl ws acc = match ws with
   [] -> (False, reverse acc)
   w :: more ->
-    let FieldWanted _ rec _ _ _ _ _ = w
+    let FieldWanted _ rec _ _ _ _ = w
     match prune rec with
       TMeta m | readRef (metaLevelRef m) > lvl ->
         fieldByName c w
         (True, reverse acc ++ more)
       _ -> fallbackField c lvl more (w :: acc)
 
--- Resolve a constraint by the unique record type in scope that has all
--- the fields of its group.
+-- Nothing determined the record type of a field access or update.
 private fieldByName : Checker -> FieldWanted -> <IO> Unit
 fieldByName c w =
-  let FieldWanted p rec name _ group _ _ = w
-  let cands = filterMap (\(n, te) -> match te with
-    TEType ti -> match allOf (\f -> isSome (recordField ti f)) group with
-      True -> Some (n, ti)
-      False -> None
-    _ -> None) (Map.toList (readRef (scopeTypes (cScope c))))
-  match cands with
-    [] -> errorf c p "no record type in scope has the field '${name}'"
-    [(_, ti)] ->
-      let _ = recordArgs c p ti rec
-      let _ = tryField c w
-      ()
-    _ -> errorf c p "cannot tell which record the field '${name}' belongs to (${joinNames (map fst cands)} have it); add a type annotation"
+  let FieldWanted p _ name _ _ _ = w
+  errorf c p "cannot determine the record type for the field '${name}'; add a type annotation"
 
 private inferField : Checker -> Expr -> Type -> <IO> Type
 inferField c e eff = match e with
   EField p x name slot ->
     let t = inferExpr c x eff
     let r = freshType c
-    needField c (FieldWanted p t name r [name] "the field" slot)
+    needField c (FieldWanted p t name r "the field" slot)
     record c p ("." ++ name) (Some r) None noPos "field"
     r
   _ -> error "inferField"
@@ -1074,7 +1059,6 @@ inferUpdate c e eff = match e with
   EUpdate _ x fs slot ->
     let t = inferExpr c x eff
     checkDupFields c fs
-    let group = map (\(FieldInit _ n _) -> n) fs
     let (h, _) = headOf (whnf c t)
     match isMeta h with
       False ->
@@ -1090,7 +1074,7 @@ inferUpdate c e eff = match e with
       True ->
         forEach fs (\(FieldInit fp n v) ->
           let vt = inferExpr c v eff
-          needField c (FieldWanted fp t n vt group "the value of field '${n}'" slot))
+          needField c (FieldWanted fp t n vt "the value of field '${n}'" slot))
         t
   _ -> error "inferUpdate"
 

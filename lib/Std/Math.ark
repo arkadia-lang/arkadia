@@ -85,7 +85,7 @@ approxEq eps a b = abs (a - b) <= eps
 signum : (Ord a, Num a) => a -> a
 signum x
   | x > fromInt 0 = fromInt 1
-  | x < fromInt 0 = fromInt -1
+  | x < fromInt 0 = fromInt (-1)
   | otherwise = fromInt 0
 
 -- clamp lo hi x keeps x within [lo, hi].
@@ -118,7 +118,8 @@ powAcc b n acc
   | odd n = powAcc (b * b) (n / 2) (acc * b)
   | otherwise = powAcc (b * b) (n / 2) acc
 
--- Floored division: the remainder has the sign of the divisor (like `%`).
+-- Floored division: the remainder has the sign of the divisor (like `mod`;
+-- `/` and `%` truncate toward zero).
 divMod : Int -> Int -> (Int, Int)
 divMod a b =
   let m = mod a b

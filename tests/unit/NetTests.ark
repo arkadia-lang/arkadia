@@ -225,7 +225,7 @@ type Greeting = Greeting { name : String, times : Int }
   deriving (Json.ToJson, Json.FromJson)
 
 test "json bodies with conversion classes" =
-  let handler req = match Http.bodyAs req with
+  let handler req = match (Http.bodyAs req : Result String Greeting) with
     Ok g -> Http.jsonOf (Greeting { name = toUpper g.name, times = g.times * 2 })
     Err e -> Http.withStatus 400 (text e)
   let Response status _ b = Http.runHandler handler (Http.request "POST" "/" "{\"name\": \"ann\", \"times\": 2}")

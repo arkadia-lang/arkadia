@@ -24,7 +24,7 @@ withAsk n action =
 main () =
   -- an exception (direct handler) thrown inside a goroutine-based handler
   printLn (try (\_ -> collect (\_ -> yield 1; yield 2; throw "boom")))
-  printLn (try (\_ -> collect (\_ -> yield 1; yield 2)))
+  printLn (try (\_ -> collect (\_ -> yield 1; yield 2)) : Result String (List Int))
   -- exceptions caught inside, state outside
   let (r, s) = runState 0 (\_ ->
     let a = catchExn (\_ -> modify (+ 1); throw "x") (\_ -> 10)
@@ -43,4 +43,4 @@ main () =
     _ -> match try (\_ -> deep (n - 1)) with
       Ok v -> v
       Err e -> throw (e ++ "!")
-  printLn (try (\_ -> deep 3))
+  printLn (try (\_ -> deep 3) : Result String Int)

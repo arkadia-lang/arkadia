@@ -30,7 +30,7 @@ birthday u = { u | age = u.age + 1 }
 describe : User -> String
 describe (User { name, age = a }) = "${name}/${a}"
 
--- no signature: the record type is found from the fields
+moveX : Float -> Shape -> Shape
 moveX d s = { s | x = s.x + d }
 
 area s = match s with

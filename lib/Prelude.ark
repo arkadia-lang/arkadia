@@ -238,8 +238,10 @@ foreign floor : Float -> Int = "rt.FloatFloor"
 foreign ceil : Float -> Int = "rt.FloatCeil"
 foreign sqrt : Float -> Float = "rt.FloatSqrt"
 foreign pow : Float -> Float -> Float = "rt.FloatPow"
+-- Floored remainder: the result has the sign of the divisor (`mod (-7) 2`
+-- is 1). `%` is the remainder of `/`, which truncates toward zero.
 foreign mod : Int -> Int -> Int = "rt.IntMod"
-foreign rem : Int -> Int -> Int = "rt.IntRem"
+foreign primIntRem : Int -> Int -> Int = "rt.IntRem"
 
 instance Num Int where
   (+) = primIntAdd
@@ -257,17 +259,15 @@ instance Num Float where
   negate = primFloatNeg
   fromInt = toFloat
 
+-- The remainder of `/`: it has the sign of the dividend, so that
+-- (a / b) * b + a % b == a.
 (%) : Int -> Int -> Int
-(%) = mod
+(%) = primIntRem
 
 abs : (Ord a, Num a) => a -> a
 abs x
   | x < fromInt 0 = negate x
   | otherwise = x
-
--- Truncated division and remainder.
-quotRem : Int -> Int -> (Int, Int)
-quotRem a b = (a / b, rem a b)
 
 even : Int -> Bool
 even n = n % 2 == 0
@@ -277,7 +277,7 @@ odd n = n % 2 != 0
 
 gcd : Int -> Int -> Int
 gcd a 0 = abs a
-gcd a b = gcd b (rem a b)
+gcd a b = gcd b (a % b)
 
 -- ===================================================================
 -- Show / Display

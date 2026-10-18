@@ -452,7 +452,7 @@ type Checker = Checker
 -- field's type (access) or the new value's type (update), all fields named
 -- together with this one, description of the value in mismatch errors, and
 -- the slot receiving the record type's name.
-type FieldWanted = FieldWanted Pos Type String Type (List String) String (Ref String)
+type FieldWanted = FieldWanted Pos Type String Type String (Ref String)
 
 -- An integer literal whose type is not known yet: position, the slot set
 -- when it becomes a Float, its type.
