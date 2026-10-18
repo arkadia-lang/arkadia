@@ -9,6 +9,8 @@ main () =
   let xs = [1 .. 10]
   println "sum = ${sum xs}, product = ${product [1, 2, 3, 4]}"
   printLn (map square (filter even xs))
+  -- the bounds of a range are whole expressions
+  printLn [length xs - 7 .. length xs - 5]
   printLn (reverse xs |> take 3)
   printLn (zip [1, 2, 3] ["a", "b", "c"])
   printLn (sort [5, 3, 9, 1, 4])

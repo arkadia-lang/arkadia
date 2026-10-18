@@ -1345,12 +1345,24 @@ atomBase p =
       let elems = loop []
       expect_ p RBRACKET
       match elems with
-        [c@(EOpChain _ _ [op])] | varName op == ".." -> c
+        [EOpChain pos operands ops] -> match rangeChain pos operands ops with
+          Some r -> r
+          None -> EList (tokPos t) elems
         _ -> EList (tokPos t) elems
     LPAREN ->
       skip p
       parenExpr p t
     _ -> unexpected p "expression"
+
+-- A range [a .. b]: the operator chain is split at its only `..`, so that
+-- [1 .. n - 1] is the range from 1 to n - 1 whatever the precedences.
+private rangeChain : Pos -> List Expr -> List Expr -> Option Expr
+rangeChain pos operands ops = match filter (\(_, op) -> varName op == "..") (indexed ops) with
+  [(i, op)] ->
+    let from = chain (take (i + 1) operands) (take i ops)
+    let to = chain (drop (i + 1) operands) (drop (i + 1) ops)
+    Some (EOpChain pos [from, to] [op])
+  _ -> None
 
 parenExpr : P -> Token -> <Exn Diag, IO> Expr
 parenExpr p t = match accept p RPAREN with
