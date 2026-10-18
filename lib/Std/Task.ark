@@ -1,0 +1,124 @@
+-- Tasks: computations that run in parallel on all processors.
+--
+--   import Std.Task
+--
+--   main () = runAsync (\_ ->
+--     let a = spawn (\_ -> fib 32)
+--     let b = spawn (\_ -> fib 33)
+--     println "${await a + await b}")
+--
+-- Tasks are structured: `runAsync` opens a scope, `spawn` (which needs the
+-- Async effect) starts a task in the innermost scope, and `runAsync`
+-- returns only when its body and all the tasks started in it have
+-- finished. A task can therefore never outlive the scope that started it.
+--
+-- A task runs with only Async and IO: the effects handled around the scope
+-- are not available in it (handle them inside the task). Share data
+-- between tasks with Std.Channel, Std.Atomic or Std.Mutex; Ref, MArray and
+-- HashMap must not be used by two tasks at the same time.
+--
+-- Failure: when a task fails with a runtime error, the other tasks of its
+-- scope and the body are cancelled at once, and `runAsync` raises the error
+-- once they have all finished. Use `catchError` in a task whose failure
+-- must not stop the others.
+--
+-- Cancellation: `cancel`, `timeout` and the failure of a sibling cancel a
+-- computation asynchronously, even in the middle of a pure loop: it stops
+-- at its next function call, loop iteration or blocking operation (await,
+-- sleep, channels, network). `finally` runs cleanup code whatever happens,
+-- and `uncancellable` protects a critical section.
+module Std.Task
+
+-- The ability to start tasks, handled by runAsync.
+effect Async
+
+-- A task computing a value of type a.
+type Task a
+
+-- How a task finished (a failed task raises its error instead).
+type Outcome a = Completed a | Cancelled
+  deriving (Eq, Show)
+
+-- Run a computation in a new task scope, waiting for all the tasks it
+-- starts before returning. If the body or a task fails, everything else
+-- in the scope is cancelled and the failure is raised.
+foreign runAsync : (Unit -> <Async, IO | e> a) -> <IO | e> a = "rt.RunAsync"
+
+-- Start a task in the innermost task scope. It may start more tasks in the
+-- same scope.
+foreign spawn : (Unit -> <Async, IO> a) -> <Async> Task a = "rt.Spawn"
+
+-- Start a task whose value is not needed (the scope still waits for it).
+fork : (Unit -> <Async, IO> a) -> <Async> Unit
+fork action =
+  let _ = spawn action
+  ()
+
+-- Wait for a task and return its value. If the task failed, its error is
+-- raised again; awaiting a cancelled task is a runtime error.
+foreign await : Task a -> <IO> a = "ev:rt.Await"
+
+-- Wait for a task and report whether it completed or was cancelled. If
+-- the task failed, its error is raised again.
+foreign awaitOutcome : Task a -> <IO> Outcome a = "ev:rt.AwaitOutcome"
+
+-- Request the cancellation of a task. It returns at once; the task stops at
+-- its next cancellation point and finishes as Cancelled.
+foreign cancel : Task a -> <IO> Unit = "rt.CancelTask"
+
+-- Whether a task has finished.
+foreign isDone : Task a -> <IO> Bool = "rt.TaskDone"
+
+-- Wait for the first task of a non-empty list to finish and return it.
+foreign firstDone : List (Task a) -> <IO> Task a = "ev:rt.FirstDone"
+
+-- Run a computation with a time limit in seconds: Some result, or None if
+-- it did not finish in time (it is then cancelled).
+foreign timeout : Float -> (Unit -> <IO | e> a) -> <IO | e> Option a = "rt.Timeout"
+
+-- Run a computation until the program is interrupted (Ctrl-C) or asked to
+-- terminate: Some result, or None if the signal cancelled it. A second
+-- signal stops the program at once. For a server, this gives a graceful
+-- shutdown: `cancelOnInterrupt (\_ -> serve ":8080" app)`.
+foreign cancelOnInterrupt : (Unit -> <IO | e> a) -> <IO | e> Option a = "rt.CancelOnInterrupt"
+
+-- Run a computation that cancellation cannot interrupt. A cancellation
+-- requested meanwhile takes effect when it returns.
+foreign uncancellable : (Unit -> <IO | e> a) -> <IO | e> a = "rt.Uncancellable"
+
+-- Run a computation, then the cleanup, however the computation ends: with
+-- a value, a runtime error, a cancellation or an effect that abandons it.
+-- The cleanup is not interrupted by cancellation.
+foreign finally : (Unit -> <IO | e> a) -> (Unit -> <IO> Unit) -> <IO | e> a = "rt.Finally"
+
+-- Run a computation, turning a runtime error into Err message. A task that
+-- must not bring down its scope when it fails can catch its errors this
+-- way. Cancellation and exit are not caught.
+foreign catchError : (Unit -> <e> a) -> <e> Result String a = "rt.CatchError"
+
+-- The number of processors that run tasks in parallel (GOMAXPROCS).
+foreign numProcessors : Unit -> <IO> Int = "rt.NumProcessors"
+
+-- Run computations in parallel and collect their results in order.
+parallel : List (Unit -> <Async, IO> a) -> <IO> List a
+parallel actions = runAsync (\_ -> mapList await (mapList spawn actions))
+
+-- Apply a function to every element in parallel.
+parMap : (a -> <Async, IO> b) -> List a -> <IO> List b
+parMap f xs = parallel (mapList (\x _ -> f x) xs)
+
+-- Run two computations in parallel.
+both : (Unit -> <Async, IO> a) -> (Unit -> <Async, IO> b) -> <IO> (a, b)
+both first second = runAsync (\_ ->
+  let t = spawn second
+  let x = first ()
+  (x, await t))
+
+-- Run computations in parallel and return the result of the first one to
+-- finish; the others are cancelled. If it failed, its error is raised.
+race : List (Unit -> <Async, IO> a) -> <IO> a
+race actions = runAsync (\_ ->
+  let tasks = mapList spawn actions
+  let winner = firstDone tasks
+  forEach tasks cancel
+  await winner)

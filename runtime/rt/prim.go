@@ -10,6 +10,7 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -26,14 +27,68 @@ func (e *ArkError) Error() string { return e.Msg }
 // ExitSignal requests program termination with a status code.
 type ExitSignal struct{ Code int }
 
-var stdout = bufio.NewWriterSize(os.Stdout, 64*1024)
-var stdin = bufio.NewReader(os.Stdin)
+// output is the buffered standard output, shared by all tasks: each write
+// (a whole line for println) is atomic. Buffered output is flushed before
+// the program blocks on input or I/O, and at the latest flushDelay after
+// it was written, so that the output of tasks shows up while others wait.
+type output struct {
+	mu        sync.Mutex
+	w         *bufio.Writer
+	scheduled bool // a flush is scheduled
+}
+
+const flushDelay = 50 * time.Millisecond
+
+func (o *output) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.schedule()
+	return o.w.Write(p)
+}
+
+func (o *output) write(s string, newline bool) {
+	o.mu.Lock()
+	o.w.WriteString(s)
+	if newline {
+		o.w.WriteByte('\n')
+	}
+	o.schedule()
+	o.mu.Unlock()
+}
+
+// schedule arranges for a flush; o.mu is held.
+func (o *output) schedule() {
+	if !o.scheduled {
+		o.scheduled = true
+		time.AfterFunc(flushDelay, o.flush)
+	}
+}
+
+func (o *output) flush() {
+	o.mu.Lock()
+	o.w.Flush()
+	o.scheduled = false
+	o.mu.Unlock()
+}
+
+var stdout = &output{w: bufio.NewWriterSize(os.Stdout, 64*1024)}
+
+// stdin is the buffered standard input; inMu serializes reads.
+var (
+	stdin = bufio.NewReader(os.Stdin)
+	inMu  sync.Mutex
+)
 
 // Flush flushes buffered standard output.
-func Flush() { stdout.Flush() }
+func Flush() { stdout.flush() }
 
-// Main runs the program entry point and reports runtime errors.
-func Main(entry func()) {
+// InitEv is the evidence of the program initialization (top-level values
+// and dictionaries).
+var InitEv = newTaskEv()
+
+// Main runs the program entry point in the main task and reports runtime
+// errors.
+func Main(entry func(*Ev)) {
 	debug.SetMaxStack(4 << 30)
 	if os.Getenv("GOGC") == "" {
 		// functional programs allocate many short-lived objects
@@ -51,7 +106,7 @@ func Main(entry func()) {
 	os.Exit(code)
 }
 
-func run(entry func()) (code int) {
+func run(entry func(*Ev)) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
 			Flush()
@@ -75,7 +130,7 @@ func run(entry func()) (code int) {
 			}
 		}
 	}()
-	entry()
+	entry(newTaskEv())
 	return 0
 }
 
@@ -323,13 +378,12 @@ func ShowArg(s Value) Value {
 // ---------------------------------------------------------------- IO
 
 func Print(s Value) Value {
-	stdout.WriteString(s.(string))
+	stdout.write(s.(string), false)
 	return Unit
 }
 
 func Println(s Value) Value {
-	stdout.WriteString(s.(string))
-	stdout.WriteByte('\n')
+	stdout.write(s.(string), true)
 	return Unit
 }
 
@@ -341,7 +395,9 @@ func Eprintln(s Value) Value {
 
 func ReadLine(_ Value) Value {
 	Flush()
+	inMu.Lock()
 	line, err := stdin.ReadString('\n')
+	inMu.Unlock()
 	if err != nil && line == "" {
 		return None
 	}
@@ -350,7 +406,9 @@ func ReadLine(_ Value) Value {
 
 func ReadAll(_ Value) Value {
 	Flush()
+	inMu.Lock()
 	data, _ := io.ReadAll(stdin)
+	inMu.Unlock()
 	return string(data)
 }
 

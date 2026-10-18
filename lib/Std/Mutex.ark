@@ -1,0 +1,46 @@
+-- Mutual exclusion between tasks (see Std.Task).
+--
+--   import Std.Mutex
+--   let accounts = newShared (Map.fromList [("ann", 100), ("bob", 0)])
+--   updateShared accounts (\m ->
+--     let amount = Map.findWithDefault 0 "ann" m
+--     (Map.insert "bob" amount (Map.insert "ann" 0 m), amount))
+--
+-- A Shared value is a mutable cell protected by a mutex: every access
+-- holds the lock, so an update sees no concurrent change and may perform
+-- effects (if it fails or is abandoned, the value is left unchanged).
+module Std.Mutex
+
+import Std.Ref
+
+-- A lock.
+type Mutex
+
+foreign newMutex : Unit -> <IO> Mutex = "rt.NewMutex"
+
+-- Run a computation holding the lock; it is released however the
+-- computation ends. Waiting for the lock can be cancelled.
+foreign withLock : Mutex -> (Unit -> <IO | e> a) -> <IO | e> a = "rt.WithLock"
+
+-- A mutable cell protected by a mutex.
+type Shared a = Shared Mutex (Ref a)
+
+newShared : a -> <IO> Shared a
+newShared x = Shared (newMutex ()) (newRef x)
+
+readShared : Shared a -> <IO> a
+readShared (Shared m r) = withLock m (\_ -> readRef r)
+
+writeShared : Shared a -> a -> <IO> Unit
+writeShared (Shared m r) x = withLock m (\_ -> writeRef r x)
+
+-- Update the value and return a result computed from the old value. The
+-- update holds the lock; if it fails, the value is not changed.
+updateShared : Shared a -> (a -> <IO | e> (a, b)) -> <IO | e> b
+updateShared (Shared m r) f = withLock m (\_ ->
+  let (x, result) = f (readRef r)
+  writeRef r x
+  result)
+
+modifyShared : Shared a -> (a -> <IO | e> a) -> <IO | e> Unit
+modifyShared s f = updateShared s (\x -> (f x, ()))

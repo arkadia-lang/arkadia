@@ -103,13 +103,13 @@ func RegexNamedGroups(r Value) Value {
 }
 
 // RegexReplaceWith replaces every match with f applied to its groups.
-func RegexReplaceWith(r, f, s Value) Value {
+func RegexReplaceWith(ev *Ev, r, f, s Value) Value {
 	str := s.(string)
 	var sb strings.Builder
 	last := 0
 	for _, loc := range re(r).FindAllStringSubmatchIndex(str, -1) {
 		sb.WriteString(str[last:loc[0]])
-		sb.WriteString(Apply1(f, groups(str, loc)).(string))
+		sb.WriteString(Apply1(ev, f, groups(str, loc)).(string))
 		last = loc[1]
 	}
 	sb.WriteString(str[last:])
@@ -212,9 +212,9 @@ func MArrayReverse(a Value) Value {
 }
 
 // MArraySortBy sorts in place (stably) with a comparison function.
-func MArraySortBy(cmp, a Value) Value {
+func MArraySortBy(ev *Ev, cmp, a Value) Value {
 	s := marr(a).S
-	sortStable(s, func(x, y Value) bool { return TagOf(Apply2(cmp, x, y)) == 0 })
+	sortStable(s, func(x, y Value) bool { return TagOf(Apply2(ev, cmp, x, y)) == 0 })
 	return Unit
 }
 

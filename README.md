@@ -2,6 +2,7 @@
 
 **Arkadia** は、代数的エフェクトと型クラスを備えた、正格評価の静的型付き関数型プログラミング言語です。
 ソースコードはネイティブバイナリにコンパイルされ、メモリは GC で管理されます。
+構造化された軽量タスクがすべてのプロセッサで並列に動き、純粋なループを含むどんな計算も非同期にキャンセルできます。
 
 ```haskell
 import Std.State
@@ -32,7 +33,8 @@ main () =
 | アドホック多相 | 型クラス（スーパークラス・デフォルト実装・`deriving (Eq, Ord, Show)`）を辞書渡しで実装 |
 | 高カインド | `Functor f`, `Monad m`, `Foldable t` など、型構築子を抽象化できる。カインドは推論される |
 | レコード | 名前付きフィールド、`u.name` / `.name` / `{ u \| age = 1 }` / `User { name, age }` パターン。フィールドは型主導で解決 |
-| 代数的エフェクト | `effect` 宣言・`handle ... with` によるディープハンドラ。エフェクトは行多相の型で追跡され、未処理のエフェクトはコンパイルエラー |
+| 代数的エフェクト | `effect` 宣言・`handle ... with` によるディープハンドラ。エフェクトは行多相の型で追跡され、未処理のエフェクトはコンパイルエラー。エビデンス渡しで実装され、大域的な状態を持たない |
+| 並列実行 | `Std.Task` の構造化されたタスク（`runAsync` / `spawn` / `await`）がゴルーチンとして全プロセッサで並列に動き、Go のスケジューラがプリエンプトする。キャンセル・タイムアウト・失敗の伝播はスコープの木に沿って行われ、コンパイラが挿入するキャンセルポイントで純粋な無限ループも止められる。HTTP サーバは各リクエストを並列に処理する |
 | GC | Go ランタイムの並行 GC を利用 |
 | ネイティブバイナリ | Arkadia → Go → `go build` で単一の静的バイナリを生成 |
 | 現代的なエコシステム | `ark` コマンド（new / build / run / check / test / fmt / doc / repl）、Language Server（VS Code 拡張付き）、`ark.toml` による依存管理（path / git）とロックファイル、テストランナー、Go への FFI |
@@ -169,6 +171,38 @@ effect Yield a where
 
 詳しくは [言語ガイド](docs/guide.md) を参照してください。
 
+### タスクと並列実行
+
+```haskell
+import Std.Task
+import Std.Time (sleep)
+
+fib : Int -> Int
+fib n
+  | n < 2 = n
+  | otherwise = fib (n - 1) + fib (n - 2)
+
+-- 終わらない純粋なループ
+spin : Int -> Int
+spin n = spin (n + 1)
+
+main () =
+  -- 各要素をそれぞれのタスクで並列に計算
+  println (show (parMap fib [30, 31, 32]))
+  -- 0.1 秒で終わらなければキャンセルされ None
+  println (show (timeout 0.1 (\_ -> spin 0)))
+  runAsync (\_ ->
+    let t = spawn (\_ -> finally (\_ -> spin 0) (\_ -> println "cleaned up"))
+    sleep 0.05
+    cancel t                              -- 純粋なループの途中でもキャンセルされる
+    println (show (awaitOutcome t)))      -- Cancelled
+```
+
+- `runAsync` はタスクのスコープを開き、その中で開始したタスクがすべて終わるまで戻りません（構造化された並行性）。タスクが失敗すると、スコープの他のタスクはキャンセルされ、エラーは `runAsync` から送出されます。
+- タスクが使えるエフェクトは `Async`（タスクの開始）と `IO` だけで、型検査で保証されます。他のエフェクトはタスクの中で処理します。
+- タスク間のデータの共有には `Std.Channel`・`Std.Atomic`・`Std.Mutex` を使います。
+- キャンセルポイントはコンパイラが自動で挿入し（ループ・再帰・関数値の呼び出し）、`await`・`sleep`・チャネル・ネットワークの待ちもキャンセルできます。`finally` は後始末、`uncancellable` は保護区間です。
+
 ## ツールチェーン
 
 | コマンド | 説明 |
@@ -238,7 +272,9 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 | `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
 | `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照。`ToJson` / `FromJson` クラスと `deriving (ToJson, FromJson)` によるレコード等との自動変換（失敗箇所付きのエラー） |
 | `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻（RFC 3339 などの書式化と解析、日付の構築、曜日、日・月の加算）と計測、可変参照 |
-| `Std.Http` | HTTP サーバ（ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie）と HTTP クライアント |
+| `Std.Task` | 構造化された並列タスク（`runAsync`, `spawn`, `await`, `cancel`, `timeout`, `finally`, `parMap`, `race`, `cancelOnInterrupt` …） |
+| `Std.Channel` / `Std.Atomic` / `Std.Mutex` | タスク間の通信と共有: 容量付きチャネル、原子的に更新する参照、ロックと `Shared` 値 |
+| `Std.Http` | HTTP サーバ（リクエストを並列に処理。ルーティング・パスパラメータ・ミドルウェア・静的ファイル・Cookie）と HTTP クライアント |
 | `Std.Net` / `Std.Url` | TCP ソケット・名前解決、URL のパース・パーセントエンコード・クエリ文字列 |
 | `Std.Regex` | 正規表現（RE2 構文）。一致・キャプチャ・名前付きグループ・置換（関数による置換も可）・分割 |
 | `Std.MArray` / `Std.HashMap` | 可変配列（push/pop・その場ソート・freeze/thaw）、挿入順を保つ可変ハッシュマップ（構造的なキー比較） |
@@ -255,6 +291,7 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 ```haskell
 import Std.Http
 import Std.Json as Json
+import Std.Task (cancelOnInterrupt)
 
 hello : Handler e
 hello req = text "Hello, ${withDefault "world" (query "name" req)}!"
@@ -264,16 +301,20 @@ user req =
   let id = parseInt (param "id" req) |> orHalt (badRequest "id must be a number")
   json (Json.object [("id", Json.int id)])
 
-main () = serve ":8080" (logRequests (router
-  [ get "/" hello
-  , get "/users/:id" user
-  , staticDir "/assets" "public"
-  ]))
+main () =
+  let _ = cancelOnInterrupt (\_ -> serve ":8080" (logRequests (router
+    [ get "/" hello
+    , get "/users/:id" user
+    , staticDir "/assets" "public"
+    ])))
+  println "bye"
 ```
 
 - ハンドラ `Handler e` は `Request -> <IO, Fail, Halt | e> Response`。`halt resp`（`orHalt` / `orHaltWith`）で任意のレスポンスを返して早期終了でき、`fail` や実行時エラーは 500 になります（サーバは止まりません）。
 - ルートのパターンは固定文字列・`:name`（1 セグメント）・末尾の `*name`（残り全部）。`scope "/api" [...]` でまとめて前置でき、パスは合うがメソッドが違う場合は 405 を返します。
-- リクエストの受信は Go のゴルーチンで並行に行い、ハンドラは一度に一つずつ実行します。そのため `State` などのエフェクトをサーバ全体の周りで処理して、ハンドラ間でロックなしに共有できます（[`examples/http/server.ark`](examples/http/server.ark)）。
+- `serve` は各リクエストをそれぞれのタスクで、接続のゴルーチンの上で直接処理します。リクエストは全プロセッサで並列に処理され、遅いハンドラや重いハンドラが他のリクエストを止めることはありません。ハンドラ間で共有するデータは `Std.Mutex` の `Shared` などに置きます（[`examples/http/server.ark`](examples/http/server.ark)）。
+- ハンドラは `spawn` でリクエストの一部としてタスクを開始できます（バックエンドへの並列リクエストなど）。クライアントが切断したリクエストはキャンセルされ、`cancelOnInterrupt` で囲めば Ctrl-C で実行中のリクエストをキャンセルして終了します。
+- `serveSequential` はハンドラを一度に一つずつ実行します。`State` などのエフェクトをサーバ全体の周りで処理して、ハンドラ間でロックなしに共有できます。
 - `request "GET" "/users/1" ""` でリクエストを作り `runHandler` に渡せば、サーバを立てずにハンドラやルータをテストできます。
 - `bodyAs req` は JSON の本文を `FromJson` の型に変換し、`jsonOf x` は `ToJson` の値を JSON で返します。
 - クライアントは `httpGet` / `httpPost` / `postJson` / `getJson` / `getAs` / `fetch`。
@@ -281,6 +322,7 @@ main () = serve ":8080" (logRequests (router
 
 ## サンプル
 
+- [`examples/parallel.ark`](examples/parallel.ark) — タスクによるデータ並列・チャネルのパイプライン・純粋なループのキャンセル
 - [`examples/scheduler.ark`](examples/scheduler.ark) — エフェクトで実装した協調スレッド
 - [`examples/json.ark`](examples/json.ark) — State と Fail エフェクトによる JSON パーサ
 - [`examples/calculator.ark`](examples/calculator.ark) — モナディックなパーサコンビネータ（高カインド）
@@ -292,7 +334,7 @@ main () = serve ":8080" (logRequests (router
 ```
 compiler           コンパイラ ark（Arkadia で記述。モジュール構成は compiler/README.md）
 lib                標準ライブラリ（Arkadia で記述）
-runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エフェクト）
+runtime/rt         生成コードにリンクされるランタイム（値表現・カリー化・エビデンスとエフェクト・タスクとキャンセル）
 bootstrap          ブートストラップ用コンパイラ（Go で記述、凍結）
 tests              テストスイート（compiler_test.go が bin/ark 相当のコンパイラで実行する）
 editors/vscode     VS Code 拡張（シンタックスハイライト + LSP クライアント）
@@ -303,7 +345,8 @@ editors/vscode     VS Code 拡張（シンタックスハイライト + LSP ク�
 - 継続はワンショット（同じ継続を二度再開すると実行時エラー）。非決定性のような多重再開は未対応です。
 - 型クラスは単一パラメータのみ。
 - レコードの更新 `{ r | f = v }` は値の型を変えられません（型パラメータを変える更新は構築し直します）。
-- 並列実行は未対応です。`Std.Http` のサーバは接続の受け付けを並行に行いますが、ハンドラは一つずつ実行します。
+- `Ref`・`MArray`・`HashMap` はタスク間で同時に使えません（データ競合になります）。タスク間の共有には `Std.Channel`・`Std.Atomic`・`Std.Mutex` を使ってください。
+- 標準入力の読み込み（`readLine`）と外部コマンドの実行はキャンセルポイントではありません。
 
 ## ライセンス
 

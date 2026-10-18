@@ -1,0 +1,75 @@
+-- Unit tests for Std.Channel, Std.Atomic and Std.Mutex.
+module SyncTests
+
+import Std.Task
+import Std.Channel
+import Std.Atomic
+import Std.Mutex
+import Std.Time (sleep)
+
+test "channels carry values between tasks" =
+  let ch = newChannel 0
+  let got = runAsync (\_ ->
+    let _ = spawn (\_ -> sendAll ch [1 .. 100])
+    drain ch)
+  assertEq got [1 .. 100]
+
+test "buffered channels" =
+  let ch = newChannel 2
+  assert (trySend ch "a") "room for a"
+  assert (trySend ch "b") "room for b"
+  assert (not (trySend ch "c")) "full"
+  assertEq (pending ch) 2
+  assertEq (tryReceive ch) (Some "a")
+  closeChannel ch
+  closeChannel ch
+  assertEq (receive ch) (Some "b")
+  assertEq (receive ch) None
+  assertEq (tryReceive ch) None
+  assert (not (trySend ch "d")) "closed"
+  assertEq (catchError (\_ -> send ch "e")) (Err "send on a closed channel")
+
+test "many producers, one consumer" =
+  let ch = newChannel 8
+  let total = runAsync (\_ ->
+    let producers = mapList (\p -> spawn (\_ -> forEach [1 .. 100] (\i -> send ch (p * 1000 + i)))) [1 .. 4]
+    let _ = spawn (\_ ->
+      forEach producers await
+      closeChannel ch)
+    let sum = newAtomic 0
+    forEachMessage ch (\x -> modifyAtomic sum (+ x))
+    readAtomic sum)
+  assertEq total (4 * 5050 + 100 * 1000 * 10)
+
+test "receiving can be cancelled" =
+  let ch : Channel Int = newChannel 0
+  assertEq (timeout 0.05 (\_ -> receive ch)) None
+  assertEq (timeout 0.05 (\_ -> send ch 1)) None
+
+test "atomic references" =
+  let n = newAtomic 0
+  runAsync (\_ -> forEach [1 .. 50] (\_ -> fork (\_ -> forEach [1 .. 100] (\_ -> modifyAtomic n (+ 1)))))
+  assertEq (readAtomic n) 5000
+  assertEq (swapAtomic n 1) 5000
+  assertEq (updateAtomic n (\x -> (x + 1, x * 10))) 10
+  assertEq (modifyAtomicAndGet n (* 3)) 6
+  writeAtomic n 7
+  assertEq (readAtomic n) 7
+
+test "mutexes" =
+  let account = newShared 0
+  runAsync (\_ -> forEach [1 .. 20] (\_ -> fork (\_ -> forEach [1 .. 50] (\_ ->
+    -- a read-modify-write with a pause in the middle stays consistent
+    modifyShared account (\x ->
+      let y = x + 1
+      sleep 0.0
+      y)))))
+  assertEq (readShared account) 1000
+  -- a failed update leaves the value unchanged and releases the lock
+  assertEq (catchError (\_ -> updateShared account (\_ -> error "no"))) (Err "no")
+  writeShared account 5
+  assertEq (readShared account) 5
+  let m = newMutex ()
+  assertEq (withLock m (\_ -> withLock (newMutex ()) (\_ -> 3))) 3
+  -- waiting for a held lock can be cancelled
+  assertEq (withLock m (\_ -> timeout 0.05 (\_ -> withLock m (\_ -> 1)))) None

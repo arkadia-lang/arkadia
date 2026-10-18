@@ -1,0 +1,8 @@
+processors: at least one? True
+primes below 100000: 9592
+sum of squares of 1..1000: 333833500
+the endless search was cancelled after 0.1s
+outcomes: [Cancelled, Cancelled, Cancelled, Cancelled]
+the workers made progress: True
+first to finish: 168 primes below 1000
+both: 669 + 560 = 1229

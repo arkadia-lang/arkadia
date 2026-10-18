@@ -16,7 +16,9 @@ just build        # bin/ark0 で compiler/ をビルド（bin/ark1）し、bin/a
   変更するのは、`compiler/src`（とそれが import する標準ライブラリのモジュール）をビルドできなくなるときだけです。
 - **テスト**: ここには独自の統合テストを置きません。`tests/compiler_test.go` が、
   このコンパイラでビルドした本体が自分自身を再ビルドして固定点に達することを検査します。
-- 標準ライブラリ（`lib/`）と Go ランタイム（`runtime/rt`）はリポジトリのものを埋め込んで使います。
+- 標準ライブラリ（`lib/`）はリポジトリのものを埋め込んで使います。Go ランタイムは、エビデンス渡しに移行する前の
+  `runtime/rt` を凍結した複製（[`runtime/rt`](runtime/rt)）を埋め込みます。このコンパイラが生成するコードはその呼び出し規約に従い、
+  ビルドしたプログラム（セルフホストコンパイラの第 1 段）は一度に一つのゴルーチンだけで動きます。
 
 ## 構成
 
@@ -28,4 +30,5 @@ internal/core      中間言語 Core への変換（辞書・パターン・ハ�
 internal/codegen   Core の最適化と Go コード生成
 internal/driver    モジュール読み込み・パッケージ管理・ビルド・テスト
 internal/lsp       Language Server Protocol 実装
+runtime/rt         生成コードにリンクされるランタイム（凍結）
 ```

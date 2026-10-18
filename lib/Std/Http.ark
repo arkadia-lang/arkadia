@@ -17,11 +17,19 @@
 --     , staticDir "/assets" "public"
 --     ]))
 --
--- Requests are read concurrently, but handlers run one at a time, so they
--- may use any effect (State, Ref, ...) without locking. A handler that
--- fails (`fail`, a runtime error) answers 500; `halt` answers early with
--- any response.
+-- `serve` handles every request in a task of its own (see Std.Task), so
+-- requests are answered in parallel on all processors, and a slow or busy
+-- handler does not hold up the others. A request whose client goes away
+-- is cancelled. Handlers share data through Std.Atomic, Std.Mutex or
+-- Std.Channel, and may start tasks of their own (Async), which end with
+-- the request. `serveSequential` instead runs handlers one at a time, so
+-- that they can share effects handled around the whole server (State...).
+--
+-- A handler that fails (`fail`, a runtime error) answers 500; `halt`
+-- answers early with any response.
 module Std.Http
+
+import Std.Task (Async, runAsync)
 
 import Std.String as S
 import Std.Url as Url
@@ -269,7 +277,8 @@ effect Halt where
   halt : Response -> a
 
 -- A request handler. Handlers may fail (answered with 500), halt with a
--- response, and use any other effect e handled around the server.
+-- response, and use other effects e: Async for the handlers of `serve`,
+-- any effect handled around the server for `serveSequential`.
 alias Handler e = Request -> <IO, Fail, Halt | e> Response
 
 -- The value of an option, or halt with the response.
@@ -470,42 +479,64 @@ contentTypeFor file = match toLower (Path.extension file) with
 foreign listen : String -> <IO> Result String Server = "rt.HttpListen"
 -- The address actually bound, e.g. "[::]:8080".
 foreign serverAddress : Server -> <IO> String = "rt.HttpServerAddr"
--- Stop accepting requests; `accept` returns None and `serveOn` returns.
+-- Stop accepting requests: `accept` returns None, and `serveOn` returns
+-- once the requests it is handling have been answered.
 foreign closeServer : Server -> <IO> Unit = "rt.HttpClose"
 
-foreign primNext : Server -> <IO> Option (Exchange, String, String, String, List (String, String), String, String) = "rt.HttpNext"
+foreign primNext : Server -> <IO> Option (Exchange, String, String, String, List (String, String), String, String) = "ev:rt.HttpNext"
+foreign primServe : Server -> ((Exchange, String, String, String, List (String, String), String, String) -> <IO> (Int, List (String, String), String)) -> <IO> Unit = "rt.HttpServe"
 foreign primRespond : Exchange -> Int -> List (String, String) -> String -> <IO> Unit = "rt.HttpRespond"
 foreign primNoExchange : Exchange = "rt.HttpNoExchange"
 foreign primCatchError : (Unit -> <e> a) -> <e> Result String a = "rt.CatchError"
 
--- Wait for the next request; None once the server is closed.
+-- Wait for the next request; None once the server is closed. Requests
+-- taken with `accept` are answered with `respond`.
 accept : Server -> <IO> Option Request
-accept srv = match primNext srv with
-  None -> None
-  Some (ex, m, p, q, hs, b, r) -> Some (Request ex m p (Url.parseQuery q) hs b r [])
+accept srv = map fromRaw (primNext srv)
+
+private fromRaw : (Exchange, String, String, String, List (String, String), String, String) -> Request
+fromRaw (ex, m, p, q, hs, b, r) = Request ex m p (Url.parseQuery q) hs b r []
 
 -- Send the response to a request (only the first response counts).
 respond : Request -> Response -> <IO> Unit
 respond (Request ex _ _ _ _ _ _ _) (Response s hs b) = primRespond ex s hs b
 
--- Answer requests with a handler until the server is closed.
-serveOn : Server -> Handler e -> <IO | e> Unit
-serveOn srv h = match accept srv with
+-- Answer requests with a handler until the server is closed, each request
+-- in a task of its own: requests are handled in parallel. The handler may
+-- start tasks, which are part of the request. When the server is closed,
+-- it returns once the running requests have been answered; when it is
+-- cancelled, the running requests are cancelled.
+serveOn : Server -> (Request -> <IO, Fail, Halt, Async> Response) -> <IO> Unit
+serveOn srv h = primServe srv (\raw ->
+  let Response s hs b = runAsync (\_ -> runHandler h (fromRaw raw))
+  (s, hs, b))
+
+-- Answer requests one at a time until the server is closed. Handlers can
+-- share effects handled around the server.
+serveOnSequential : Server -> Handler e -> <IO | e> Unit
+serveOnSequential srv h = match accept srv with
   None -> ()
   Some req ->
     respond req (runHandler h req)
-    serveOn srv h
+    serveOnSequential srv h
 
--- Listen on an address and answer requests forever. Exits with status 1 if
--- the address cannot be used.
-serve : String -> Handler e -> <IO | e> Unit
-serve addr h = match listen addr with
+-- Listen on an address and answer requests in parallel forever. Exits
+-- with status 1 if the address cannot be used.
+serve : String -> (Request -> <IO, Fail, Halt, Async> Response) -> <IO> Unit
+serve addr h = serveOn (listenOrExit addr) h
+
+-- Listen on an address and answer requests one at a time forever.
+serveSequential : String -> Handler e -> <IO | e> Unit
+serveSequential addr h = serveOnSequential (listenOrExit addr) h
+
+private listenOrExit : String -> <IO> Server
+listenOrExit addr = match listen addr with
   Err e ->
     eprintln "cannot listen on ${addr}: ${e}"
     exit 1
   Ok srv ->
     println "Listening on http://${displayAddress (serverAddress srv)}"
-    serveOn srv h
+    srv
 
 private displayAddress : String -> String
 displayAddress addr = match S.lastIndexOf ":" addr with
@@ -523,10 +554,11 @@ displayAddress addr = match S.lastIndexOf ":" addr with
 -- Client
 -- ===================================================================
 
-foreign primFetch : String -> String -> List (String, String) -> String -> Float -> <IO> Result String (Int, List (String, String), String) = "rt.HttpFetch"
+foreign primFetch : String -> String -> List (String, String) -> String -> Float -> <IO> Result String (Int, List (String, String), String) = "ev:rt.HttpFetch"
 
 -- Send a request: fetch method url headers body. Redirects are followed;
--- any status is Ok, Err is for network failures. Times out after 30 s.
+-- any status is Ok, Err is for network failures. Times out after 30 s;
+-- cancelling the task aborts the request.
 fetch : String -> String -> List (String, String) -> String -> <IO> Result String Response
 fetch m url hs b = fetchWithTimeout 30.0 m url hs b
 

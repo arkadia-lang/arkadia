@@ -98,6 +98,12 @@ writeGoModule root dir mainSrc natives = match makeDir (pathJoin dir "rt") with
           Err _ -> None
         False -> None) (sortStrings names)
       Err _ -> []
+    -- remove runtime files that the runtime no longer has
+    match listDir (pathJoin dir "rt") with
+      Ok names -> forEach (filter (\n -> not (elem ("rt/" ++ n) (map fst rtFiles))) names) (\n ->
+        let _ = removeFile (pathJoin dir ("rt/" ++ n))
+        ())
+      Err _ -> ()
     let nativeFilesData = filterMap (\(i, n) -> match readFile n with
       Ok src -> Some ("native_${i}_${pathBase n}", src)
       Err _ -> None) (indexed natives)

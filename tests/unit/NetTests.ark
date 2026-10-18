@@ -8,6 +8,10 @@ import Std.Http (Handler, Response(..), get, post, delete, router, scope, text, 
 import Std.Json as Json
 import Std.State as St
 import Std.IO as IO
+import Std.Task
+import Std.Channel as Chan
+import Std.Atomic
+import Std.Time (sleep)
 
 ok : Result String a -> <Fail> a
 ok (Ok x) = x
@@ -158,6 +162,53 @@ test "http server over a socket" =
   Net.close conn
   Http.closeServer srv
   assertEq (Http.accept srv |> isNone) True
+
+test "requests are handled in parallel" =
+  let srv = ok (Http.listen "127.0.0.1:0")
+  let base = "http://${Http.serverAddress srv}"
+  let ch = Chan.newChannel 0
+  let cancelled = newAtomic False
+  let handler = router
+    [ -- /a and /b meet on a channel: they must run at the same time
+      get "/a" (\_ ->
+        Chan.send ch "from a"
+        text "a")
+    , get "/b" (\_ -> text (withDefault "" (Chan.receive ch)))
+    , -- a handler can start tasks of its own
+      get "/fib/:n" (\req ->
+        let n = parseInt (param "n" req) |> orHalt (badRequest "n")
+        let tasks = mapList (\i -> spawn (\_ -> fib i)) [n, n + 1]
+        text (show (sum (mapList await tasks))))
+    , get "/spin" (\_ -> finally (\_ -> text (show (spin 0))) (\_ -> writeAtomic cancelled True))
+    , post "/stop" (\_ ->
+      Http.closeServer srv
+      text "bye")
+    ]
+  let body path = match Http.httpGet (base ++ path) with
+    Ok resp -> Http.responseBody resp
+    Err e -> e
+  runAsync (\_ ->
+    fork (\_ -> Http.serveOn srv handler)
+    assertEq (timeout 10.0 (\_ -> parallel [\_ -> body "/a", \_ -> body "/b"])) (Some ["a", "from a"])
+    assertEq (parMap body ["/fib/10", "/fib/20"]) ["144", "17711"]
+    -- the client gives up: the handler is cancelled, even in a pure loop
+    assert (isErr (Http.fetchWithTimeout 0.2 "GET" (base ++ "/spin") [] "")) "the request times out"
+    let wait n = match readAtomic cancelled || n == 0 with
+      True -> ()
+      False ->
+        sleep 0.01
+        wait (n - 1)
+    wait 500
+    assert (readAtomic cancelled) "the handler of a request whose client left is cancelled"
+    assertEq (map Http.responseBody (Http.httpPost (base ++ "/stop") "text/plain" "")) (Ok "bye"))
+
+fib : Int -> Int
+fib n
+  | n < 2 = n
+  | otherwise = fib (n - 1) + fib (n - 2)
+
+spin : Int -> Int
+spin n = spin (n + 1)
 
 test "http client errors" =
   let l = ok (Net.listen "127.0.0.1:0")

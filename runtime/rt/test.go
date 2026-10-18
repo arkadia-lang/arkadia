@@ -11,7 +11,7 @@ import (
 type TestCase struct {
 	Module string
 	Name   string
-	Run    func()
+	Run    func(*Ev)
 }
 
 type testFailure struct{ msg string }
@@ -58,9 +58,7 @@ func RunTests(failEff int, tests []TestCase) {
 }
 
 func runOne(failEff int, t TestCase) (msg string) {
-	saved := cur
 	defer func() {
-		cur = saved
 		if r := recover(); r != nil {
 			switch e := r.(type) {
 			case *testFailure:
@@ -83,18 +81,19 @@ func runOne(failEff int, t TestCase) (msg string) {
 			}
 		}
 	}()
+	ev := newTaskEv()
 	if failEff < 0 {
-		t.Run()
+		t.Run(ev)
 		return ""
 	}
 	h := &Handler{
 		Eff: failEff,
-		Ops: []func([]Value, Value) Value{func(args []Value, _ Value) Value {
+		Ops: []func(*Ev, []Value, Value) Value{func(_ *Ev, args []Value, _ Value) Value {
 			panic(&testFailure{msg: args[0].(string)})
 		}},
 		UsesK: []bool{false},
 		Tail:  true,
 	}
-	Handle(h, func() Value { t.Run(); return Unit })
+	Handle(ev, h, func(ev *Ev) Value { t.Run(ev); return Unit })
 	return ""
 }

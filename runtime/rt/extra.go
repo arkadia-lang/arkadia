@@ -105,36 +105,36 @@ func ArrayMake(n, v Value) Value {
 	return &Array{S: c}
 }
 
-func ArrayGenerate(n, f Value) Value {
+func ArrayGenerate(ev *Ev, n, f Value) Value {
 	c := make([]Value, max(n.(int64), 0))
 	for i := range c {
-		c[i] = Apply1(f, int64(i))
+		c[i] = Apply1(ev, f, int64(i))
 	}
 	return &Array{S: c}
 }
 
-func ArrayMap(f, a Value) Value {
+func ArrayMap(ev *Ev, f, a Value) Value {
 	s := a.(*Array).S
 	c := make([]Value, len(s))
 	for i, x := range s {
-		c[i] = Apply1(f, x)
+		c[i] = Apply1(ev, f, x)
 	}
 	return &Array{S: c}
 }
 
-func ArrayFoldl(f, z, a Value) Value {
+func ArrayFoldl(ev *Ev, f, z, a Value) Value {
 	acc := z
 	for _, x := range a.(*Array).S {
-		acc = Apply2(f, acc, x)
+		acc = Apply2(ev, f, acc, x)
 	}
 	return acc
 }
 
-func ArrayFoldr(f, z, a Value) Value {
+func ArrayFoldr(ev *Ev, f, z, a Value) Value {
 	acc := z
 	s := a.(*Array).S
 	for i := len(s) - 1; i >= 0; i-- {
-		acc = Apply2(f, s[i], acc)
+		acc = Apply2(ev, f, s[i], acc)
 	}
 	return acc
 }
@@ -165,11 +165,11 @@ func ArrayReverse(a Value) Value {
 }
 
 // ArraySortBy sorts with a comparison function returning Ordering.
-func ArraySortBy(cmp, a Value) Value {
+func ArraySortBy(ev *Ev, cmp, a Value) Value {
 	s := a.(*Array).S
 	c := make([]Value, len(s))
 	copy(c, s)
-	sort.SliceStable(c, func(i, j int) bool { return TagOf(Apply2(cmp, c[i], c[j])) == 0 })
+	sort.SliceStable(c, func(i, j int) bool { return TagOf(Apply2(ev, cmp, c[i], c[j])) == 0 })
 	return &Array{S: c}
 }
 
@@ -309,11 +309,6 @@ func RefSet(r, v Value) Value { r.(*Ref).V = v; return Unit }
 
 func UnixTime(_ Value) Value   { return float64(time.Now().UnixNano()) / 1e9 }
 func UnixMillis(_ Value) Value { return time.Now().UnixMilli() }
-func Sleep(secs Value) Value {
-	Flush()
-	time.Sleep(time.Duration(secs.(float64) * float64(time.Second)))
-	return Unit
-}
 
 func timeOf(secs Value) time.Time {
 	f := secs.(float64)
