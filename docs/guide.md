@@ -352,7 +352,7 @@ instance Eq a => Eq (List a) where   -- 文脈付きインスタンス
 ### Functor / Applicative / Monad と純粋性
 
 `Functor`, `Applicative`, `Monad` のメソッドは **純粋な関数**（`<>`）を受け取ります。パーサや状態変換子のように、受け取った関数を「後で」実行するインスタンスでも健全にするためです。
-エフェクトを起こす関数でリストを写すには `mapList`、走査には `forEach` / `foldl` / `traverse` を使います（`Foldable` と `Traversable` は関数をその場で呼ぶのでエフェクト多相です）。
+エフェクトを起こす関数でリストを写すには `mapList`、`Option`・`Result`・`Map`・`Array` などには修飾名の `Option.map` などを、走査には `forEach` / `foldl` / `traverse` を使います（`Foldable` と `Traversable` は関数をその場で呼ぶのでエフェクト多相です）。
 
 ## 9. 代数的エフェクト
 

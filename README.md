@@ -263,12 +263,12 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 | `Std.Parser` | バックトラックするパーサコンビネータ（`alt`, `many`, `sepBy`, `chainl1` …、行・列付きのエラー） |
 | `Std.Random` | 乱数エフェクト（決定的シード / 時刻シード） |
 | `Std.List` | Prelude にないリスト関数（`span`, `groupBy`, `chunksOf`, `scanl`, `transpose`, `permutations` …）。非修飾 import 可 |
-| `Std.Option` / `Std.Result` | `Option` / `Result` の補助関数（`orElse`, `map2`, `fold`, `combineAll` …） |
+| `Std.Option` / `Std.Result` | `Option` / `Result` の操作一式（`map`, `andThen`, `withDefault`, `mapErr`, `orElse`, `combine` …） |
 | `Std.Ord` | `Down`（逆順）、`comparing`, `thenComparing` |
 | `Std.Map` / `Std.Set` | 永続的な順序付きマップ・集合（AVL 木）。`lookupLT` などの順序クエリ、集合演算 |
 | `Std.Array` | 定数時間でインデックスできる不変配列（`binarySearch`, `mapWithIndex` …） |
 | `Std.Queue` / `Std.Heap` | 永続的な両端キュー、優先度付きキュー（leftist heap） |
-| `Std.String` / `Std.Char` | 文字列（`splitOnce`, `stripPrefix`, `wrap` …）、文字の分類と変換 |
+| `Std.String` / `Std.Char` | 文字列（`split`, `join`, `trim`, `splitOnce`, `stripPrefix`, `wrap` …）、文字の分類と変換 |
 | `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
 | `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照。`ToJson` / `FromJson` クラスと `deriving (ToJson, FromJson)` によるレコード等との自動変換（失敗箇所付きのエラー） |
 | `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻（RFC 3339 などの書式化と解析、日付の構築、曜日、日・月の加算）と計測、可変参照 |
@@ -285,6 +285,23 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 | `Std.Format` | 数値の書式化（小数点以下の桁数 `fixed 2 x`、指数表記、基数変換、桁区切り、ゼロ埋め、パーセント、バイト数） |
 
 モジュールの公開インターフェースは `ark doc Std.Map` のように表示できます。
+
+`Std.List`・`Std.Math` などを除くデータ型のモジュールは、`import Std.String as String` のように**修飾付きで import する**前提で設計されています。
+Prelude にある関数もそれぞれのモジュールから同じ名前（または型に即した名前）で使えるので、操作は `String.split`・`Option.withDefault`・`Map.map` のように一通り修飾名で書けます。
+修飾名の `Option.map`・`Result.map`・`Map.map`・`Array.map` などは、`Functor` の `map` と違ってエフェクトを起こす関数も受け取ります。
+`Map`・`Set`・`Array`・`Queue`・`Heap` は `<>` で結合でき（`Monoid`）、タプルやコレクションは `"${x}"` で文字列に埋め込めます。
+
+```haskell
+import Std.String as String
+import Std.Option as Option
+import Std.Map as Map
+
+main () =
+  let ages = Map.fromList [("ann", "30"), ("bob", "x")]
+  let parsed = Map.map String.toInt ages                 -- Map String (Option Int)
+  println "${Map.map (Option.withDefault 0) parsed}"     -- Map.fromList [("ann", 30), ("bob", 0)]
+  println (String.join ", " (Map.keys ages))             -- ann, bob
+```
 
 ### HTTP サーバ
 
