@@ -88,7 +88,7 @@ just install    # $GOBIN/ark から bin/ark へのシンボリックリンクを
 ark new hello      # プロジェクトを作成
 cd hello
 ark run            # ビルドして実行  → Hello, Arkadia!
-ark test           # tests/ 以下と src/ 以下の test 宣言を実行
+ark test           # test 宣言を実行（テストはテスト対象と同じモジュールに書く）
 ark build          # bin/hello を生成
 ```
 
