@@ -1039,6 +1039,22 @@ ctorRefines g ci = match Map.lookup (ctorTypeName ci) (readRef (gTypes g)) with
     let extra = anyOf (\(i, k) -> i >= np && not (isRowKind k)) (indexed kinds)
     not plainArgs || extra
 
+-- Whether a constructor has existential type variables: type variables
+-- (other than effect rows) that do not occur in its result type.
+ctorExistential : CtorInfo -> <IO> Bool
+ctorExistential ci =
+  let Scheme kinds _ _ st = ctorScheme ci
+  let (_, res) = splitFun (ctorArity ci) st
+  anyOf (\(i, k) -> not (isRowKind k) && not (genOccurs i res)) (indexed kinds)
+
+private genOccurs : Int -> Type -> <IO> Bool
+genOccurs i t = match prune t with
+  TGen j -> i == j
+  TApp f a -> genOccurs i f || genOccurs i a
+  TFun a e r -> genOccurs i a || genOccurs i e || genOccurs i r
+  TRowExt l r -> genOccurs i l || genOccurs i r
+  _ -> False
+
 -- Whether some constructor of a data type may refine its parameters.
 typeRefines : Global -> String -> <IO> Bool
 typeRefines g name = match Map.lookup name (readRef (gTypes g)) with

@@ -566,6 +566,9 @@ deriveInstances c decls = concat (map (\d -> match d with
           True -> "#" ++ jsonMod
           False -> "#Prelude"
         let ok = match isJson with
+          _ | anyOf ctorExistential (typeInfoCtors ti) ->
+            errorf c p "cannot derive ${cls} for a type whose constructors have existential type variables"
+            False
           False -> True
           True
             | not (Map.member jsonMod (readRef (gModules (cG c)))) ->
