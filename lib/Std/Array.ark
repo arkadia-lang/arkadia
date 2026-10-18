@@ -1,7 +1,7 @@
 -- Immutable arrays with constant-time indexing, meant to be imported
 -- qualified:
 --
---   import Std.Array as Array
+--   import Std.Array
 --   let a = Array.fromList [10, 20, 30]
 --   Array.get 1 a            -- Some 20
 --   Array.map (* 2) a        -- Array.fromList [20, 40, 60]

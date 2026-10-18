@@ -1,6 +1,6 @@
 -- Helpers for Option, meant to be imported qualified:
 --
---   import Std.Option as Option
+--   import Std.Option
 --   Option.map2 (+) (Some 1) (Some 2)            -- Some 3
 --   Option.withDefault 0 (Option.map (* 2) o)
 --   o |> Option.andThen parseInt |> Option.isSome

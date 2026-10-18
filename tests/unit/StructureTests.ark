@@ -1,8 +1,8 @@
 -- Unit tests for Std.Queue, Std.Heap and Std.Ord.
 module StructureTests
 
-import Std.Queue as Queue
-import Std.Heap as Heap
+import Std.Queue
+import Std.Heap
 import Std.Ord
 
 -- Pop every element from the front.

@@ -2,7 +2,7 @@
 module StringTests
 
 import Std.String as S
-import Std.Char as Char
+import Std.Char
 
 test "char classification" =
   assert (Char.isAlphaNum 'a' && Char.isAlphaNum '7' && not (Char.isAlphaNum '-')) "isAlphaNum"

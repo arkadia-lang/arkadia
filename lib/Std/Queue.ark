@@ -1,6 +1,6 @@
 -- Persistent double-ended queues with amortized O(1) operations.
 --
---   import Std.Queue as Queue
+--   import Std.Queue
 --   let q = Queue.push 3 (Queue.fromList [1, 2])
 --   Queue.pop q   -- Some (1, <queue of 2, 3>)
 module Std.Queue

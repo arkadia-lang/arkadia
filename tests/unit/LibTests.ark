@@ -7,13 +7,13 @@ import Std.MArray as MA
 import Std.HashMap as HM
 import Std.BigInt (BigInt, big)
 import Std.BigInt as Big
-import Std.Array as Array
+import Std.Array
 import Std.Encoding
 import Std.Crypto
 import Std.Args
 import Std.Result (isErr)
 import Std.Format
-import Std.Csv as Csv
+import Std.Csv
 
 test "regex matching and captures" =
   let date = Re.regex "(\\d{4})-(\\d{2})-(\\d{2})"

@@ -1,8 +1,8 @@
 -- Unit tests for Std.Option and Std.Result.
 module OptionResultTests
 
-import Std.Option as Option
-import Std.Result as Result
+import Std.Option
+import Std.Result
 
 test "option accessors" =
   assertEq (Option.unwrap (Some 3)) 3

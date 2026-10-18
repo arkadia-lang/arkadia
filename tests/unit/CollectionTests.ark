@@ -1,9 +1,9 @@
 -- Unit tests for Std.Map, Std.Set and Std.Array.
 module CollectionTests
 
-import Std.Map as Map
-import Std.Set as Set
-import Std.Array as Array
+import Std.Map
+import Std.Set
+import Std.Array
 import Std.State
 
 test "map update and construction" =

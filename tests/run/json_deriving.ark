@@ -1,7 +1,7 @@
 -- deriving (ToJson, FromJson)
 
-import Std.Json as Json
-import Std.Map as Map
+import Std.Json
+import Std.Map
 
 type Role = Admin | Member | Guest
   deriving (Show, Eq, Json.ToJson, Json.FromJson)

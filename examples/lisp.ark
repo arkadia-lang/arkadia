@@ -3,7 +3,7 @@
 module Main
 
 import Std.Exn
-import Std.Map as Map
+import Std.Map
 
 type Value
   = Num Int

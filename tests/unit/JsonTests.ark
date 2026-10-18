@@ -1,7 +1,7 @@
 -- Unit tests for Std.Json.
 module JsonTests
 
-import Std.Json as Json
+import Std.Json
 import Std.Json (Json(..))
 
 parsed : String -> <Fail> Json

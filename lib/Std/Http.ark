@@ -1,7 +1,7 @@
 -- HTTP servers with routing, and an HTTP client.
 --
 --   import Std.Http
---   import Std.Json as Json
+--   import Std.Json
 --
 --   hello : Handler e
 --   hello req = text "Hello, ${withDefault "world" (query "name" req)}!"

@@ -1,13 +1,13 @@
 -- Unit tests for Std.Url, Std.Net and Std.Http.
 module NetTests
 
-import Std.Url as Url
-import Std.Net as Net
-import Std.Http as Http
+import Std.Url
+import Std.Net
+import Std.Http
 import Std.Http (Handler, Response(..), get, post, delete, router, scope, text, json, param, query, halt, orHalt, badRequest)
-import Std.Json as Json
+import Std.Json
 import Std.State as St
-import Std.IO as IO
+import Std.IO
 import Std.Task
 import Std.Channel as Chan
 import Std.Atomic

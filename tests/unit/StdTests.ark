@@ -2,8 +2,8 @@
 -- under tests/unit with `go test ./internal/driver -run TestUnitTests`.
 module StdTests
 
-import Std.Map as Map
-import Std.Set as Set
+import Std.Map
+import Std.Set
 import Std.State
 import Std.Exn
 import Std.String as S

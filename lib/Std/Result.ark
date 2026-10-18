@@ -1,6 +1,6 @@
 -- Helpers for Result, meant to be imported qualified:
 --
---   import Std.Result as Result
+--   import Std.Result
 --   Result.withDefault 0 (Err "oops")                  -- 0
 --   readFile path |> Result.map lines |> Result.mapErr (\e -> "config: ${e}")
 --

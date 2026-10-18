@@ -1,6 +1,6 @@
 -- URLs: parsing, percent-encoding and query strings.
 --
---   import Std.Url as Url
+--   import Std.Url
 --   Url.parseQuery "q=arkadia+lang&page=2"   -- [("q", "arkadia lang"), ("page", "2")]
 --   Url.withQuery "https://example.com/search" [("q", "a&b")]
 --     -- "https://example.com/search?q=a%26b"

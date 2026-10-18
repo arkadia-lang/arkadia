@@ -12,7 +12,7 @@
 module Main
 
 import Std.Http
-import Std.Json as Json
+import Std.Json
 import Std.Mutex
 
 type Todo = Todo { id : Int, title : String, done : Bool }

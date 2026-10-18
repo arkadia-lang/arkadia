@@ -1,6 +1,6 @@
 -- TCP sockets and host names.
 --
---   import Std.Net as Net
+--   import Std.Net
 --   import Std.Task
 --
 --   -- an echo server, each connection in a task of its own
