@@ -75,8 +75,9 @@ type Dict = Dict String (List String) (List CExpr)
 dictSym : Dict -> String
 dictSym (Dict s _ _) = s
 
--- symbol, Go target, arity
-type Foreign = Foreign String String Int
+-- symbol, Go target, arity, whether the target takes the evidence (as
+-- its first argument)
+type Foreign = Foreign String String Int Bool
 
 -- symbol, effect, index, arity
 type Op = Op String String Int Int

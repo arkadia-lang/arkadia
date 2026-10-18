@@ -1,31 +1,53 @@
 package rt
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
-// Algebraic effect handlers.
+// Algebraic effect handlers with evidence passing.
+//
+// Every Arkadia function receives the evidence of its caller, an *Ev: the
+// innermost handler frame of the dynamic context. Frames are immutable
+// links to their parent, so the evidence is a persistent stack shared by
+// all the code running in its scope. Performing an operation searches the
+// evidence for the innermost (unmasked) frame of the effect; installing a
+// handler calls the body with a new frame on top. Nothing is global, so
+// any number of computations (tasks) run in parallel, each with its own
+// evidence, and no state has to be restored when a computation unwinds.
+//
+// Every frame also records the task running the computation and its
+// innermost cancellation scope and task scope (see task.go), so that the
+// generated code reaches them in constant time.
 //
 // A handled computation normally runs on its own goroutine. Performing an
 // operation sends a message to the goroutine running the handler and blocks
 // until the handler resumes the continuation. This gives deep handlers with
-// one-shot continuations. Exactly one goroutine runs at a time; control is
-// passed with unbuffered channel operations, so the global handler stack
-// `cur` needs no locking.
+// one-shot continuations. The goroutines of one task pass control with
+// unbuffered channel operations, so exactly one of them runs at a time.
 //
 // When every operation clause of a handler is tail-resumptive (it ends by
 // resuming the continuation exactly once), the compiler marks the handler
 // Tail and the clauses run directly in the performing goroutine instead.
 
-type frame struct {
-	state  Value // current state of a state-passing handler
-	eff    int
+// Ev is the evidence: a handler frame and the context of the computation.
+type Ev struct {
+	parent *Ev
+	eff    int  // the handled effect; -1 for frames that handle none
 	mask   bool // a mask frame hides the next handler of eff
 	h      *Handler
 	ch     chan msg
-	parent *frame
+	state  Value // current state of a state-passing handler
+
+	task    *Task        // the task running the computation
+	cs      *cancelScope // the innermost cancellation scope
+	nursery *nursery     // the innermost task scope (runAsync), or nil
 }
 
-// cur is the current handler stack.
-var cur *frame
+// child returns a frame on top of ev that handles no effect.
+func (ev *Ev) child() *Ev {
+	return &Ev{parent: ev, eff: -1, task: ev.task, cs: ev.cs, nursery: ev.nursery}
+}
 
 const (
 	msgOp = iota
@@ -40,26 +62,28 @@ type msg struct {
 	args   []Value
 	resume chan resumeMsg
 	val    Value
-	target *frame
+	target *Ev
 	err    any
 }
 
 type resumeMsg struct {
 	val    Value
 	abort  bool
-	target *frame
+	target *Ev
 }
 
 // abortSignal unwinds a computation whose continuation was discarded.
-type abortSignal struct{ target *frame }
+type abortSignal struct{ target *Ev }
 
-// Handler describes a handler for one effect.
+// Handler describes a handler for one effect. Clauses receive the evidence
+// of the handler's context (handlers are deep: operations performed by a
+// clause go to the enclosing handlers).
 type Handler struct {
 	Eff int
 	// Ret is the return clause (nil for the identity).
-	Ret func(Value) Value
+	Ret func(*Ev, Value) Value
 	// Ops are the operation clauses: arguments and the continuation.
-	Ops []func(args []Value, k Value) Value
+	Ops []func(ev *Ev, args []Value, k Value) Value
 	// UsesK reports whether a clause mentions its continuation at all. A
 	// clause that does not can never resume, so the suspended computation
 	// is discarded as soon as the clause is entered.
@@ -73,8 +97,8 @@ type Handler struct {
 	Direct bool
 	// State marks a state-passing handler (see HandleState).
 	State bool
-	RetS  func(x, s Value) Value
-	OpsS  []func(args []Value, s Value) Value
+	RetS  func(ev *Ev, x, s Value) Value
+	OpsS  []func(ev *Ev, args []Value, s Value) Value
 }
 
 // EffectNames is filled by generated code for error messages.
@@ -91,8 +115,8 @@ func effName(eff int) string {
 }
 
 // Perform performs an effect operation.
-func Perform(eff, op int, args []Value) Value {
-	f := cur
+func Perform(ev *Ev, eff, op int, args []Value) Value {
+	f := ev
 	skip := 0
 	for ; f != nil; f = f.parent {
 		if f.eff != eff {
@@ -115,21 +139,16 @@ func Perform(eff, op int, args []Value) Value {
 		}
 		panic(&ArkError{Msg: "unhandled effect operation " + name})
 	}
-	saved := cur
 	if f.h.State {
-		cur = f.parent
-		r := f.h.OpsS[op](args, f.state).(*D2)
+		r := f.h.OpsS[op](f.parent, args, f.state).(*D2)
 		f.state = r.B
-		cur = saved
 		return r.A
 	}
 	if f.h.Tail || f.h.Direct {
-		cur = f.parent
-		r := f.h.Ops[op](args, nil)
+		r := f.h.Ops[op](f.parent, args, nil)
 		if f.h.Direct && !f.h.UsesK[op] {
 			panic(&abortTo{f: f, v: r})
 		}
-		cur = saved
 		return r
 	}
 	rch := make(chan resumeMsg)
@@ -138,55 +157,47 @@ func Perform(eff, op int, args []Value) Value {
 	if r.abort {
 		panic(abortSignal{target: r.target})
 	}
-	cur = saved
 	return r.val
 }
 
 // abortTo unwinds to the Handle of frame f with the result v.
 type abortTo struct {
-	f *frame
+	f *Ev
 	v Value
 }
 
-func handleDirect(h *Handler, body func() Value) (result Value) {
-	outer := cur
-	f := &frame{eff: h.Eff, h: h, parent: outer}
+func handleDirect(ev *Ev, h *Handler, body func(*Ev) Value) (result Value) {
+	f := &Ev{parent: ev, eff: h.Eff, h: h, task: ev.task, cs: ev.cs, nursery: ev.nursery}
 	defer func() {
 		if r := recover(); r != nil {
 			if a, ok := r.(*abortTo); ok && a.f == f {
-				cur = outer
 				result = a.v
 				return
 			}
 			panic(r)
 		}
 	}()
-	cur = f
-	v := body()
-	cur = outer
+	v := body(f)
 	if h.Ret != nil {
-		return h.Ret(v)
+		return h.Ret(ev, v)
 	}
 	return v
 }
 
 // Handle runs body under the handler h.
-func Handle(h *Handler, body func() Value) Value {
+func Handle(ev *Ev, h *Handler, body func(*Ev) Value) Value {
 	if h.Direct {
-		return handleDirect(h, body)
+		return handleDirect(ev, h, body)
 	}
-	outer := cur
+	f := &Ev{parent: ev, eff: h.Eff, h: h, task: ev.task, cs: ev.cs, nursery: ev.nursery}
 	if h.Tail {
-		f := &frame{eff: h.Eff, h: h, parent: outer}
-		cur = f
-		v := body()
-		cur = outer
+		v := body(f)
 		if h.Ret != nil {
-			return h.Ret(v)
+			return h.Ret(ev, v)
 		}
 		return v
 	}
-	f := &frame{eff: h.Eff, h: h, ch: make(chan msg), parent: outer}
+	f.ch = make(chan msg)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -199,14 +210,15 @@ func Handle(h *Handler, body func() Value) Value {
 				f.ch <- msg{kind: msgPanic, err: withTrace(r)}
 			}
 		}()
-		cur = f
-		v := body()
+		v := body(f)
 		f.ch <- msg{kind: msgReturn, val: v}
 	}()
-	return h.loop(f, outer)
+	return h.loop(ev, f)
 }
 
-func (h *Handler) loop(f *frame, outer *frame) Value {
+// loop serves the messages of the computation handled by frame f; ev is
+// the evidence of the handler's context.
+func (h *Handler) loop(ev *Ev, f *Ev) Value {
 	m := <-f.ch
 	switch m.kind {
 	case msgAbort:
@@ -214,53 +226,56 @@ func (h *Handler) loop(f *frame, outer *frame) Value {
 	case msgPanic:
 		panic(m.err)
 	case msgReturn:
-		cur = outer
 		if h.Ret != nil {
-			return h.Ret(m.val)
+			return h.Ret(ev, m.val)
 		}
 		return m.val
 	}
-	cur = outer
-	resumed := false
 	if !h.UsesK[m.op] {
-		resumed = true
 		m.resume <- resumeMsg{abort: true, target: f}
-		return h.Ops[m.op](m.args, nil)
+		return h.Ops[m.op](ev, m.args, nil)
 	}
-	k := Fn1(func(v Value) Value {
-		if resumed {
+	var resumed atomic.Bool
+	k := Fn1(func(_ *Ev, v Value) Value {
+		if !resumed.CompareAndSwap(false, true) {
 			panic(&ArkError{Msg: "continuation of " + effName(h.Eff) + " resumed more than once"})
 		}
-		resumed = true
-		saved := cur
 		m.resume <- resumeMsg{val: v}
-		r := h.loop(f, outer)
-		cur = saved
-		return r
+		return h.loop(ev, f)
 	})
-	return h.Ops[m.op](m.args, k)
+	// A clause that unwinds (a runtime error, a cancellation, an abort to an
+	// outer handler) before resuming leaves the computation suspended for
+	// good: abort it so that its goroutine ends.
+	defer func() {
+		if resumed.Load() {
+			return
+		}
+		if r := recover(); r != nil {
+			r = withTrace(r)
+			if resumed.CompareAndSwap(false, true) {
+				m.resume <- resumeMsg{abort: true, target: f}
+			}
+			panic(r)
+		}
+	}()
+	return h.Ops[m.op](ev, m.args, k)
 }
 
 // Mask runs body with the innermost handler of each listed effect hidden,
 // so that operations performed by body reach the next outer handler.
-func Mask(effs []int, body func() Value) Value {
-	saved := cur
+func Mask(ev *Ev, effs []int, body func(*Ev) Value) Value {
+	m := ev
 	for _, e := range effs {
-		cur = &frame{eff: e, mask: true, parent: cur}
+		m = &Ev{parent: m, eff: e, mask: true, task: ev.task, cs: ev.cs, nursery: ev.nursery}
 	}
-	v := body()
-	cur = saved
-	return v
+	return body(m)
 }
 
 // HandleState runs body under a state-passing handler: each operation
 // clause maps (arguments, state) to (resume value, new state) and runs in
 // the performing goroutine.
-func HandleState(h *Handler, init Value, body func() Value) Value {
-	outer := cur
-	f := &frame{eff: h.Eff, h: h, parent: outer, state: init}
-	cur = f
-	v := body()
-	cur = outer
-	return h.RetS(v, f.state)
+func HandleState(ev *Ev, h *Handler, init Value, body func(*Ev) Value) Value {
+	f := &Ev{parent: ev, eff: h.Eff, h: h, state: init, task: ev.task, cs: ev.cs, nursery: ev.nursery}
+	v := body(f)
+	return h.RetS(ev, v, f.state)
 }

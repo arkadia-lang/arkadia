@@ -10,7 +10,10 @@ import Std.Map as Map
 
 -- ================================================================ globals
 
-type GKind = GFunc | GValue | GDict | GDictFn | GForeign | GOp
+-- Every function takes the evidence (the handlers in scope and the
+-- running task, see runtime/rt/effect.go) as its first argument `ev`,
+-- except the foreign functions of kind GForeign.
+type GKind = GFunc | GValue | GDict | GDictFn | GForeign | GForeignEv | GOp
 
 instance Eq GKind where
   a == b = tagOf a == tagOf b
@@ -85,7 +88,9 @@ generate prog0 tests =
   let g3 = foldl (\m (Dict s ps _) -> match ps with
     [] -> Map.insert s (GInfo GDict 0 ("d_" ++ mangle s) "") m
     _ -> Map.insert s (GInfo GDictFn (length ps) ("mk_" ++ mangle s) "") m) g2 dicts
-  let g4 = foldl (\m (Foreign s t a) -> Map.insert s (GInfo GForeign a t t) m) g3 foreigns
+  let g4 = foldl (\m (Foreign s t a ev) -> match ev with
+    True -> Map.insert s (GInfo GForeignEv a t t) m
+    False -> Map.insert s (GInfo GForeign a t t) m) g3 foreigns
   let g5 = foldl (\m (Op s _ _ a) -> Map.insert s (GInfo GOp a ("op_" ++ mangle s) "") m) g4 ops
   let g = Gen prog g5 effIDs (newRef 0)
   let out = newRef []
@@ -127,14 +132,32 @@ params n prefix = match n with
   0 -> ""
   _ -> joinWith ", " (mapList (\i -> prefix ++ show i) (range 0 n)) ++ " rt.Value"
 
+-- The parameters of a function of arity n: the evidence, then the
+-- arguments.
+evParams : Int -> String -> String
+evParams n prefix = match n with
+  0 -> "ev *rt.Ev"
+  _ -> "ev *rt.Ev, " ++ params n prefix
+
+-- The arguments of a call: the evidence, then the given codes.
+evArgs : List String -> String
+evArgs args = joinWith ", " ("ev" :: args)
+
 argList : Int -> String -> String
 argList n prefix = joinWith ", " (mapList (\i -> prefix ++ show i) (range 0 n))
 
--- Wrap a Go function of arity n as an Arkadia function value.
+-- Wrap a Go function of arity n (taking the evidence) as an Arkadia
+-- function value.
 closureOf : String -> Int -> String
 closureOf fn n = match n <= 4 with
   True -> "rt.Fn${n}(${fn})"
-  False -> "&rt.FnN{N: ${n}, F: func(a []rt.Value) rt.Value { return ${fn}(${joinWith ", " (mapList (\i -> "a[${i}]") (range 0 n))}) }}"
+  False -> "&rt.FnN{N: ${n}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { return ${fn}(${evArgs (mapList (\i -> "a[${i}]") (range 0 n))}) }}"
+
+-- Wrap a Go function of arity n that does not take the evidence.
+plainClosureOf : String -> Int -> String
+plainClosureOf fn n = match n <= 4 with
+  True -> "rt.Fn${n}(func(${evParams n "a"}) rt.Value { return ${fn}(${argList n "a"}) })"
+  False -> "&rt.FnN{N: ${n}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { return ${fn}(${joinWith ", " (mapList (\i -> "a[${i}]") (range 0 n))}) }}"
 
 emitOut : Ref (List String) -> String -> <IO> Unit
 emitOut out s = modifyRef out (\xs -> s :: xs)
@@ -156,7 +179,7 @@ genProgram g out tests =
   -- effect operations
   forEach ops (\(Op s eff idx a) ->
     let GInfo _ _ name _ = withDefault (GInfo GOp a "" "") (gInfo g s)
-    pr "func ${name}(${params a "a"}) rt.Value { return rt.Perform(${effID g eff}, ${idx}, []rt.Value{${argList a "a"}}) }\n\n")
+    pr "func ${name}(${evParams a "a"}) rt.Value { return rt.Perform(ev, ${effID g eff}, ${idx}, []rt.Value{${argList a "a"}}) }\n\n")
   -- functions
   forEach funcs (genFunction g out)
   -- dictionary constructors
@@ -172,7 +195,7 @@ genProgram g out tests =
         let v = genExpr c sl
         line c "${local "self"}.S[${i}] = ${valCode v}")
       line c "return ${local "self"}"
-      pr "func ${name}(${params (length ps) "a"}) rt.Value {\n${ctxBody c}}\n\n"
+      pr "func ${name}(${evParams (length ps) "a"}) rt.Value {\n${ctxBody c}}\n\n"
     None -> ())
   -- closure values and constants
   let entries = Map.toList globals
@@ -187,10 +210,12 @@ genProgram g out tests =
     GDictFn -> Some s
     GOp -> Some s
     GForeign | a > 0 -> Some s
+    GForeignEv | a > 0 -> Some s
     _ -> None) entries
   forEach syms (\s -> pr "var ${closureName s} rt.Value\n")
-  pr "\nfunc init() {\n"
+  pr "\nfunc init() {\n\tev := rt.InitEv\n\t_ = ev\n"
   forEach syms (\s -> match gInfo g s with
+    Some (GInfo GForeign a name _) -> pr "\t${closureName s} = ${plainClosureOf name a}\n"
     Some (GInfo _ a name _) -> pr "\t${closureName s} = ${closureOf name a}\n"
     None -> ())
   -- effect names for diagnostics
@@ -223,19 +248,19 @@ genProgram g out tests =
       let failID = match Map.lookup failEff effIDs with
         Some i -> i
         None -> -1
-      pr "func main() {\n\trt.Main(func() {\n\t\trt.RunTests(${failID}, []rt.TestCase{\n"
+      pr "func main() {\n\trt.Main(func(_ *rt.Ev) {\n\t\trt.RunTests(${failID}, []rt.TestCase{\n"
       forEach testList (\(Test tname s) ->
         let GInfo _ _ name _ = withDefault (GInfo GFunc 0 "" "") (gInfo g s)
-        pr "\t\t\t{Module: ${show (qualifierOf s)}, Name: ${show tname}, Run: func() { ${name}(rt.Unit) }},\n")
+        pr "\t\t\t{Module: ${show (qualifierOf s)}, Name: ${show tname}, Run: func(ev *rt.Ev) { ${name}(ev, rt.Unit) }},\n")
       pr "\t\t})\n\t})\n}\n"
     False -> match main with
       "" -> ()
       _ ->
         let call = match gInfo g main with
-          Some (GInfo GFunc _ name _) -> "${name}(rt.Unit)"
-          Some (GInfo _ _ name _) -> "rt.Apply1(${name}, rt.Unit)"
-          None -> "rt.Apply1(nil, rt.Unit)"
-        pr "func main() {\n\trt.Main(func() { ${call} })\n}\n"
+          Some (GInfo GFunc _ name _) -> "${name}(ev, rt.Unit)"
+          Some (GInfo _ _ name _) -> "rt.Apply1(ev, ${name}, rt.Unit)"
+          None -> "rt.Apply1(ev, nil, rt.Unit)"
+        pr "func main() {\n\trt.Main(func(ev *rt.Ev) { ${call} })\n}\n"
 
 -- An item to initialize: a dictionary or a value.
 type Either a b = Left a | Right b
@@ -307,8 +332,8 @@ genFunction g out (Func s ps body ts) =
   let pro = prologue (bindParams c ps ts) 1
   genStmt c body DRet
   match readRef used with
-    True -> emitOut out "func ${name}(${params (length ps) "a"}) rt.Value {\n${pro}\tfor {\n${ctxBody c}\t}\n}\n\n"
-    False -> emitOut out "func ${name}(${params (length ps) "a"}) rt.Value {\n${pro}${dedent (ctxBody c)}}\n\n"
+    True -> emitOut out "func ${name}(${evParams (length ps) "a"}) rt.Value {\n${pro}\tfor {\n${ctxBody c}\t}\n}\n\n"
+    False -> emitOut out "func ${name}(${evParams (length ps) "a"}) rt.Value {\n${pro}${dedent (ctxBody c)}}\n\n"
 
 dedent : String -> String
 dedent s = joinWith "\n" (mapList (\l -> match startsWith "\t" l with
@@ -446,12 +471,12 @@ localFunc : Ctx -> String -> Lam -> <IO> Unit
 localFunc c name lam =
   let n = length (lamParams lam)
   let fn = "lf_" ++ mangle name
-  line c "var ${fn} func(${params n "a"}) rt.Value"
+  line c "var ${fn} func(${evParams n "a"}) rt.Value"
   line c "var ${local name} rt.Value"
   modifyRef (ctxLfuns c) (Map.insert name n)
   setVar c name ""
   let body = lambdaBody c lam name
-  line c "${fn} = func(${params n "a"}) rt.Value {"
+  line c "${fn} = func(${evParams n "a"}) rt.Value {"
   write c body
   line c "}"
   line c "${local name} = ${closureOf fn n}"
@@ -464,7 +489,7 @@ genLetRec c names lams =
     let n = length ps
     match n <= 4 with
       True ->
-        line c "var ${"lf_" ++ mangle name} func(${params n "a"}) rt.Value"
+        line c "var ${"lf_" ++ mangle name} func(${evParams n "a"}) rt.Value"
         modifyRef (ctxLfuns c) (Map.insert name n)
       False -> ()
     line c "var ${local name} rt.Value"
@@ -475,7 +500,7 @@ genLetRec c names lams =
       True ->
         let fn = "lf_" ++ mangle name
         let body = lambdaBody c lam name
-        line c "${fn} = func(${params n "a"}) rt.Value {"
+        line c "${fn} = func(${evParams n "a"}) rt.Value {"
         write c body
         line c "}"
         line c "${local name} = ${closureOf fn n}"
@@ -513,7 +538,7 @@ genLambda c (lam@(Lam ps body _)) =
   match n <= 4 with
     True ->
       let text = lambdaBody c lam ""
-      boxed "rt.Fn${n}(func(${params n "a"}) rt.Value {\n${text}${tabs (indentOf c)}})"
+      boxed "rt.Fn${n}(func(${evParams n "a"}) rt.Value {\n${text}${tabs (indentOf c)}})"
     False ->
       let s = sub c
       writeRef (ctxIndent s) (indentOf c + 1)
@@ -522,7 +547,7 @@ genLambda c (lam@(Lam ps body _)) =
         line s "_ = ${local p}"
         setVar s p "")
       genStmt s body DRet
-      boxed "&rt.FnN{N: ${n}, F: func(a []rt.Value) rt.Value {\n${ctxBody s}${tabs (indentOf c)}}}"
+      boxed "&rt.FnN{N: ${n}, F: func(ev *rt.Ev, a []rt.Value) rt.Value {\n${ctxBody s}${tabs (indentOf c)}}}"
 
 -- Turn a saturated self call in tail position into a loop jump.
 tailCall : Ctx -> CExpr -> <IO> Bool
@@ -586,7 +611,7 @@ genExpr c e = match e with
     let s = sub c
     writeRef (ctxIndent s) (indentOf c + 1)
     genStmt s body DRet
-    boxed "rt.Mask([]int{${joinWith ", " ids}}, func() rt.Value {\n${ctxBody s}${tabs (indentOf c)}})"
+    boxed "rt.Mask(ev, []int{${joinWith ", " ids}}, func(ev *rt.Ev) rt.Value {\n${ctxBody s}${tabs (indentOf c)}})"
   _ ->
     let t = newTmp c
     line c "var ${t} rt.Value"
@@ -611,6 +636,7 @@ genGlobal c s = match gInfo (ctxGen c) s with
     GValue -> GVal name "" True
     GDict -> GVal name "" True
     GForeign | a == 0 -> boxed (target ++ "()")
+    GForeignEv | a == 0 -> boxed (target ++ "(ev)")
     _ -> GVal (closureName s) "" True
 
 genApp : Ctx -> CExpr -> <IO> GVal
@@ -639,9 +665,9 @@ genApp c e = match e with
         let vals = genExprs c args
         let fn = "lf_" ++ mangle v
         match compare (length vals) n with
-          EQ -> boxed "${fn}(${codes vals})"
+          EQ -> boxed "${fn}(${evArgs (mapList valCode vals)})"
           GT ->
-            let head = boxed "${fn}(${codes (take n vals)})"
+            let head = boxed "${fn}(${evArgs (mapList valCode (take n vals))})"
             let hv = atom c head
             applyValue hv (drop n vals)
           LT ->
@@ -662,8 +688,8 @@ knownCallable info = match info with
 
 applyValue : GVal -> List GVal -> GVal
 applyValue f args = match length args <= 4 with
-  True -> boxed "rt.Apply${length args}(${valCode f}, ${codes args})"
-  False -> boxed "rt.ApplyN(${valCode f}, ${codes args})"
+  True -> boxed "rt.Apply${length args}(ev, ${valCode f}, ${codes args})"
+  False -> boxed "rt.ApplyN(ev, ${valCode f}, ${codes args})"
 
 callKnown : Ctx -> GInfo -> List GVal -> <IO> GVal
 callKnown c (info@(GInfo _ n _ _)) args = match compare (length args) n with
@@ -673,10 +699,10 @@ callKnown c (info@(GInfo _ n _ _)) args = match compare (length args) n with
     let all = mapList valCode args ++ mapList (\i -> "b${i}") (range 0 rest)
     let call = directCall info all args
     match rest <= 4 with
-      True -> boxed "rt.Fn${rest}(func(${params rest "b"}) rt.Value { return ${valCode call} })"
+      True -> boxed "rt.Fn${rest}(func(${evParams rest "b"}) rt.Value { return ${valCode call} })"
       False ->
         let idx = mapList (\i -> "b${i} := a[${i}]") (range 0 rest)
-        boxed "&rt.FnN{N: ${rest}, F: func(a []rt.Value) rt.Value { ${joinWith "; " idx}; return ${valCode call} }}"
+        boxed "&rt.FnN{N: ${rest}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { ${joinWith "; " idx}; return ${valCode call} }}"
   _ ->
     let first = take n args
     let res = directCall info (mapList valCode first) first
@@ -694,7 +720,9 @@ directCall (GInfo k _ name target) argCodes args =
     False -> None
   match prim with
     Some (pin, pout, render) -> GVal (render (mapList (\a -> as a pin) args)) pout False
-    None -> boxed "${name}(${joinWith ", " argCodes})"
+    None -> match k == GForeign with
+      True -> boxed "${name}(${joinWith ", " argCodes})"
+      False -> boxed "${name}(${evArgs argCodes})"
 
 -- Whether all arguments are literals; inlining them would make Go fold
 -- (and possibly reject, on overflow) the expression.
@@ -792,11 +820,11 @@ handleState c (Handle eff body _ _ _ _ _ sret sops) init =
     line s "_ = ${local st}"
     setVar s st ""
     genStmt s ob DRet
-    "${ind}\tfunc(args []rt.Value, st rt.Value) rt.Value {\n${ctxBody s}${ind}\t},\n") sops)
+    "${ind}\tfunc(ev *rt.Ev, args []rt.Value, st rt.Value) rt.Value {\n${ctxBody s}${ind}\t},\n") sops)
   let s = sub c
   writeRef (ctxIndent s) (indentOf c + 1)
   genStmt s body DRet
-  boxed "rt.HandleState(&rt.Handler{Eff: ${effID (ctxGen c) eff}, State: true, RetS: func(a0, a1 rt.Value) rt.Value {\n${retS}${ind}}, OpsS: []func([]rt.Value, rt.Value) rt.Value{\n${opsText}${ind}}}, ${valCode init}, func() rt.Value {\n${ctxBody s}${ind}})"
+  boxed "rt.HandleState(ev, &rt.Handler{Eff: ${effID (ctxGen c) eff}, State: true, RetS: func(ev *rt.Ev, a0, a1 rt.Value) rt.Value {\n${retS}${ind}}, OpsS: []func(*rt.Ev, []rt.Value, rt.Value) rt.Value{\n${opsText}${ind}}}, ${valCode init}, func(ev *rt.Ev) rt.Value {\n${ctxBody s}${ind}})"
 
 -- The body of a lambda whose parameters are named prefix0, prefix1, ...
 fnBody : Ctx -> Lam -> String -> <IO> String
@@ -814,7 +842,7 @@ genHandle : Ctx -> Handle -> <IO> GVal
 genHandle c (Handle eff body ret ops usesK tail direct _ _) =
   let ind = tabs (indentOf c)
   let retText = match ret with
-    Some l -> "Ret: rt.Fn1(func(a0 rt.Value) rt.Value {\n${lambdaBody c l ""}${ind}}), "
+    Some l -> "Ret: func(ev *rt.Ev, a0 rt.Value) rt.Value {\n${lambdaBody c l ""}${ind}}, "
     None -> ""
   let opsText = concatStrings (mapList (\(Lam ps ob _) ->
     let s = sub c
@@ -829,12 +857,12 @@ genHandle c (Handle eff body ret ops usesK tail direct _ _) =
     line s "_ = ${local k}"
     setVar s k ""
     genStmt s ob DRet
-    "${ind}\tfunc(args []rt.Value, k rt.Value) rt.Value {\n${ctxBody s}${ind}\t},\n") ops)
+    "${ind}\tfunc(ev *rt.Ev, args []rt.Value, k rt.Value) rt.Value {\n${ctxBody s}${ind}\t},\n") ops)
   let uses = concatStrings (mapList (\u -> showBool u ++ ", ") usesK)
   let s = sub c
   writeRef (ctxIndent s) (indentOf c + 1)
   genStmt s body DRet
-  boxed "rt.Handle(&rt.Handler{Eff: ${effID (ctxGen c) eff}, ${retText}Ops: []func([]rt.Value, rt.Value) rt.Value{\n${opsText}${ind}}, UsesK: []bool{${uses}}, Tail: ${showBool tail}, Direct: ${showBool direct}}, func() rt.Value {\n${ctxBody s}${ind}})"
+  boxed "rt.Handle(ev, &rt.Handler{Eff: ${effID (ctxGen c) eff}, ${retText}Ops: []func(*rt.Ev, []rt.Value, rt.Value) rt.Value{\n${opsText}${ind}}, UsesK: []bool{${uses}}, Tail: ${showBool tail}, Direct: ${showBool direct}}, func(ev *rt.Ev) rt.Value {\n${ctxBody s}${ind}})"
 
 -- ================================================================ pattern matching
 

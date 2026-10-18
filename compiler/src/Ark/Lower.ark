@@ -45,7 +45,9 @@ lowerModule l m =
   forEach (moduleDecls m) (\d -> match d with
     DFun _ b _ -> topBind l b
     DForeign _ name _ target -> match Map.lookup (moduleName m ++ "." ++ name) (readRef (gValues g)) with
-      Some v -> modifyRef foreigns (\fs -> Foreign (valueSym v) target (valueArity v) :: fs)
+      Some v ->
+        let (goTarget, ev) = foreignTarget target (readRef (valueSchemeRef v))
+        modifyRef foreigns (\fs -> Foreign (valueSym v) goTarget (valueArity v) ev :: fs)
       None -> ()
     DEffect _ name _ _ -> match Map.lookup (moduleName m ++ "." ++ name) (readRef (gEffects g)) with
       Some ei ->
@@ -64,6 +66,23 @@ lowerModule l m =
   forEach (reverse (readRef (gInstList g))) (\inst -> match instModule inst == moduleName m with
     True -> lowerInstance l inst
     False -> ())
+
+-- The Go function of a foreign declaration and whether it takes the
+-- evidence: higher-order functions always do (they call Arkadia
+-- functions), others when the target is written "ev:pkg.Func".
+foreignTarget : String -> Option Scheme -> <IO> (String, Bool)
+foreignTarget target sc = match startsWith "ev:" target with
+  True -> (substring 3 (stringLength target) target, True)
+  False -> match sc with
+    Some (Scheme _ _ _ t) -> (target, higherOrder t)
+    None -> (target, False)
+
+private higherOrder : Type -> <IO> Bool
+higherOrder t = match prune t with
+  TFun a _ r -> match prune a with
+    TFun _ _ _ -> True
+    _ -> higherOrder r
+  _ -> False
 
 dictParamsOf : Bind -> <IO> List String
 dictParamsOf b = match readRef (bindInfo b) with

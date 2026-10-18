@@ -32,8 +32,13 @@ var stdin = bufio.NewReader(os.Stdin)
 // Flush flushes buffered standard output.
 func Flush() { stdout.Flush() }
 
-// Main runs the program entry point and reports runtime errors.
-func Main(entry func()) {
+// InitEv is the evidence of the program initialization (top-level values
+// and dictionaries).
+var InitEv = newTaskEv()
+
+// Main runs the program entry point in the main task and reports runtime
+// errors.
+func Main(entry func(*Ev)) {
 	debug.SetMaxStack(4 << 30)
 	if os.Getenv("GOGC") == "" {
 		// functional programs allocate many short-lived objects
@@ -51,7 +56,7 @@ func Main(entry func()) {
 	os.Exit(code)
 }
 
-func run(entry func()) (code int) {
+func run(entry func(*Ev)) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
 			Flush()
@@ -75,7 +80,7 @@ func run(entry func()) (code int) {
 			}
 		}
 	}()
-	entry()
+	entry(newTaskEv())
 	return 0
 }
 
