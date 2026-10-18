@@ -286,15 +286,16 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 
 モジュールの公開インターフェースは `ark doc Std.Map` のように表示できます。
 
-`Std.List`・`Std.Math` などを除くデータ型のモジュールは、`import Std.String as String` のように**修飾付きで import する**前提で設計されています。
+`Std.List`・`Std.Math` などを除くデータ型のモジュールは、`String.split` のように**修飾名で使う**前提で設計されています。
+`import Std.String` と書くだけで `String.x` として使え（`as` は不要）、`map` や `length` など Prelude と同じ名前は非修飾では Prelude のものを指します。
 Prelude にある関数もそれぞれのモジュールから同じ名前（または型に即した名前）で使えるので、操作は `String.split`・`Option.withDefault`・`Map.map` のように一通り修飾名で書けます。
 修飾名の `Option.map`・`Result.map`・`Map.map`・`Array.map` などは、`Functor` の `map` と違ってエフェクトを起こす関数も受け取ります。
 `Map`・`Set`・`Array`・`Queue`・`Heap` は `<>` で結合でき（`Monoid`）、タプルやコレクションは `"${x}"` で文字列に埋め込めます。
 
 ```haskell
-import Std.String as String
-import Std.Option as Option
-import Std.Map as Map
+import Std.String
+import Std.Option
+import Std.Map
 
 main () =
   let ages = Map.fromList [("ann", "30"), ("bob", "x")]
@@ -307,7 +308,7 @@ main () =
 
 ```haskell
 import Std.Http
-import Std.Json as Json
+import Std.Json
 import Std.Task (cancelOnInterrupt)
 
 hello : Handler e

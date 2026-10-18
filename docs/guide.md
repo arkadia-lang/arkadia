@@ -89,11 +89,25 @@ main () =                  -- `=` の後の字下げ → ブロック
 ```haskell
 module Data.Queue
 
-import Std.Map              -- 全ての名前を非修飾で、かつ Map.x として使える
+import Std.Map              -- Map.x（と Std.Map.x）として使え、Prelude と衝突しない名前は非修飾でも使える
 import Std.Map as M         -- 修飾名 M.x のみ
 import Std.Map (insert, Map) -- 指定した名前だけを非修飾で
 import Std.Map (Map(..))    -- 型とその構築子
 ```
+
+`as` を書かなくても、モジュールはパスの最後の要素（`Std.Map` なら `Map`）で修飾して使えます。
+`as` は別の短い名前を付けたいとき（`import Std.Channel as Chan`）と、非修飾の名前を一切持ち込みたくないときに使います。
+
+非修飾の名前は次の優先順位で解決されます。
+
+1. その名前を指定した import（`import Std.Option (map)`）
+2. `Prelude`
+3. 名前を指定しない import（`import Std.String`、`import M (..)`）
+
+そのため `import Std.String` としても `map` や `length` は Prelude のままで、文字列版は `String.map`・`String.length` で使えます。
+同じ優先順位の import が別々の同名の値を持ち込んだ場合（`import Std.Map` と `import Std.Set` の `insert` など）は、
+その名前を非修飾で**使ったときだけ**曖昧さのエラーになります。修飾名（`Map.insert`）で書くか、使う名前を指定して import してください。
+モジュール自身のトップレベル定義は、import した名前より優先されます。
 
 宣言（またはその型シグネチャ）の直前に続く `--` コメントはドキュメントとして扱われ、`ark doc` やエディタのホバーに表示されます。ファイル先頭のコメントはモジュールの説明になります。
 
@@ -214,7 +228,7 @@ alias Point = (Float, Float)
 | 構築子が複数の型 | 引数の無い構築子は `"Admin"`、レコードは `{"tag": "Circle", "radius": 1}`、それ以外は `{"tag": "Polygon", "values": [...]}` |
 
 ```haskell
-import Std.Json as Json
+import Std.Json
 
 type User = User { name : String, age : Int, email : Option String }
   deriving (Show, Json.ToJson, Json.FromJson)
