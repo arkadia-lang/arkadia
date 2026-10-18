@@ -71,21 +71,23 @@ dist: build
     #!/usr/bin/env bash
     set -euo pipefail
     version=$(bin/ark version | cut -d' ' -f2)
-    root=$PWD work=$PWD/out/dist-go
-    rm -rf dist out/dist-go
+    # staged outside the repository, where go test ./... would see the copied runtime
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    work=$tmp/go
+    rm -rf dist
     (cd compiler && ../bin/ark build -work "$work" -o "$work/ark")
     for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
         os=${target%/*} arch=${target#*/}
         name=arkadia-$version-$os-$arch
-        pkg=out/dist/$name
-        rm -rf "$pkg"
+        pkg=$tmp/$name
         mkdir -p "$pkg/bin" "$pkg/runtime/rt"
-        (cd "$work" && GOOS=$os GOARCH=$arch GOWORK=off GOFLAGS=-mod=mod go build -trimpath -ldflags='-s -w' -o "$root/$pkg/bin/ark" .)
+        (cd "$work" && GOOS=$os GOARCH=$arch GOWORK=off GOFLAGS=-mod=mod go build -trimpath -ldflags='-s -w' -o "$pkg/bin/ark" .)
         cp -r lib "$pkg/lib"
         find runtime/rt -name '*.go' ! -name '*_test.go' -exec cp {} "$pkg/runtime/rt/" \;
         cp LICENSE README.md CHANGELOG.md "$pkg/"
         mkdir -p dist
-        tar -C out/dist -czf "dist/$name.tar.gz" "$name"
+        tar -C "$tmp" -czf "dist/$name.tar.gz" "$name"
         echo "dist/$name.tar.gz"
     done
     (cd dist && sha256sum *.tar.gz > SHA256SUMS)
