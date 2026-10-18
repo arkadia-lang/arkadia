@@ -267,7 +267,7 @@ removeField _ other = other
 -- Conversion from and to Arkadia values
 -- ===================================================================
 --
--- `deriving (ToJson, FromJson)` (with Std.Json imported) writes these
+-- `deriving (Json.ToJson, Json.FromJson)` writes these
 -- instances for data types:
 --
 --   record constructor    {"name": "ann", "age": 30}   (fields of type

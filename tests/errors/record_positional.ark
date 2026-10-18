@@ -1,0 +1,3 @@
+type User = User { name : String, age : Int }
+
+main () = println (User "ann" 30).name

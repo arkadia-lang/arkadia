@@ -305,7 +305,7 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 | `Std.Queue` / `Std.Heap` | 永続的な両端キュー、優先度付きキュー（leftist heap） |
 | `Std.String` / `Std.Char` | 文字列（`split`, `join`, `trim`, `splitOnce`, `stripPrefix`, `wrap` …）、文字の分類と変換 |
 | `Std.Math` / `Std.Bits` | 三角・指数・対数関数、`powInt`, `isqrt`, `isPrime` など。ビット演算 |
-| `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照。`ToJson` / `FromJson` クラスと `deriving (ToJson, FromJson)` によるレコード等との自動変換（失敗箇所付きのエラー） |
+| `Std.Json` | JSON のパース・出力（整形あり）・パスでの参照。`ToJson` / `FromJson` クラスと `deriving (Json.ToJson, Json.FromJson)` によるレコード等との自動変換（失敗箇所付きのエラー） |
 | `Std.IO` / `Std.Path` / `Std.Time` / `Std.Ref` | ファイル・ディレクトリ・プロセス、パス操作、時刻（RFC 3339 などの書式化と解析、日付の構築、曜日、日・月の加算）と計測、可変参照 |
 | `Std.Task` | 構造化された並列タスク（`runAsync`, `spawn`, `await`, `cancel`, `timeout`, `finally`, `parMap`, `race`, `cancelOnInterrupt` …） |
 | `Std.Channel` / `Std.Atomic` / `Std.Mutex` | タスク間の通信と共有: 容量付きチャネル、原子的に更新する参照、ロックと `Shared` 値 |

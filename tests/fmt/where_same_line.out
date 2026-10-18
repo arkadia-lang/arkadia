@@ -1,0 +1,13 @@
+collatz : Int -> Int
+collatz n = go n 0
+  where
+    go 1 steps = steps
+    go m steps = go (next m) (steps + 1)
+      where
+        next k = match k % 2 with
+          0 -> k / 2
+          _ -> 3 * k + 1
+
+divmod a b = "${q} r ${r}"
+  where
+    (q, r) = (a / b, a % b)

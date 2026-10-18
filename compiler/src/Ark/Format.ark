@@ -39,7 +39,8 @@ type Src = Src { chs : Arr.Array Char, toks : Arr.Array Token, spans : Arr.Array
 
 -- Format a source file.
 format : String -> String -> <IO> Result (List Diag) String
-format file src =
+format file src0 =
+  let src = splitWheres file src0
   let chs = Arr.fromList (chars src)
   match lexSpans file chs with
     Err errs -> Err errs
@@ -51,6 +52,63 @@ format file src =
         match sameTokens file s want comments out with
           [] -> Ok out
           errs -> Err errs
+
+-- ================================================================ where clauses
+
+-- Bindings written on the line of their `where` move to the next line, so
+-- that `where` always opens an indented block (the rest of formatting only
+-- changes spaces within lines). The binding keeps its column; the lines of
+-- the clause indented less than it (the blocks of a binding that started
+-- on the `where` line) move right by as much, to stay inside it.
+private splitWheres : String -> String -> <IO> String
+splitWheres file src = match sameLineWhere file src with
+  None -> src
+  Some (line, col, inside) -> splitWheres file (splitWhereAt src line col inside)
+
+-- The position of the first token that follows `where` on its line, and the
+-- lines that start inside a multi-line string or comment.
+private sameLineWhere : String -> String -> <IO> Option (Int, Int, List Int)
+sameLineWhere file src =
+  let chs = Arr.fromList (chars src)
+  match lexSpans file chs with
+    Err _ -> None
+    Ok (toks, spans, comments) -> match findWhere toks with
+      None -> None
+      Some (line, col) ->
+        let spanLines (first, (o, e)) = range (first + 1) (first + 1 + countNewlines chs o e 0)
+        let tokLines = zip (map (\t -> posLine (tokPos t)) toks) spans
+        let commentLines = map (\(Comment o e l _) -> (l, (o, e))) comments
+        let inside = concatMap spanLines (tokLines ++ commentLines)
+        Some (line, col, inside)
+
+private findWhere : List Token -> Option (Int, Int)
+findWhere toks = match toks with
+  w :: t :: rest
+    | tokKind w == KwWhere && tokKind t != EOF && posLine (tokPos t) == posLine (tokPos w) -> Some (posLine (tokPos t), posCol (tokPos t))
+    | otherwise -> findWhere (t :: rest)
+  _ -> None
+
+private splitWhereAt : String -> Int -> Int -> List Int -> String
+splitWhereAt src line col inside =
+  let ls = map chars (lines src)
+  let indentOf l = length (takeWhile (\ch -> ch == ' ') l)
+  let blank l = all (\ch -> ch == ' ' || ch == '\r') l
+  let cur = at (line - 1) ls
+  let l0 = indentOf cur
+  let b = col - 1
+  let head = reverse (dropWhile (\ch -> ch == ' ') (reverse (take b cur)))
+  let tail = replicate b ' ' ++ drop b cur
+  -- the lines after `line` that belong to the clause, shifted
+  let shift acc rest n = match rest with
+    [] -> (reverse acc, [])
+    l :: more
+      | elem n inside || blank l -> shift (l :: acc) more (n + 1)
+      | indentOf l <= l0 -> (reverse acc, rest)
+      | indentOf l < b -> shift ((replicate (b - l0) ' ' ++ l) :: acc) more (n + 1)
+      | otherwise -> shift (l :: acc) more (n + 1)
+  let (clause, after) = shift [] (drop line ls) (line + 1)
+  let out = take (line - 1) ls ++ [head, tail] ++ clause ++ after
+  joinWith "\n" (map fromChars out)
 
 -- ================================================================ items
 

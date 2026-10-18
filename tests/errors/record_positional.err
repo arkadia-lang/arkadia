@@ -1,0 +1,1 @@
+'User' has named fields; build it as User { name = ..., age = ... }

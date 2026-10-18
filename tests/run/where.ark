@@ -25,14 +25,16 @@ collatz n = go n 0
     go : Int -> Int -> Int
     go 1 steps = steps
     go m steps = go (next m) (steps + 1)
-      where next k = match k % 2 with
-        0 -> k / 2
-        _ -> 3 * k + 1
+      where
+        next k = match k % 2 with
+          0 -> k / 2
+          _ -> 3 * k + 1
 
 -- pattern bindings in a where clause
 divmod : Int -> Int -> String
 divmod a b = "${q} r ${r}"
-  where (q, r) = (a / b, a % b)
+  where
+    (q, r) = (a / b, a % b)
 
 -- the bindings are evaluated before the guards, in order
 trace : String -> a -> <IO> a
