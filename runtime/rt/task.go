@@ -182,6 +182,18 @@ func Poll(ev *Ev) {
 	}
 }
 
+// Done returns a channel that is closed when the computation is
+// cancelled. A foreign function that blocks waits for it too and then
+// calls Poll, which unwinds the computation:
+//
+//	select {
+//	case v := <-c:
+//		return v
+//	case <-ev.Done():
+//		rt.Poll(ev)
+//	}
+func (ev *Ev) Done() <-chan struct{} { return ev.cs.done }
+
 // unwind unwinds a cancelled computation to its outermost cancelled scope
 // in the current task. It is kept out of line so that Poll inlines to a
 // load and a branch.

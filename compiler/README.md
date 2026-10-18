@@ -52,7 +52,7 @@ bin/ark build | run | check | test | fmt | emit | doc | repl | lsp | new | versi
 | `Ark.Exhaust` | 網羅性検査 |
 | `Ark.Loader` / `Ark.Render` | モジュールの読み込み・エラー表示 |
 | `Ark.Core` / `Ark.Lower` | 中間言語 Core とその生成 |
-| `Ark.Opt` / `Ark.Codegen` | Core の最適化と Go コード生成 |
+| `Ark.Opt` / `Ark.Codegen` | Core の最適化と Go コード生成（エビデンス渡し、キャンセルポイントの挿入） |
 | `Ark.Project` / `Ark.Build` | `ark.toml`（path / git 依存、`ark.lock`）、Go モジュールの生成と `go build` |
 | `Ark.Repl` / `Ark.Lsp` / `Ark.Json` | REPL、Language Server |
 | `Main` | CLI |
@@ -66,6 +66,9 @@ bin/ark build | run | check | test | fmt | emit | doc | repl | lsp | new | versi
   ただし `native/*.go` は両方のランタイムに対してコンパイルされるため、両者に共通の API（値の表現など）だけを使います。
 - **可変状態**: 型検査器のメタ変数・カインド変数、辞書の解、検査結果の注釈などは
   `Ref`（`newRef` / `readRef` / `writeRef`、`<IO>` エフェクト付き）で表します。
+- **呼び出し規約**: 生成される関数はすべて、呼び出し元のエビデンス `ev *rt.Ev`（ハンドラのフレームと実行中のタスク）を最初の引数に取ります。
+  foreign 関数は、高階のもの（関数を引数に取る）とターゲットを `"ev:pkg.Func"` と書いたものだけがエビデンスを受け取ります。
+  キャンセルポイント `rt.Poll(ev)` は、ループする関数・未知の呼び出し（関数値・エフェクト操作・高階の foreign）をする関数・大域的な参照グラフで再帰する関数の入口に置きます（`Ark.Codegen` の `pollLine`）。
 - **エラー**: パーサの脱出と単一化の失敗は `Std.Exn` の `throw` / `try` で表します
   （どちらも継続を捨てるハンドラなので、ランタイムでは panic/recover の高速パスで動きます）。
 - **FFI**（`native/native.go`）は標準ライブラリにない汎用の機能だけに限っています:
