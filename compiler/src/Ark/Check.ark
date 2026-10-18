@@ -328,9 +328,12 @@ familyEq c ti n (FamEqE p lhs rhs) =
 -- A pattern of a type family equation.
 private famPattern : Checker -> TvEnv -> TypeExpr -> Kind -> <IO> Type
 famPattern c env te k =
-  match te with
-    TVarE p v | Map.member v (readRef (envVars env)) -> errorf c p "type variable '${v}' occurs twice in the patterns of this equation"
-    _ -> ()
+  let dup seen (p, v) = match Map.member v (readRef (envVars env)) || elem v seen with
+    True ->
+      errorf c p "type variable '${v}' occurs twice in the patterns of this equation"
+      seen
+    False -> v :: seen
+  let _ = foldl dup [] (typeVarsE te)
   let (t, tk) = convType c te env
   match unifyKind k tk with
     True -> ()
@@ -339,6 +342,15 @@ famPattern c env te k =
     True -> ()
     False -> errorf c (typePos te) "a pattern of a type family equation can only contain type constructors and type variables"
   t
+
+-- The type variables of a written type, in order (with repetitions).
+private typeVarsE : TypeExpr -> List (Pos, String)
+typeVarsE te = match te with
+  TVarE p v -> [(p, v)]
+  TAppE _ f as -> concat (map typeVarsE (f :: as))
+  TFunE _ a _ r -> typeVarsE a ++ typeVarsE r
+  TTupleE _ es -> concat (map typeVarsE es)
+  _ -> []
 
 private patternOk : Checker -> Type -> <IO> Bool
 patternOk c t = match prune t with
