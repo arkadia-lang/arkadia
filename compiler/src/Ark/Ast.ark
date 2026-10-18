@@ -46,7 +46,7 @@ type TokKind
   = EOF | NEWLINE | INDENT | DEDENT
   | LIDENT | UIDENT | OP | INT | FLOAT | STRING | INTERP | CHAR
   | LPAREN | RPAREN | LBRACKET | RBRACKET | LBRACE | RBRACE
-  | COMMA | SEMI | BACKTICK | BACKSLASH | EQUALS | BAR | ARROW | COLON | DARROW | AT | UNDERSCORE
+  | COMMA | SEMI | BACKSLASH | EQUALS | BAR | ARROW | COLON | DARROW | AT | UNDERSCORE
   | FIELD | FIELDFN
   | KwModule | KwImport | KwAs | KwType | KwAlias | KwClass | KwInstance | KwEffect | KwWhere
   | KwLet | KwIn | KwMatch | KwWith | KwHandle | KwReturn | KwForeign
@@ -99,7 +99,6 @@ kindName k = match k with
   RBRACE -> "'}'"
   COMMA -> "','"
   SEMI -> "';'"
-  BACKTICK -> "'`'"
   BACKSLASH -> "'\\'"
   EQUALS -> "'='"
   BAR -> "'|'"
