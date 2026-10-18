@@ -1,14 +1,16 @@
 # Arkadia for Visual Studio Code
 
-- `.ark` ファイルのシンタックスハイライト
-- `ark lsp` による診断（型エラー）、ホバーでの型表示、定義へジャンプ、ドキュメントのフォーマット（`ark fmt` と同じ整形）
+**English** | [日本語](README.ja.md)
 
-## 使い方
+- Syntax highlighting for `.ark` files
+- Diagnostics (type errors), types on hover, go to definition and document formatting (the same formatting as `ark fmt`) via `ark lsp`
+
+## Usage
 
 ```sh
 cd editors/vscode
 npm install
-# VS Code でこのフォルダを開き F5、または vsce package で .vsix を作成
+# open this folder in VS Code and press F5, or build a .vsix with vsce package
 ```
 
-`ark` が `PATH` に無い場合は設定 `arkadia.serverPath` で実行ファイルを指定してください。
+If `ark` is not on your `PATH`, set the executable with the `arkadia.serverPath` setting.
