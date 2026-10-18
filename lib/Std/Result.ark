@@ -2,10 +2,7 @@
 --
 --   import Std.Result as Result
 --   Result.withDefault 0 (Err "oops")                  -- 0
---   readFile path |> Result.map lines |> Result.mapErr (\e -> "config: ${e}")
---
--- Unlike the Functor method `map`, `Result.map`, `Result.mapErr` and
--- `Result.andThen` take functions that may perform effects.
+--   readFile path |> map lines |> Result.mapErr (\e -> "config: ${e}")
 module Std.Result
 
 -- ===================================================================
@@ -60,10 +57,6 @@ orFail (Err e) = fail e
 -- Transforming
 -- ===================================================================
 
-map : (a -> b) -> Result e a -> Result e b
-map f (Ok x) = Ok (f x)
-map _ (Err e) = Err e
-
 mapErr : (e -> f) -> Result e a -> Result f a
 mapErr _ (Ok x) = Ok x
 mapErr f (Err e) = Err (f e)
@@ -71,11 +64,6 @@ mapErr f (Err e) = Err (f e)
 mapBoth : (e -> f) -> (a -> b) -> Result e a -> Result f b
 mapBoth f _ (Err e) = Err (f e)
 mapBoth _ g (Ok x) = Ok (g x)
-
--- Chain a computation that may itself fail.
-andThen : (a -> Result e b) -> Result e a -> Result e b
-andThen f (Ok x) = f x
-andThen _ (Err e) = Err e
 
 -- Recover from an error.
 orElse : (e -> Result f a) -> Result e a -> Result f a

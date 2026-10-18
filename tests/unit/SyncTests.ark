@@ -32,7 +32,7 @@ test "buffered channels" =
 test "many producers, one consumer" =
   let ch = newChannel 8
   let total = runAsync (\_ ->
-    let producers = mapList (\p -> spawn (\_ -> forEach [1 .. 100] (\i -> send ch (p * 1000 + i)))) [1 .. 4]
+    let producers = map (\p -> spawn (\_ -> forEach [1 .. 100] (\i -> send ch (p * 1000 + i)))) [1 .. 4]
     let _ = spawn (\_ ->
       forEach producers await
       closeChannel ch)

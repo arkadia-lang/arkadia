@@ -56,7 +56,7 @@ paramType ts i = withDefault "" (nth i ts)
 -- converted once, into p0, p1, ..., before the body (and its loop, for
 -- self tail calls); returns those conversions.
 bindParams : Ctx -> List String -> List String -> <IO> List String
-bindParams c ps ts = filterMap id (mapList (\(i, p) ->
+bindParams c ps ts = filterMap id (map (\(i, p) ->
   let t = paramType ts i
   let conv = match t with
     "" ->
@@ -71,7 +71,7 @@ bindParams c ps ts = filterMap id (mapList (\(i, p) ->
   conv) (indexed ps))
 
 prologue : List String -> Int -> String
-prologue pro ind = concatStrings (mapList (\l -> tabs ind ++ l ++ "\n") pro)
+prologue pro ind = concatStrings (map (\l -> tabs ind ++ l ++ "\n") pro)
 
 -- generator, body (reversed chunks), indentation, current function,
 -- unboxed types of locals, local functions with a direct Go func (arity)
@@ -82,7 +82,7 @@ generate : Program -> Bool -> <IO> Result String String
 generate prog0 tests =
   let prog = optimize prog0
   let Program funcs values dicts foreigns ops effects _ _ _ = prog
-  let effIDs = Map.fromList (mapList (\(i, Effect n _) -> (n, i)) (indexed effects))
+  let effIDs = Map.fromList (map (\(i, Effect n _) -> (n, i)) (indexed effects))
   let g1 = foldl (\m (Func s ps _ _) -> Map.insert s (GInfo GFunc (length ps) ("f_" ++ mangle s) "") m) Map.empty funcs
   let g2 = foldl (\m (Value s _) -> Map.insert s (GInfo GValue 0 ("v_" ++ mangle s) "") m) g1 values
   let g3 = foldl (\m (Dict s ps _) -> match ps with
@@ -102,7 +102,7 @@ generate prog0 tests =
 
 -- Turn a symbol into a Go identifier fragment.
 mangle : String -> String
-mangle s = concatStrings (mapList mangleChar (chars s))
+mangle s = concatStrings (map mangleChar (chars s))
 
 private mangleChar : Char -> String
 mangleChar r
@@ -130,7 +130,7 @@ tabs n = strRepeat n "\t"
 params : Int -> String -> String
 params n prefix = match n with
   0 -> ""
-  _ -> joinWith ", " (mapList (\i -> prefix ++ show i) (range 0 n)) ++ " rt.Value"
+  _ -> joinWith ", " (map (\i -> prefix ++ show i) (range 0 n)) ++ " rt.Value"
 
 -- The parameters of a function of arity n: the evidence, then the
 -- arguments.
@@ -144,20 +144,20 @@ evArgs : List String -> String
 evArgs args = joinWith ", " ("ev" :: args)
 
 argList : Int -> String -> String
-argList n prefix = joinWith ", " (mapList (\i -> prefix ++ show i) (range 0 n))
+argList n prefix = joinWith ", " (map (\i -> prefix ++ show i) (range 0 n))
 
 -- Wrap a Go function of arity n (taking the evidence) as an Arkadia
 -- function value.
 closureOf : String -> Int -> String
 closureOf fn n = match n <= 4 with
   True -> "rt.Fn${n}(${fn})"
-  False -> "&rt.FnN{N: ${n}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { return ${fn}(${evArgs (mapList (\i -> "a[${i}]") (range 0 n))}) }}"
+  False -> "&rt.FnN{N: ${n}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { return ${fn}(${evArgs (map (\i -> "a[${i}]") (range 0 n))}) }}"
 
 -- Wrap a Go function of arity n that does not take the evidence.
 plainClosureOf : String -> Int -> String
 plainClosureOf fn n = match n <= 4 with
   True -> "rt.Fn${n}(func(${evParams n "a"}) rt.Value { return ${fn}(${argList n "a"}) })"
-  False -> "&rt.FnN{N: ${n}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { return ${fn}(${joinWith ", " (mapList (\i -> "a[${i}]") (range 0 n))}) }}"
+  False -> "&rt.FnN{N: ${n}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { return ${fn}(${joinWith ", " (map (\i -> "a[${i}]") (range 0 n))}) }}"
 
 emitOut : Ref (List String) -> String -> <IO> Unit
 emitOut out s = modifyRef out (\xs -> s :: xs)
@@ -269,10 +269,10 @@ type Either a b = Left a | Right b
 -- values and dictionaries it (transitively) uses.
 initOrder : Program -> <IO> List (Either Dict Value)
 initOrder (Program funcs values dicts _ _ _ _ _ _) =
-  let funcRefs = Map.fromList (mapList (\(Func s _ b _) -> (s, refsOf [b])) funcs)
+  let funcRefs = Map.fromList (map (\(Func s _ b _) -> (s, refsOf [b])) funcs)
   let plainDicts = filter (\(Dict _ ps _) -> isEmpty ps) dicts
-  let items = Map.fromList (mapList (\d -> (dictSym d, Left d)) plainDicts ++ mapList (\(v@(Value s _)) -> (s, Right v)) values)
-  let order = mapList dictSym plainDicts ++ mapList (\(Value s _) -> s) values
+  let items = Map.fromList (map (\d -> (dictSym d, Left d)) plainDicts ++ map (\(v@(Value s _)) -> (s, Right v)) values)
+  let order = map dictSym plainDicts ++ map (\(Value s _) -> s) values
   let dictFnRefs = Map.fromList (filterMap (\(Dict s ps slots) -> match ps with
     [] -> None
     _ -> Some (s, refsOf slots)) dicts)
@@ -297,7 +297,7 @@ initOrder (Program funcs values dicts _ _ _ _ _ _) =
       None -> []
     forEach direct deps
     reverse (readRef acc)
-  let reach = Map.fromList (mapList (\s -> (s, reachOf s)) order)
+  let reach = Map.fromList (map (\s -> (s, reachOf s)) order)
   let state = newRef Map.empty
   let out = newRef []
   let visit s = match Map.member s (readRef state) with
@@ -419,7 +419,7 @@ mayCall g e =
 -- (Tarjan's strongly connected components).
 recursiveSyms : Program -> <IO> Map.Map String Bool
 recursiveSyms (Program funcs values dicts _ _ _ _ _ _) =
-  let edges = Map.fromList (mapList (\(Func s _ b _) -> (s, refsOf [b])) funcs ++ mapList (\(Value s b) -> (s, refsOf [b])) values ++ mapList (\(Dict s _ slots) -> (s, refsOf slots)) dicts)
+  let edges = Map.fromList (map (\(Func s _ b _) -> (s, refsOf [b])) funcs ++ map (\(Value s b) -> (s, refsOf [b])) values ++ map (\(Dict s _ slots) -> (s, refsOf slots)) dicts)
   let index = newRef Map.empty
   let low = newRef Map.empty
   let onStack = newRef Map.empty
@@ -468,7 +468,7 @@ recursiveSyms (Program funcs values dicts _ _ _ _ _ _) =
   readRef result
 
 dedent : String -> String
-dedent s = joinWith "\n" (mapList (\l -> match startsWith "\t" l with
+dedent s = joinWith "\n" (map (\l -> match startsWith "\t" l with
   True -> substring 1 (stringLength l) l
   False -> l) (split "\n" s))
 
@@ -695,7 +695,7 @@ tailCall c e = match (ctxSelf c, e) with
     match isSelf with
       False -> False
       True ->
-        let vals = mapList (\a -> atom c (genExpr c a)) args
+        let vals = map (\a -> atom c (genExpr c a)) args
         forEach (indexed vals) (\(i, v) -> match paramType ts i with
           "" -> line c "a${i} = ${valCode v}"
           t -> line c "p${i} = ${as v t}")
@@ -707,10 +707,10 @@ tailCall c e = match (ctxSelf c, e) with
 -- ================================================================ expressions
 
 genExprs : Ctx -> List CExpr -> <IO> List GVal
-genExprs c es = mapList (\e -> atom c (genExpr c e)) es
+genExprs c es = map (\e -> atom c (genExpr c e)) es
 
 codes : List GVal -> String
-codes vs = joinWith ", " (mapList valCode vs)
+codes vs = joinWith ", " (map valCode vs)
 
 genExpr : Ctx -> CExpr -> <IO> GVal
 genExpr c e = match e with
@@ -733,7 +733,7 @@ genExpr c e = match e with
         boxed "rt.Sel(${valCode dv}, ${slot})"
   CConcat parts ->
     let ps = genExprs c parts
-    GVal ("(" ++ joinWith " + " (mapList (\p -> as p "string") ps) ++ ")") "string" False
+    GVal ("(" ++ joinWith " + " (map (\p -> as p "string") ps) ++ ")") "string" False
   CLet name v body ->
     genLet c name v
     genExpr c body
@@ -742,7 +742,7 @@ genExpr c e = match e with
     genExpr c body
   CHandle h -> genHandle c h
   CMask effs body ->
-    let ids = mapList (\eff -> show (effID (ctxGen c) eff)) effs
+    let ids = map (\eff -> show (effID (ctxGen c) eff)) effs
     let s = sub c
     writeRef (ctxIndent s) (indentOf c + 1)
     genStmt s body DRet
@@ -800,9 +800,9 @@ genApp c e = match e with
         let vals = genExprs c args
         let fn = "lf_" ++ mangle v
         match compare (length vals) n with
-          EQ -> boxed "${fn}(${evArgs (mapList valCode vals)})"
+          EQ -> boxed "${fn}(${evArgs (map valCode vals)})"
           GT ->
-            let head = boxed "${fn}(${evArgs (mapList valCode (take n vals))})"
+            let head = boxed "${fn}(${evArgs (map valCode (take n vals))})"
             let hv = atom c head
             applyValue hv (drop n vals)
           LT ->
@@ -831,16 +831,16 @@ callKnown c (info@(GInfo _ n _ _)) args = match compare (length args) n with
   LT ->
     -- partial application: capture the given arguments
     let rest = n - length args
-    let all = mapList valCode args ++ mapList (\i -> "b${i}") (range 0 rest)
+    let all = map valCode args ++ map (\i -> "b${i}") (range 0 rest)
     let call = directCall info all args
     match rest <= 4 with
       True -> boxed "rt.Fn${rest}(func(${evParams rest "b"}) rt.Value { return ${valCode call} })"
       False ->
-        let idx = mapList (\i -> "b${i} := a[${i}]") (range 0 rest)
+        let idx = map (\i -> "b${i} := a[${i}]") (range 0 rest)
         boxed "&rt.FnN{N: ${rest}, F: func(ev *rt.Ev, a []rt.Value) rt.Value { ${joinWith "; " idx}; return ${valCode call} }}"
   _ ->
     let first = take n args
-    let res = directCall info (mapList valCode first) first
+    let res = directCall info (map valCode first) first
     match drop n args with
       [] -> res
       more ->
@@ -854,7 +854,7 @@ directCall (GInfo k _ name target) argCodes args =
     True -> primOf target
     False -> None
   match prim with
-    Some (pin, pout, render) -> GVal (render (mapList (\a -> as a pin) args)) pout False
+    Some (pin, pout, render) -> GVal (render (map (\a -> as a pin) args)) pout False
     None -> match k == GForeign with
       True -> boxed "${name}(${joinWith ", " argCodes})"
       False -> boxed "${name}(${evArgs argCodes})"
@@ -942,7 +942,7 @@ handleState c (Handle eff body _ _ _ _ _ sret sops) init =
   let retS = match sret with
     Some l -> fnBody c l "a"
     None -> ""
-  let opsText = concatStrings (mapList (\(Lam ps ob _) ->
+  let opsText = concatStrings (map (\(Lam ps ob _) ->
     let s = sub c
     writeRef (ctxIndent s) (indentOf c + 2)
     let n = length ps
@@ -979,7 +979,7 @@ genHandle c (Handle eff body ret ops usesK tail direct _ _) =
   let retText = match ret with
     Some l -> "Ret: func(ev *rt.Ev, a0 rt.Value) rt.Value {\n${lambdaBody c l ""}${ind}}, "
     None -> ""
-  let opsText = concatStrings (mapList (\(Lam ps ob _) ->
+  let opsText = concatStrings (map (\(Lam ps ob _) ->
     let s = sub c
     writeRef (ctxIndent s) (indentOf c + 2)
     let n = length ps
@@ -993,7 +993,7 @@ genHandle c (Handle eff body ret ops usesK tail direct _ _) =
     setVar s k ""
     genStmt s ob DRet
     "${ind}\tfunc(ev *rt.Ev, args []rt.Value, k rt.Value) rt.Value {\n${ctxBody s}${ind}\t},\n") ops)
-  let uses = concatStrings (mapList (\u -> showBool u ++ ", ") usesK)
+  let uses = concatStrings (map (\u -> showBool u ++ ", ") usesK)
   let s = sub c
   writeRef (ctxIndent s) (indentOf c + 1)
   genStmt s body DRet
@@ -1015,7 +1015,7 @@ irrefutableC p = match p with
 
 genMatch : Ctx -> List CExpr -> List Row -> String -> Dest -> <IO> Unit
 genMatch c scrutEs rows wh d =
-  let scruts = mapList (\s ->
+  let scruts = map (\s ->
     let v = genExpr c s
     match valAtomic v with
       True -> v
@@ -1052,7 +1052,7 @@ genMatch c scrutEs rows wh d =
 genRow : Ctx -> Row -> List GVal -> Dest -> String -> Ref Bool -> <IO> Unit
 genRow c (Row pats body guards) scruts d label usedBreak =
   open c "{"
-  let depth = sum (mapList (\(p, s) -> genPattern c p s) (zip pats scruts))
+  let depth = sum (map (\(p, s) -> genPattern c p s) (zip pats scruts))
   let finish () = match d with
     DRet -> ()
     _ ->
@@ -1122,4 +1122,4 @@ genPattern c p s = match p with
             let f = newTmp c
             let arity = ctorArity ci
             line c "${f} := ${valCode s}.(${structName arity})"
-            n0 + sum (mapList (\(i, a) -> genPattern c a (GVal (fieldAccess f arity i) "" True)) (indexed args))
+            n0 + sum (map (\(i, a) -> genPattern c a (GVal (fieldAccess f arity i) "" True)) (indexed args))

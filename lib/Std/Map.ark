@@ -3,7 +3,7 @@
 --   import Std.Map as Map
 --   let m = Map.fromList [(1, "one"), (2, "two")]
 --   Map.lookup 1 m                     -- Some "one"
---   Map.map toUpper m                  -- Map.fromList [(1, "ONE"), (2, "TWO")]
+--   map toUpper m                      -- Map.fromList [(1, "ONE"), (2, "TWO")]
 --   m <> Map.singleton 3 "three"       -- left-biased union
 --
 -- Functions that visit several bindings do so in ascending key order.
@@ -16,13 +16,6 @@ empty = Tip
 
 singleton : k -> v -> Map k v
 singleton k v = Bin 1 k v Tip Tip
-
-size : Map k v -> Int
-size m = Prelude.foldl (\n _ -> n + 1) 0 (values m)
-
-isEmpty : Map k v -> Bool
-isEmpty Tip = True
-isEmpty _ = False
 
 private height : Map k v -> Int
 height Tip = 0
@@ -120,17 +113,6 @@ foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
 foldlWithKey : (b -> k -> v -> b) -> b -> Map k v -> b
 foldlWithKey _ z Tip = z
 foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
-
--- Apply a function to every value; unlike the Functor method `map`, it may
--- perform effects.
-map : (a -> b) -> Map k a -> Map k b
-map f m = mapWithKey (\_ v -> f v) m
-
-foldl : (b -> v -> b) -> b -> Map k v -> b
-foldl f z m = foldlWithKey (\acc _ v -> f acc v) z m
-
-foldr : (v -> b -> b) -> b -> Map k v -> b
-foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
 
 mapWithKey : (k -> a -> b) -> Map k a -> Map k b
 mapWithKey _ Tip = Tip
@@ -250,6 +232,8 @@ instance Functor (Map k) where
 instance Foldable (Map k) where
   foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
   foldl f z m = foldlWithKey (\acc _ v -> f acc v) z m
+  isEmpty Tip = True
+  isEmpty _ = False
 
 -- Left-biased union, like `union`.
 instance Ord k => Semigroup (Map k v) where

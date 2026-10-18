@@ -25,7 +25,7 @@ choose [] = None
 choose xs = nth (randomInt 0 (length xs - 1)) xs
 
 shuffle : List a -> <Random> List a
-shuffle xs = map snd (sortOn fst (mapList (\x -> (nextInt (), x)) xs))
+shuffle xs = map snd (sortOn fst (map (\x -> (nextInt (), x)) xs))
 
 -- splitmix64 step
 private mix : Int -> Int

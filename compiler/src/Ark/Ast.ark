@@ -668,7 +668,7 @@ patPos p = match p with
 -- The positional sub-patterns of a valid record pattern; missing fields
 -- are wildcards.
 recordPositional : CtorInfo -> List (String, Pattern) -> Pos -> List Pattern
-recordPositional ci fields p = mapList (\i -> match find (\(f, _) -> ctorFieldIndex ci f == i) fields with
+recordPositional ci fields p = map (\i -> match find (\(f, _) -> ctorFieldIndex ci f == i) fields with
   Some (_, sub) -> sub
   None -> PWild p) (range 0 (ctorArity ci))
 

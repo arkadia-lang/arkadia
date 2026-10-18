@@ -37,7 +37,7 @@ loaderGlobal (Loader _ _ _ _ _ _ _ g) = readRef g
 
 -- Read a file, preferring unsaved editor contents.
 readSource : Loader -> String -> <IO> Result String String
-readSource (Loader _ _ _ _ _ _ (LoaderOptions overlay _) _) path = match Map.isEmpty overlay with
+readSource (Loader _ _ _ _ _ _ (LoaderOptions overlay _) _) path = match isEmpty overlay with
   True -> readFile path
   False -> match Map.lookup (pathAbs path) overlay with
     Some src -> Ok src
@@ -88,8 +88,8 @@ load l m =
       modifyRef visiting (Map.insert name True)
       modifyRef mods (Map.insert name m)
       let deps = match name == preludeMod with
-        True -> mapList importPath (moduleImports m)
-        False -> preludeMod :: mapList importPath (moduleImports m)
+        True -> map importPath (moduleImports m)
+        False -> preludeMod :: map importPath (moduleImports m)
       match loadDeps l m deps with
         Err e -> Err e
         Ok _ ->
@@ -152,8 +152,8 @@ checkProgram : Loader -> String -> <IO> Result (List Diag) Program
 checkProgram (Loader _ _ _ orderRef _ _ (LoaderOptions _ collect) lastGlobal) main =
   let order = reverse (readRef orderRef)
   let fx = newRef defaultFixities
-  let errs1 = concat (mapList (collectFixities fx) order)
-  let resolved = mapList (\m -> resolveFixity m (readRef fx)) order
+  let errs1 = concat (map (collectFixities fx) order)
+  let resolved = map (\m -> resolveFixity m (readRef fx)) order
   let errs = errs1 ++ concat (map snd resolved)
   match errs with
     _ :: _ -> Err errs

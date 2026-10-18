@@ -21,7 +21,7 @@ render rows = renderWith ',' rows
 -- The rows after a header row, as (column, value) pairs.
 records : List (List String) -> List (List (String, String))
 records rows = match rows with
-  header :: body -> mapList (\row -> zip header row) body
+  header :: body -> map (\row -> zip header row) body
   [] -> []
 
 -- The value of a column in a record from `records`.

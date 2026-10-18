@@ -20,12 +20,12 @@ test "option combinators" =
   assertEq (Option.when True 1, Option.when False 1) (Some 1, None)
 
 test "option conversions" =
-  assertEq (Option.toList (Some 1)) [1]
+  assertEq (toList (Some 1)) [1]
   assertEq (Option.toResult "none" (None : Option Int)) (Err "none")
   assertEq (Option.fromResult (Ok 1 : Result String Int)) (Some 1)
 
 test "option with effects" =
-  let r = runFail (\_ -> Option.map (\x -> orFail "neg" (Option.when (x > 0) x)) (Some 5))
+  let r = runFail (\_ -> map (\x -> orFail "neg" (Option.when (x > 0) x)) (Some 5))
   assertEq r (Ok (Some 5))
   Option.whenSome (Some 1) (\x -> assertEq x 1)
 
@@ -57,20 +57,20 @@ test "result instances" =
 test "option qualified api" =
   assertEq (Option.withDefault 0 (Some 2), Option.withDefault 0 None) (2, 0)
   assert (Option.isSome (Some 1) && Option.isNone (None : Option Int)) "isSome / isNone"
-  assertEq (Option.map (* 2) (Some 3)) (Some 6)
-  assertEq (Option.andThen parseInt (Some "12"), Option.andThen parseInt (Some "x")) (Some 12, None)
-  assert (Option.contains 1 (Some 1) && not (Option.contains 1 (Some 2))) "contains"
+  assertEq (map (* 2) (Some 3)) (Some 6)
+  assertEq (andThen parseInt (Some "12"), andThen parseInt (Some "x")) (Some 12, None)
+  assert (elem 1 (Some 1) && not (elem 1 (Some 2))) "contains"
   assert (Option.forAll odd None && not (Option.forAll odd (Some 2))) "forAll"
 
 test "result qualified api" =
   let err = Err "bad" : Result String Int
-  assertEq (Result.map (+ 1) (Ok 1 : Result String Int)) (Ok 2)
+  assertEq (map (+ 1) (Ok 1 : Result String Int)) (Ok 2)
   assertEq (Result.mapErr stringLength err) (Err 3)
-  assertEq (Result.andThen (\x -> Ok (x * 2)) (Ok 4 : Result String Int)) (Ok 8)
+  assertEq (andThen (\x -> Ok (x * 2)) (Ok 4 : Result String Int)) (Ok 8)
   assertEq (Result.recover stringLength err) 3
   assertEq (Result.expect "never" (Ok 1 : Result String Int)) 1
   assertEq (Result.combine [Ok 1, Err "a", Err "b"]) (Err "a" : Result String (List Int))
   assertEq (Result.combine [Ok 1, Ok 2] : Result String (List Int)) (Ok [1, 2])
-  let r = runFail (\_ -> Result.map (\x -> orFail "neg" (Option.when (x > 0) x)) (Ok 5 : Result String Int))
+  let r = runFail (\_ -> map (\x -> orFail "neg" (Option.when (x > 0) x)) (Ok 5 : Result String Int))
   assertEq r (Ok (Ok 5))
   Result.whenOk (Ok 1 : Result String Int) (\x -> assertEq x 1)

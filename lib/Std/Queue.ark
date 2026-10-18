@@ -14,18 +14,8 @@ empty = Queue [] [] 0
 singleton : a -> Queue a
 singleton x = Queue [x] [] 1
 
-isEmpty : Queue a -> Bool
-isEmpty (Queue _ _ n) = n == 0
-
-size : Queue a -> Int
-size (Queue _ _ n) = n
-
 fromList : List a -> Queue a
 fromList xs = Queue xs [] (length xs)
-
--- Elements from front to back.
-toList : Queue a -> List a
-toList (Queue f b _) = f ++ Prelude.reverse b
 
 -- Add to the back.
 push : a -> Queue a -> Queue a
@@ -70,6 +60,9 @@ instance Functor Queue where
 instance Foldable Queue where
   foldr f z q = Prelude.foldr f z (toList q)
   foldl f z q = Prelude.foldl f z (toList q)
+  toList (Queue f b _) = f ++ Prelude.reverse b
+  length (Queue _ _ n) = n
+  isEmpty (Queue _ _ n) = n == 0
 
 instance Eq a => Eq (Queue a) where
   a == b = toList a == toList b

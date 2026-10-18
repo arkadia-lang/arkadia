@@ -36,7 +36,7 @@ test "parallel combinators" =
 
 test "tasks run concurrently" =
   let start = now ()
-  let _ = parallel (mapList (\_ _ -> sleep 0.2) [1 .. 8])
+  let _ = parallel (map (\_ _ -> sleep 0.2) [1 .. 8])
   assert (now () - start < 1.0) "eight sleeps of 0.2s overlap"
 
 test "tasks start tasks in the same scope" =

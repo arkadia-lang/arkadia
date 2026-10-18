@@ -394,7 +394,7 @@ showCon name args = name ++ " " ++ joinWith " " args
 -- used by `deriving Show` for record constructors
 showRecord : String -> List (String, String) -> String
 showRecord name [] = name ++ " {}"
-showRecord name fields = name ++ " { " ++ joinWith ", " (mapList (\(f, v) -> f ++ " = " ++ v) fields) ++ " }"
+showRecord name fields = name ++ " { " ++ joinWith ", " (map (\(f, v) -> f ++ " = " ++ v) fields) ++ " }"
 
 -- ===================================================================
 -- Semigroup / Monoid
@@ -434,33 +434,43 @@ instance Monoid Ordering where
 -- Functor / Applicative / Monad / Foldable / Traversable
 -- ===================================================================
 
--- Functor, Applicative and Monad take pure functions (`<>`): instances may
--- run them later (parsers, state transformers, ...), outside the handlers
--- of the caller. Use mapList / forEach / traverse for effectful mapping.
+-- The methods call the functions they are given right away, so the
+-- functions may perform effects: `map (\x -> println x; x) xs`. A type that
+-- would keep a function to run later (a parser or state transformer built
+-- from functions) cannot be an instance; express such computations with
+-- effects instead (see Std.Parser).
 class Functor f where
-  map : (a -> <> b) -> f a -> f b
+  map : (a -> b) -> f a -> f b
 
 class Functor f => Applicative f where
   pure : a -> f a
-  (<*>) : f (a -> <> b) -> f a -> f b
+  (<*>) : f (a -> <e> b) -> f a -> <e> f b
 
 class Applicative m => Monad m where
-  (>>=) : m a -> (a -> <> m b) -> m b
+  (>>=) : m a -> (a -> m b) -> m b
 
+-- `toList`, `length` and `isEmpty` default to folds; instances that know
+-- them directly override them.
 class Foldable t where
   foldr : (a -> b -> b) -> b -> t a -> b
   foldl : (b -> a -> b) -> b -> t a -> b
+  toList : t a -> List a
+  toList xs = foldr (\x acc -> x :: acc) [] xs
+  length : t a -> Int
+  length xs = foldl (\n _ -> n + 1) 0 xs
+  isEmpty : t a -> Bool
+  isEmpty xs = foldr (\_ _ -> False) True xs
 
 class (Functor t, Foldable t) => Traversable t where
   traverse : Applicative f => (a -> f b) -> t a -> f (t b)
 
-(<$>) : Functor f => (a -> <> b) -> f a -> f b
+(<$>) : Functor f => (a -> b) -> f a -> f b
 (<$>) = map
 
 (<$) : Functor f => a -> f b -> f a
 x <$ fa = map (const x) fa
 
-andThen : Monad m => (a -> <> m b) -> m a -> m b
+andThen : Monad m => (a -> m b) -> m a -> m b
 andThen f m = m >>= f
 
 sequence : (Traversable t, Applicative f) => t (f a) -> f (t a)
@@ -468,9 +478,6 @@ sequence = traverse id
 
 forEach : Foldable t => t a -> (a -> Unit) -> Unit
 forEach xs f = foldl (\_ x -> f x) () xs
-
-toList : Foldable t => t a -> List a
-toList xs = reverse (foldl (\acc x -> x :: acc) [] xs)
 
 foldMap : (Foldable t, Monoid m) => (a -> m) -> t a -> m
 foldMap f xs = foldr (\x acc -> f x <> acc) empty xs
@@ -490,9 +497,6 @@ any p xs = foldl (\acc x -> acc || p x) False xs
 elem : (Foldable t, Eq a) => a -> t a -> Bool
 elem x xs = any (\y -> y == x) xs
 
-count : Foldable t => t a -> Int
-count xs = foldl (\n _ -> n + 1) 0 xs
-
 maximum : Ord a => List a -> Option a
 maximum [] = None
 maximum (x :: xs) = Some (foldl max x xs)
@@ -504,11 +508,7 @@ minimum (x :: xs) = Some (foldl min x xs)
 -- List instances
 
 instance Functor List where
-  map f xs = mapList f xs
-
--- Map over a list with a function that may perform effects.
-mapList : (a -> b) -> List a -> List b
-mapList f xs = reverse (mapRev f xs [])
+  map f xs = reverse (mapRev f xs [])
 
 private mapRev : (a -> b) -> List a -> List b -> List b
 mapRev _ [] acc = acc
@@ -525,6 +525,10 @@ instance Foldable List where
   foldr f z xs = foldl (\acc x -> f x acc) z (reverse xs)
   foldl f z [] = z
   foldl f z (x :: xs) = foldl f (f z x) xs
+  toList xs = xs
+  length xs = lengthAcc xs 0
+  isEmpty [] = True
+  isEmpty _ = False
 
 instance Traversable List where
   traverse f xs = foldr (\x acc -> map (\y ys -> y :: ys) (f x) <*> acc) (pure []) xs
@@ -632,9 +636,6 @@ mapErr f (Err e) = Err (f e)
 -- Lists
 -- ===================================================================
 
-length : List a -> Int
-length xs = lengthAcc xs 0
-
 private lengthAcc : List a -> Int -> Int
 lengthAcc [] n = n
 lengthAcc (_ :: xs) n = lengthAcc xs (n + 1)
@@ -653,7 +654,7 @@ concat : List (List a) -> List a
 concat xss = foldr append [] xss
 
 concatMap : (a -> List b) -> List a -> List b
-concatMap f xs = concat (mapList f xs)
+concatMap f xs = concat (map f xs)
 
 filter : (a -> Bool) -> List a -> List a
 filter p xs = reverse (filterAcc p xs [])
@@ -730,7 +731,7 @@ zipWithAcc f (x :: xs) (y :: ys) acc = zipWithAcc f xs ys (f x y :: acc)
 zipWithAcc _ _ _ acc = acc
 
 unzip : List (a, b) -> (List a, List b)
-unzip ps = (mapList fst ps, mapList snd ps)
+unzip ps = (map fst ps, map snd ps)
 
 enumerate : List a -> List (Int, a)
 enumerate xs = zip (range 0 (length xs)) xs
@@ -767,10 +768,6 @@ lookup _ [] = None
 lookup k ((k2, v) :: rest)
   | k == k2 = Some v
   | otherwise = lookup k rest
-
-isEmpty : List a -> Bool
-isEmpty [] = True
-isEmpty _ = False
 
 intersperse : a -> List a -> List a
 intersperse _ [] = []

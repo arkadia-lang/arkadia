@@ -127,7 +127,7 @@ test "static files" =
   let css = fetchFile "/static/css/site.css"
   assertEq (Http.responseBody css, Http.responseHeader "Content-Type" css) ("body {}", Some "text/css; charset=utf-8")
   assertEq (Http.responseBody (fetchFile "/static")) "<h1>hi</h1>"
-  assertEq (mapList (\p -> Http.status (fetchFile p)) ["/static/missing", "/static/../NetTests.ark", "/static/.secret", "/static/css"]) [404, 404, 404, 404]
+  assertEq (map (\p -> Http.status (fetchFile p)) ["/static/missing", "/static/../NetTests.ark", "/static/.secret", "/static/css"]) [404, 404, 404, 404]
   let _ = IO.removeAll dir
   ()
 
@@ -177,8 +177,8 @@ test "requests are handled in parallel" =
     , -- a handler can start tasks of its own
       get "/fib/:n" (\req ->
         let n = parseInt (param "n" req) |> orHalt (badRequest "n")
-        let tasks = mapList (\i -> spawn (\_ -> fib i)) [n, n + 1]
-        text (show (sum (mapList await tasks))))
+        let tasks = map (\i -> spawn (\_ -> fib i)) [n, n + 1]
+        text (show (sum (map await tasks))))
     , get "/spin" (\_ -> finally (\_ -> text (show (spin 0))) (\_ -> writeAtomic cancelled True))
     , post "/stop" (\_ ->
       Http.closeServer srv

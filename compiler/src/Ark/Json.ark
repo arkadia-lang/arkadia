@@ -63,7 +63,7 @@ sepBy f xs acc = match xs with
 
 -- A JSON string literal (HTML-safe, like Go).
 quote : String -> String
-quote s = "\"" ++ concatStrings (mapList escapeChar (chars s)) ++ "\""
+quote s = "\"" ++ concatStrings (map escapeChar (chars s)) ++ "\""
 
 private escapeChar : Char -> String
 escapeChar c = match c with

@@ -179,7 +179,7 @@ mapExpr : (CExpr -> <IO> CExpr) -> CExpr -> <IO> CExpr
 mapExpr f e = match e with
   CApp fn args ->
     let fn2 = mapExpr f fn
-    let args2 = mapList (mapExpr f) args
+    let args2 = map (mapExpr f) args
     f (CApp fn2 args2)
   CLam (Lam ps b ts) -> f (CLam (Lam ps (mapExpr f b) ts))
   CLet n v b ->
@@ -188,16 +188,16 @@ mapExpr f e = match e with
     f (CLet n v2 b2)
   CLetRec names lams b ->
     let b2 = mapExpr f b
-    let lams2 = mapList (mapLam f) lams
+    let lams2 = map (mapLam f) lams
     f (CLetRec names lams2 b2)
-  CCon ci args -> f (CCon ci (mapList (mapExpr f) args))
+  CCon ci args -> f (CCon ci (map (mapExpr f) args))
   CMatch scruts rows wh ->
-    let scruts2 = mapList (mapExpr f) scruts
-    let rows2 = mapList (\(Row pats body guards) ->
+    let scruts2 = map (mapExpr f) scruts
+    let rows2 = map (\(Row pats body guards) ->
       let body2 = match body with
         Some b -> Some (mapExpr f b)
         None -> None
-      let guards2 = mapList (\(c, b) ->
+      let guards2 = map (\(c, b) ->
         let c2 = mapExpr f c
         (c2, mapExpr f b)) guards
       Row pats body2 guards2) rows
@@ -211,11 +211,11 @@ mapExpr f e = match e with
   CHandle (Handle eff body ret ops usesK tail direct sret sops) ->
     let body2 = mapExpr f body
     let ret2 = mapOptLam f ret
-    let ops2 = mapList (mapLam f) ops
+    let ops2 = map (mapLam f) ops
     let sret2 = mapOptLam f sret
-    let sops2 = mapList (mapLam f) sops
+    let sops2 = map (mapLam f) sops
     f (CHandle (Handle eff body2 ret2 ops2 usesK tail direct sret2 sops2))
-  CConcat ps -> f (CConcat (mapList (mapExpr f) ps))
+  CConcat ps -> f (CConcat (map (mapExpr f) ps))
   CMask effs b -> f (CMask effs (mapExpr f b))
   _ -> f e
 

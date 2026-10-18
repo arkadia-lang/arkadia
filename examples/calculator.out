@@ -2,5 +2,5 @@
 (1 + 2) * 3 = 9
 100 / (5 - 5): division by zero
 2 * (3 + 4) - 10 / 2 = 9
-1 +: syntax error
-Some (BinOp '+' (Lit 1) (Lit 2), [])
+1 +: line 1, column 3: expected end of input, found '+'
+Ok (BinOp '+' (Lit 1) (Lit 2))

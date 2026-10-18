@@ -19,12 +19,12 @@ drainBack q = match Queue.popBack q with
 test "queue is first in, first out" =
   let q = foldl (\q x -> Queue.push x q) Queue.empty [1 .. 5]
   assertEq (drainQueue q) [1, 2, 3, 4, 5]
-  assertEq (Queue.size q, Queue.peek q, Queue.peekBack q) (5, Some 1, Some 5)
+  assertEq (length q, Queue.peek q, Queue.peekBack q) (5, Some 1, Some 5)
   assertEq (Queue.pop (Queue.empty : Queue.Queue Int)) None
 
 test "queue works from both ends" =
   let q = Queue.pushFront 0 (Queue.push 4 (Queue.fromList [1, 2, 3]))
-  assertEq (Queue.toList q) [0, 1, 2, 3, 4]
+  assertEq (toList q) [0, 1, 2, 3, 4]
   assertEq (drainBack q) [4, 3, 2, 1, 0]
   assertEq (drainBack (Queue.fromList [1, 2, 3])) [3, 2, 1]
   assertEq (drainQueue (Queue.reverse q)) [4, 3, 2, 1, 0]
@@ -33,14 +33,14 @@ test "queue alternating ends" =
   let q = Queue.fromList [1 .. 6]
   let take2 q = match Queue.pop q with
     Some (a, q2) -> match Queue.popBack q2 with
-      Some (b, q3) -> (a, b, Queue.size q3)
+      Some (b, q3) -> (a, b, length q3)
       None -> (a, 0, 0)
     None -> (0, 0, 0)
   assertEq (take2 q) (1, 6, 4)
 
 test "queue instances" =
   let q = Queue.fromList [1, 2, 3]
-  assertEq (sum q, Queue.toList (map (* 2) q)) (6, [2, 4, 6])
+  assertEq (sum q, toList (map (* 2) q)) (6, [2, 4, 6])
   assertEq (Queue.append q (Queue.singleton 4) == Queue.fromList [1, 2, 3, 4]) True
   assertEq (show q) "Queue.fromList [1, 2, 3]"
 
@@ -75,6 +75,6 @@ test "ordering helpers" =
   assert (between 1 3 2 && not (between 1 3 4)) "between"
 
 test "queues and heaps are monoids and interpolate" =
-  assertEq (Queue.toList (Queue.fromList [1, 2] <> Queue.fromList [3])) [1, 2, 3]
+  assertEq (toList (Queue.fromList [1, 2] <> Queue.fromList [3])) [1, 2, 3]
   assertEq (Heap.toSortedList (Heap.fromList [5, 1] <> Heap.fromList [3])) [1, 3, 5]
   assertEq "${Queue.fromList [1]} ${Heap.fromList [2]}" "Queue.fromList [1] Heap.fromList [2]"

@@ -147,7 +147,7 @@ nextIn rest set = match rest with
 
 source : Repl -> List String -> <IO> String
 source (Repl _ imports defs _ _ _) extra =
-  "module Main\n\n" ++ concatStrings (mapList (\i -> i ++ "\n") (readRef imports)) ++ "\n" ++ concatStrings (mapList (\d -> d ++ "\n\n") (readRef defs ++ extra))
+  "module Main\n\n" ++ concatStrings (map (\i -> i ++ "\n") (readRef imports)) ++ "\n" ++ concatStrings (map (\d -> d ++ "\n\n") (readRef defs ++ extra))
 
 -- Load the definitions plus extra ones: the loader and the result.
 loadDefs : Repl -> List String -> <IO> (Loader, Result (List Diag) Program)
@@ -190,7 +190,7 @@ showType (r@(Repl _ _ _ _ _ counter)) e =
           let (labels, _) = flattenRow eff
           let performs = match labels with
             [] -> ""
-            _ -> "  (performs ${joinWith ", " (mapList typeString labels)})"
+            _ -> "  (performs ${joinWith ", " (map typeString labels)})"
           println "${e} : ${schemeString (Scheme ks ns ps res)}${performs}"
         _ -> ()
 
@@ -220,7 +220,7 @@ eval (r@(Repl root _ _ dir _ _)) e =
       Err e1 ->
         -- prefer the error of the printing variant unless it only
         -- complains about a missing Show instance
-        let text (_, errs) = joinWith "\n" (mapList diagString errs)
+        let text (_, errs) = joinWith "\n" (map diagString errs)
         let t0 = text e0
         let t1 = text e1
         match contains "no instance for Show" t1 || contains "type mismatch" t1 && not (contains "main" t0) with

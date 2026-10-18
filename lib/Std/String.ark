@@ -63,7 +63,7 @@ concat ss = join "" ss
 
 -- Apply a function to every character.
 map : (Char -> Char) -> String -> String
-map f s = fromChars (mapList f (chars s))
+map f s = fromChars (Prelude.map f (chars s))
 
 -- Keep the characters satisfying p.
 filter : (Char -> Bool) -> String -> String

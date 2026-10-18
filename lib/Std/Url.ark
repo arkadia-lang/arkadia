@@ -79,7 +79,7 @@ prefixed pre s = pre ++ s
 -- Decode "a=1&b=x+y&flag" into [("a", "1"), ("b", "x y"), ("flag", "")].
 parseQuery : String -> List (String, String)
 parseQuery "" = []
-parseQuery q = q |> split "&" |> filter (\p -> p != "") |> mapList queryPair
+parseQuery q = q |> split "&" |> filter (\p -> p != "") |> map queryPair
 
 private queryPair : String -> (String, String)
 queryPair p = match S.splitOnce "=" p with
@@ -91,7 +91,7 @@ decodeLenient s = withDefault s (decode s)
 
 -- Encode pairs as a query string (without the leading "?").
 renderQuery : List (String, String) -> String
-renderQuery kvs = joinWith "&" (mapList (\(k, v) -> encode k ++ "=" ++ encode v) kvs)
+renderQuery kvs = joinWith "&" (map (\(k, v) -> encode k ++ "=" ++ encode v) kvs)
 
 -- Append query parameters to a URL.
 withQuery : String -> List (String, String) -> String
@@ -106,4 +106,4 @@ lookupParam name kvs = lookup name kvs
 
 -- Every value of a repeated parameter: "tag=a&tag=b".
 lookupAll : String -> List (String, String) -> List String
-lookupAll name kvs = kvs |> filter (\(k, _) -> k == name) |> mapList snd
+lookupAll name kvs = kvs |> filter (\(k, _) -> k == name) |> map snd

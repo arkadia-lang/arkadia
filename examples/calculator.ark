@@ -1,60 +1,8 @@
--- Monadic parser combinators (higher-kinded type classes) and an
--- expression evaluator using pattern matching.
+-- An expression evaluator: a parser built on algebraic effects (Std.Parser),
+-- pattern matching on the syntax tree, and evaluation in the Result monad.
 module Main
 
-type Parser a = Parser (List Char -> Option (a, List Char))
-
-runParser : Parser a -> List Char -> Option (a, List Char)
-runParser (Parser p) input = p input
-
-instance Functor Parser where
-  map f (Parser p) = Parser (\input -> match p input with
-    None -> None
-    Some (x, rest) -> Some (f x, rest))
-
-instance Applicative Parser where
-  pure x = Parser (\input -> Some (x, input))
-  pf <*> px = pf >>= (\f -> map f px)
-
-instance Monad Parser where
-  Parser p >>= f = Parser (\input -> match p input with
-    None -> None
-    Some (x, rest) -> runParser (f x) rest)
-
--- choice: try the first parser, then the second
-infixl 3 <|>
-
-(<|>) : Parser a -> Parser a -> Parser a
-Parser p <|> Parser q = Parser (\input -> match p input with
-  None -> q input
-  result -> result)
-
--- `ok` runs later, inside the parser, so it must be pure: `<>`
-satisfy : (Char -> <> Bool) -> Parser Char
-satisfy ok = Parser (\input -> match input with
-  c :: rest | ok c -> Some (c, rest)
-  _ -> None)
-
-char : Char -> Parser Char
-char c = satisfy (\d -> d == c)
-
-many : Parser a -> Parser (List a)
-many p = many1 p <|> pure []
-
-many1 : Parser a -> Parser (List a)
-many1 p = p >>= (\x -> map (\xs -> x :: xs) (many p))
-
-spaces : Parser Unit
-spaces = map (const ()) (many (satisfy isSpace))
-
-token : Parser a -> Parser a
-token p = p >>= (\x -> map (const x) spaces)
-
-symbol : Char -> Parser Char
-symbol c = token (char c)
-
-number : Parser Int
-number = token (map (\ds -> withDefault 0 (parseInt (fromChars ds))) (many1 (satisfy isDigit)))
+import Std.Parser (..)
 
 -- ------------------------------------------------------------ syntax tree
 
@@ -63,22 +11,30 @@ type Expr
   | BinOp Char Expr Expr
   deriving (Show)
 
--- chainl1: left-associative operators
-chainl1 : Parser Expr -> Parser Char -> Parser Expr
-chainl1 p op =
-  let rest acc = (op >>= (\o -> p >>= (\rhs -> rest (BinOp o acc rhs)))) <|> pure acc
-  p >>= rest
+-- ------------------------------------------------------------ parser
 
-expr : Unit -> Parser Expr
-expr () = chainl1 (term ()) (symbol '+' <|> symbol '-')
+operator : String -> Unit -> <ParseInput, Fail> (Expr -> Expr -> Expr)
+operator ops () =
+  let op = lexeme (\_ -> oneOf ops)
+  BinOp op
 
-term : Unit -> Parser Expr
-term () = chainl1 (factor ()) (symbol '*' <|> symbol '/')
+expr : Unit -> <ParseInput, Fail> Expr
+expr () = chainl1 term (operator "+-")
 
-factor : Unit -> Parser Expr
-factor () =
-  map Lit number <|> Parser (\input ->
-    runParser (symbol '(' >>= (\_ -> expr () >>= (\e -> map (const e) (symbol ')')))) input)
+term : Unit -> <ParseInput, Fail> Expr
+term () = chainl1 factor (operator "*/")
+
+factor : Unit -> <ParseInput, Fail> Expr
+factor () = alt (\_ -> Lit (lexeme integer)) (\_ -> between (\_ -> symbol "(") (\_ -> symbol ")") expr)
+
+program : Unit -> <ParseInput, Fail> Expr
+program () =
+  spaces ()
+  let e = expr ()
+  eof ()
+  e
+
+-- ------------------------------------------------------------ evaluation
 
 eval : Expr -> Result String Int
 eval (Lit n) = Ok n
@@ -93,13 +49,13 @@ eval (BinOp op a b) =
           | otherwise -> Ok (x / y)))
 
 calculate : String -> String
-calculate src = match runParser (spaces >>= (\_ -> expr ())) (chars src) with
-  Some (e, []) -> match eval e with
+calculate src = match runParser program src with
+  Ok e -> match eval e with
     Ok v -> "${src} = ${v}"
     Err msg -> "${src}: ${msg}"
-  _ -> "${src}: syntax error"
+  Err msg -> "${src}: ${msg}"
 
 main () =
   forEach ["1 + 2 * 3", "(1 + 2) * 3", "100 / (5 - 5)", "2 * (3 + 4) - 10 / 2", "1 +"] (\s ->
     println (calculate s))
-  printLn (runParser (expr ()) (chars "1+2"))
+  printLn (runParser expr "1+2")

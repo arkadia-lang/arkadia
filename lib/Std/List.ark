@@ -239,7 +239,7 @@ swap i j xs = match (nth i xs, nth j xs) with
 -- ===================================================================
 
 mapIndexed : (Int -> a -> b) -> List a -> List b
-mapIndexed f xs = mapList (\(i, x) -> f i x) (enumerate xs)
+mapIndexed f xs = map (\(i, x) -> f i x) (enumerate xs)
 
 -- foldl with the element's index.
 foldlIndexed : (b -> Int -> a -> b) -> b -> List a -> b
@@ -318,7 +318,7 @@ zipWith3Acc f (x :: xs) (y :: ys) (z :: zs) acc = zipWith3Acc f xs ys zs (f x y 
 zipWith3Acc _ _ _ _ acc = acc
 
 unzip3 : List (a, b, c) -> (List a, List b, List c)
-unzip3 ts = (mapList (\(a, _, _) -> a) ts, mapList (\(_, b, _) -> b) ts, mapList (\(_, _, c) -> c) ts)
+unzip3 ts = (map (\(a, _, _) -> a) ts, map (\(_, b, _) -> b) ts, map (\(_, _, c) -> c) ts)
 
 -- Pairs of consecutive elements: pairwise [1, 2, 3] == [(1, 2), (2, 3)]
 pairwise : List a -> List (a, a)
@@ -328,7 +328,7 @@ pairwise xs = match xs with
 
 -- All pairs (x, y) with x from the first list and y from the second.
 cartesian : List a -> List b -> List (a, b)
-cartesian xs ys = concatMap (\x -> mapList (\y -> (x, y)) ys) xs
+cartesian xs ys = concatMap (\x -> map (\y -> (x, y)) ys) xs
 
 -- ===================================================================
 -- Grouping

@@ -108,7 +108,7 @@ formParam name req = lookup name (formParams req)
 cookies : Request -> List (String, String)
 cookies req = match header "Cookie" req with
   None -> []
-  Some line -> line |> split ";" |> mapList trim |> filter (\c -> c != "") |> mapList cookiePair
+  Some line -> line |> split ";" |> map trim |> filter (\c -> c != "") |> map cookiePair
 
 private cookiePair : String -> (String, String)
 cookiePair c = match S.splitOnce "=" c with
@@ -349,10 +349,10 @@ anyMethod pattern h = route "*" pattern h
 
 -- Put routes under a path prefix: scope "/api" [get "/users" users]
 scope : String -> List (Route e) -> List (Route e)
-scope prefix routes = mapList (\(Route m pat h) -> Route m (append (parsePattern prefix) pat) h) routes
+scope prefix routes = map (\(Route m pat h) -> Route m (append (parsePattern prefix) pat) h) routes
 
 parsePattern : String -> List Segment
-parsePattern pattern = mapList parseSegment (pathSegments pattern)
+parsePattern pattern = map parseSegment (pathSegments pattern)
 
 private parseSegment : String -> Segment
 parseSegment s = match S.stripPrefix ":" s with

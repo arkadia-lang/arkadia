@@ -280,7 +280,7 @@ testFilter argv run rest = match argv with
 runTests : String -> Loader -> Program -> Target -> <IO> Int
 runTests root l (prog@(Program mods g _)) (t@(Target _ _ _ natives)) =
   -- keep only tests from the user's own modules
-  let own = mapList moduleName (filter (\m -> not (startsWith "<std>" (moduleFile m))) mods)
+  let own = map moduleName (filter (\m -> not (startsWith "<std>" (moduleFile m))) mods)
   modifyRef (gTests g) (filter (\(TestInfo _ _ m) -> elem m own))
   match readRef (gTests g) with
     [] ->
@@ -428,7 +428,7 @@ fmtFail file src errs =
 docText : String -> String
 docText doc = match doc with
   "" -> ""
-  _ -> concatStrings (mapList (\line -> trimEnd ("    " ++ line) ++ "\n") (split "\n" doc))
+  _ -> concatStrings (map (\line -> trimEnd ("    " ++ line) ++ "\n") (split "\n" doc))
 
 private trimEnd : String -> String
 trimEnd s = fromChars (reverse (dropWhile (\c -> c == ' ') (reverse (chars s))))
@@ -439,19 +439,19 @@ moduleDoc : Map.Map String String -> String -> Exports -> <IO> String
 moduleDoc srcs file ex =
   let mod = exportsModule ex
   let doc p n = docText (docComment srcs p n)
-  let types = concatStrings (mapList (\(n, t) -> match t with
+  let types = concatStrings (map (\(n, t) -> match t with
     TEType ti | startsWith (mod ++ ".") (typeInfoName ti) ->
-      let ctors = mapList (ctorString ti) (typeInfoCtors ti)
+      let ctors = map (ctorString ti) (typeInfoCtors ti)
       let ctorText = match ctors with
         [] -> ""
         _ -> " = " ++ joinWith " | " ctors
       "\ntype " ++ joinWith " " (n :: typeInfoParams ti) ++ ctorText ++ "\n" ++ doc (typeInfoPos ti) n
     TEClass cl | classModule cl == mod ->
-      "\nclass ${n}\n" ++ doc (classPos cl) n ++ concatStrings (mapList (\m -> "  ${methodName m} : ${schemeString (methodScheme m)}\n") (classMethods cl))
+      "\nclass ${n}\n" ++ doc (classPos cl) n ++ concatStrings (map (\m -> "  ${methodName m} : ${schemeString (methodScheme m)}\n") (classMethods cl))
     TEEffect ei | effectModule ei == mod ->
-      "\neffect ${n}\n" ++ doc (effectPos ei) n ++ concatStrings (mapList (\o -> "  ${opName o} : ${schemeString (opScheme o)}\n") (effectOps ei))
+      "\neffect ${n}\n" ++ doc (effectPos ei) n ++ concatStrings (map (\o -> "  ${opName o} : ${schemeString (opScheme o)}\n") (effectOps ei))
     _ -> "") (Map.toList (readRef (exportsTypes ex))))
-  let values = concatStrings (mapList (\(n, v) -> match (valueMethod v, valueOp v, readRef (valueSchemeRef v)) with
+  let values = concatStrings (map (\(n, v) -> match (valueMethod v, valueOp v, readRef (valueSchemeRef v)) with
     (None, None, Some sc) | startsWith (mod ++ ".") (valueSym v) -> "${n} : ${schemeString sc}\n" ++ doc (valuePos v) n
     _ -> "") (Map.toList (readRef (exportsValues ex))))
   let header = match leadingComment srcs file with

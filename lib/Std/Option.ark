@@ -2,11 +2,8 @@
 --
 --   import Std.Option as Option
 --   Option.map2 (+) (Some 1) (Some 2)            -- Some 3
---   Option.withDefault 0 (Option.map (* 2) o)
---   o |> Option.andThen parseInt |> Option.isSome
---
--- Unlike the Functor method `map`, `Option.map` and `Option.andThen` take
--- functions that may perform effects.
+--   Option.withDefault 0 (map (* 2) o)      -- map and andThen are the
+--   o |> andThen parseInt |> Option.isSome   -- Functor / Monad ones
 module Std.Option
 
 -- ===================================================================
@@ -18,10 +15,6 @@ isSome o = Prelude.isSome o
 
 isNone : Option a -> Bool
 isNone o = Prelude.isNone o
-
--- Does the option hold this value?
-contains : Eq a => a -> Option a -> Bool
-contains x o = exists (\y -> y == x) o
 
 -- Does the option hold a value satisfying p?
 exists : (a -> Bool) -> Option a -> Bool
@@ -65,15 +58,6 @@ withDefaultLazy f None = f ()
 -- Transforming
 -- ===================================================================
 
-map : (a -> b) -> Option a -> Option b
-map _ None = None
-map f (Some x) = Some (f x)
-
--- Chain a computation that may itself produce None.
-andThen : (a -> Option b) -> Option a -> Option b
-andThen _ None = None
-andThen f (Some x) = f x
-
 filter : (a -> Bool) -> Option a -> Option a
 filter p (Some x)
   | p x = Some x
@@ -113,10 +97,6 @@ flatten None = None
 -- ===================================================================
 -- Converting
 -- ===================================================================
-
-toList : Option a -> List a
-toList (Some x) = [x]
-toList None = []
 
 toResult : e -> Option a -> Result e a
 toResult _ (Some x) = Ok x

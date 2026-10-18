@@ -18,7 +18,7 @@ type P = P (Arr.Array Token) Int (Ref Int) (Ref Int) (Ref Bool) (Ref Bool) (Ref 
 newParser : List Token -> <IO> P
 newParser toks =
   let arr = Arr.fromList toks
-  P arr (Arr.length arr) (newRef 0) (newRef 0) (newRef False) (newRef False) (newRef None)
+  P arr (length arr) (newRef 0) (newRef 0) (newRef False) (newRef False) (newRef None)
 
 pIndex : P -> Ref Int
 pIndex (P _ _ i _ _ _ _) = i
@@ -572,7 +572,7 @@ recordFields p types names = match at p RBRACE with
     let group = loop [tokText (expect p LIDENT)]
     expect_ p COLON
     let ty = typeTop p
-    let types2 = types ++ mapList (\_ -> ty) group
+    let types2 = types ++ map (\_ -> ty) group
     let names2 = names ++ group
     match accept p COMMA with
       True -> recordFields p types2 names2
@@ -1417,4 +1417,4 @@ interp t =
       match at sub EOF with
         True -> x
         False -> unexpected sub "'}'"
-  EInterp (tokPos t) (mapList part (tokParts t))
+  EInterp (tokPos t) (map part (tokParts t))

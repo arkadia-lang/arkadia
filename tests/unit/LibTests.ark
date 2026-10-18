@@ -49,7 +49,7 @@ test "mutable arrays" =
   assertEq (MA.toList a) [0, 2, 5]
   let frozen = MA.freeze a
   MA.set 0 9 a
-  assertEq (Array.toList frozen, MA.foldl (+) 0 a) ([0, 2, 5], 16)
+  assertEq (toList frozen, MA.foldl (+) 0 a) ([0, 2, 5], 16)
 
 test "hash maps" =
   let m = HM.fromList [("b", 1), ("a", 2)]
