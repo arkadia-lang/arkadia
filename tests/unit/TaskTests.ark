@@ -107,14 +107,14 @@ test "uncancellable sections finish" =
 test "a failing task cancels its scope" =
   -- the body and the other task are cancelled
   assertEq (catchError spawnAndFail) (Err "boom")
-  assertEq (catchError (\_ -> runAsync (\_ -> awaitOutcome (spawn (\_ -> error "awaited"))))) (Err "awaited")
-  assertEq (catchError (\_ -> runAsync (\_ -> await (spawn (\_ -> await (spawn (\_ -> error "inner"))))))) (Err "inner")
+  assertEq (catchError (\_ -> runAsync (\_ -> awaitOutcome (spawn (\_ -> error "awaited"))))) (Err "awaited" : Result String (Outcome Int))
+  assertEq (catchError (\_ -> runAsync (\_ -> await (spawn (\_ -> await (spawn (\_ -> error "inner"))))))) (Err "inner" : Result String Int)
   -- a task that catches its errors does not fail
   let r = runAsync (\_ ->
     let t = spawn (\_ -> catchError (\_ -> error "caught"))
     let u = spawn (\_ -> fib 10)
     (await t, await u))
-  assertEq r (Err "caught", 55)
+  assertEq r ((Err "caught" : Result String Int), 55)
 
 spawnAndFail : Unit -> <IO> Unit
 spawnAndFail () = runAsync (\_ ->

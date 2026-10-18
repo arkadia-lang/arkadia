@@ -166,19 +166,13 @@ entailAcc gs cls t = match gs with
           Some path -> Some (foldl (\acc idx -> DictSuper acc idx) d path)
           None -> entailAcc rest cls t
 
--- Resolve a constraint on type variables that do not appear in any type by
--- defaulting them to Unit.
+-- Report a constraint on type variables that do not appear in any type:
+-- nothing determines which instance to use.
 defaultAmbiguous : Checker -> Wanted -> <IO> Unit
 defaultAmbiguous c w =
   let Wanted cls ty _ p = w
-  forEach (metasOf ty) (\m -> match isStarKind (metaKind m) with
-    True -> writeRef (metaRef m) (Some (tUnit c))
-    False -> ())
-  match solve c [w] with
-    [] -> ()
-    _ ->
-      errorf c p "ambiguous type: cannot determine the type for constraint ${shortName (className cls)} ${typeString (zonk ty)}"
-      setSol w errDict
+  errorf c p "ambiguous type: cannot determine the type for constraint ${shortName (className cls)} ${typeString (zonk ty)}; add a type annotation"
+  setSol w errDict
 
 flushRoot : Checker -> <IO> Unit
 flushRoot c =
