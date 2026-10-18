@@ -47,7 +47,7 @@ test "files" =
   ok (makeDir (dir </> "sub"))
   ok (writeLines (dir </> "a.txt") ["one", "two"])
   ok (copyFile (dir </> "a.txt") (dir </> "sub" </> "b.txt"))
-  assertEq (readLines (dir </> "sub" </> "b.txt")) (Ok ["one", "two", ""])
+  assertEq (readLines (dir </> "sub" </> "b.txt")) (Ok ["one", "two"])
   ok (renameFile (dir </> "a.txt") (dir </> "c.txt"))
   assertEq (map sort (walkFiles dir)) (Ok [dir </> "c.txt", dir </> "sub" </> "b.txt"])
   assert (isDirectory dir && not (isDirectory (dir </> "c.txt"))) "isDirectory"

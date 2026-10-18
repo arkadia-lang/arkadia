@@ -71,7 +71,7 @@ readMore input = match continues input with
 
 continues : String -> Bool
 continues s =
-  let ls = lines s
+  let ls = split "\n" s
   let last = trim (lastOf ls)
   match words (at 0 ls) with
     w :: _ | elem w ["type", "class", "instance", "effect"] ->
@@ -126,7 +126,7 @@ isDefinition s = match words s with
   first :: _ | elem first ["type", "alias", "class", "instance", "effect", "foreign", "infixl", "infixr", "infix", "private"] -> True
   _ ->
     -- `name args = ...` or `name : type` at top level (not `==`)
-    let line = at 0 (lines s)
+    let line = at 0 (split "\n" s)
     defScan (chars line) '\0' 0
 
 private defScan : List Char -> Char -> Int -> Bool
