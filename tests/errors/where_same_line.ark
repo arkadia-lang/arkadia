@@ -1,0 +1,4 @@
+f x = y
+  where y = x * 2
+
+main () = println "${f 1}"
