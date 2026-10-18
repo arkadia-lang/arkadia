@@ -112,6 +112,8 @@ solveQueue c queue residual = match queue with
       let t = whnf c ty
       let (h, args) = headOf t
       match h with
+        -- an application of a type family that may still reduce
+        TCon hn _ | isFamily c hn && not (isEmpty (metasOf t)) -> solveQueue c rest (w :: residual)
         TCon hn _ ->
           match lookupInstance c (className cls) hn with
             Some inst | length args == instNVars inst ->
