@@ -32,6 +32,7 @@ main () =
 | 正格評価 | 引数は左から右へ評価してから関数を呼ぶ（値呼び） |
 | アドホック多相 | 型クラス（スーパークラス・デフォルト実装・`deriving (Eq, Ord, Show)`）を辞書渡しで実装 |
 | 高カインド | `Functor f`, `Monad m`, `Foldable t` など、型構築子を抽象化できる。カインドは推論される |
+| インデックス型 | データ型をカインドとして使い（`Vec (n : Nat) a`）、構築子をシグネチャで宣言する GADT と閉じた型族で、長さ付きリストや型付きの式を表せる。マッチで型が精密化され、起こりえない場合は網羅性検査が要求しない |
 | レコード | 名前付きフィールド、`u.name` / `.name` / `{ u \| age = 1 }` / `User { name, age }` パターン。フィールドは型主導で解決 |
 | 代数的エフェクト | `effect` 宣言・`handle ... with` によるディープハンドラ。エフェクトは行多相の型で追跡され、未処理のエフェクトはコンパイルエラー。エビデンス渡しで実装され、大域的な状態を持たない |
 | 並列実行 | `Std.Task` の構造化されたタスク（`runAsync` / `spawn` / `await`）がゴルーチンとして全プロセッサで並列に動き、Go のスケジューラがプリエンプトする。キャンセル・タイムアウト・失敗の伝播はスコープの木に沿って行われ、コンパイラが挿入するキャンセルポイントで純粋な無限ループも止められる。HTTP サーバは各リクエストを並列に処理する |
@@ -122,6 +123,40 @@ class Shape a where
   area : a -> Float
   describe : a -> String
   describe s = "area = ${area s}"     -- デフォルト実装
+```
+
+### インデックス型（GADT と型族）
+
+```haskell
+type Nat = Z | S Nat                    -- Nat はカインドとして、Z と S は型としても使える
+
+type Vec (n : Nat) a where              -- 構築子をシグネチャで宣言する（GADT）
+  VNil : Vec Z a
+  VCons : a -> Vec n a -> Vec (S n) a
+
+type family Add (n : Nat) (m : Nat) : Nat where
+  Add Z m = m
+  Add (S n) m = S (Add n m)
+
+vhead : Vec (S n) a -> a                -- 空のベクタは渡せないので VNil の場合は不要
+vhead (VCons x _) = x
+
+append : Vec n a -> Vec m a -> Vec (Add n m) a
+append VNil ys = ys
+append (VCons x xs) ys = VCons x (append xs ys)
+
+type Expr a where
+  IntE : Int -> Expr Int
+  Equal : Expr Int -> Expr Int -> Expr Bool
+  If : Expr Bool -> Expr a -> Expr a -> Expr a
+
+eval : Expr a -> a                      -- IntE の腕では a = Int として検査される
+eval e = match e with
+  IntE n -> n
+  Equal x y -> eval x == eval y
+  If c t f -> match eval c with
+    True -> eval t
+    False -> eval f
 ```
 
 ### レコード
@@ -363,6 +398,7 @@ editors/vscode     VS Code 拡張（シンタックスハイライト + LSP ク�
 
 - 継続はワンショット（同じ継続を二度再開すると実行時エラー）。非決定性のような多重再開は未対応です。
 - 型クラスは単一パラメータのみ。
+- インデックス型にはカインド多相がなく、カインドとして使えるのはパラメータを持たない型だけです。GADT の構築子には型クラス制約を付けられません。詳しくは[言語ガイド](docs/guide.md#インデックス型)を参照してください。
 - レコードの更新 `{ r | f = v }` は値の型を変えられません（型パラメータを変える更新は構築し直します）。
 - `Ref`・`MArray`・`HashMap` はタスク間で同時に使えません（データ競合になります）。タスク間の共有には `Std.Channel`・`Std.Atomic`・`Std.Mutex` を使ってください。
 - 標準入力の読み込み（`readLine`）と外部コマンドの実行はキャンセルポイントではありません。
