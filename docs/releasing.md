@@ -4,7 +4,15 @@
    - `compiler/src/Main.ark` の `version`（`ark version` が表示する値。リリースのタグと一致する必要がある）
    - `compiler/ark.toml` の `version`
    - `editors/vscode/package.json` の `version`
-2. `CHANGELOG.md` の `[Unreleased]` の内容を新しいバージョンの節 `## [X.Y.Z] - YYYY-MM-DD` に移し、末尾のリンクを更新する
+2. `CHANGELOG.md` の `## [Unreleased]` の下の内容を、その直後に作る新しいバージョンの節 `## [X.Y.Z] - YYYY-MM-DD`（リリース日）に移し、
+   `[Unreleased]` は空にする。末尾のリンクも更新する
+
+   ```markdown
+   [Unreleased]: https://github.com/verniyyy/arkadia/compare/vX.Y.Z...HEAD
+   [X.Y.Z]: https://github.com/verniyyy/arkadia/releases/tag/vX.Y.Z
+   ```
+
+   （0.1.0 より後のバージョンは `[X.Y.Z]: https://github.com/verniyyy/arkadia/compare/v<前のバージョン>...vX.Y.Z` にし、既存の行は残す）
 3. PR を作って CI が通ったら main にマージする
 4. main の最新コミットにタグを付けて push する
 

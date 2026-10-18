@@ -6,10 +6,6 @@
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-10-18
-
-最初のリリースです。
-
 ### 言語
 
 - 正格評価・静的型付け・全関数カリー化。制御は `match`・ガード・再帰のみ（自己末尾呼び出しはループに最適化）
@@ -35,5 +31,4 @@
   数値（Math / Bits / BigInt）、バイナリ（Bytes / Encoding / Crypto）、入出力（IO / Path / Time / Ref / Args）、
   並行性（Task / Channel / Atomic / Mutex）、ネットワーク（Net / Url / Http のサーバとクライアント）
 
-[Unreleased]: https://github.com/verniyyy/arkadia/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/verniyyy/arkadia/releases/tag/v0.1.0
+[Unreleased]: https://github.com/verniyyy/arkadia/commits/main
