@@ -4,11 +4,11 @@ module Main
 -- doc
 f x =   -- trailing
   -- inside
-  x {- inline -} + 1
+  x + 1   -- inline
 -- before g
 g = """
   raw   text   
 """
-{- multi   
-     line -}
+-- multi
+--    line
 h = 1

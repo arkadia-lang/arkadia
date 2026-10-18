@@ -189,11 +189,6 @@ step lx r
       skipLine lx
       comment lx p
       writeRef (lxSawSpc lx) True
-  | r == '{' && peekAt lx 1 == '-' =
-      let p = pos lx
-      blockComment lx
-      comment lx p
-      writeRef (lxSawSpc lx) True
   | isDigit r = number lx False
   | r == '-' && isDigit (peekAt lx 1) && not (prevEndsExpr lx) = number lx True
   | r == '-' && isDigit (peekAt lx 1) && readRef (lxSawNL lx) = number lx True
@@ -212,29 +207,6 @@ skipLine lx = match atEnd lx || peek lx == '\n' with
   False ->
     let _ = next lx
     skipLine lx
-
-blockComment : Lx -> <IO> Unit
-blockComment lx =
-  let start = pos lx
-  let loop depth = match atEnd lx with
-    True -> errorAt lx start "unterminated block comment"
-    False
-      | peek lx == '{' && peekAt lx 1 == '-' ->
-          let _ = next lx
-          let _ = next lx
-          loop (depth + 1)
-      | peek lx == '-' && peekAt lx 1 == '}' ->
-          let _ = next lx
-          let _ = next lx
-          match depth - 1 == 0 with
-            True -> ()
-            False -> loop (depth - 1)
-      | otherwise ->
-          match next lx with
-            '\n' -> writeRef (lxSawNL lx) True
-            _ -> ()
-          loop depth
-  loop 0
 
 skipWhile : Lx -> (Char -> Bool) -> <IO | e> Unit
 skipWhile lx p = match p (peek lx) with

@@ -14,8 +14,7 @@
 --   - removes trailing whitespace, collapses runs of blank lines into one and
 --     ends the file with a single newline.
 --
--- The contents of multi-line block comments and triple-quoted strings are
--- never touched. As a safety net the result is lexed again and must produce
+-- The contents of comments and triple-quoted strings are never touched. As a safety net the result is lexed again and must produce
 -- the same tokens, layout and comments as the input.
 module Ark.Format
 
@@ -32,7 +31,7 @@ indentStep = 2
 -- A token or a comment of the source, in source order: its offsets, line,
 -- column and last line, the index of the token (-1 for a comment), whether
 -- it is a line comment and whether it is the first item on its line.
-type Item = Item { off : Int, end : Int, line : Int, col : Int, endLine : Int, tok : Int, lineCmt : Bool, first : Bool }
+type Item = Item { off : Int, end : Int, line : Int, col : Int, endLine : Int, tok : Int, first : Bool }
 
 -- The source characters, the tokens (with EOF) and their offsets.
 type Src = Src { chs : Arr.Array Char, toks : Arr.Array Token, spans : Arr.Array (Int, Int) }
@@ -67,12 +66,12 @@ items s comments = finishItems s.chs 0 (mergeItems s 0 (length s.toks - 1) comme
 private mergeItems : Src -> Int -> Int -> List Comment -> List Item -> List Item
 mergeItems s i n cs acc = match cs with
   Comment off end line col :: rest | i >= n || off < fst (Arr.at i s.spans) ->
-    let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = -1, lineCmt = Arr.at off s.chs == '-', first = False }
+    let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = -1, first = False }
     mergeItems s i n rest (it :: acc)
   _ | i < n ->
         let (off, end) = Arr.at i s.spans
         let Pos _ line col = tokPos (tokAt s i)
-        let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = i, lineCmt = False, first = False }
+        let it = Item { off = off, end = end, line = line, col = col, endLine = line, tok = i, first = False }
         mergeItems s (i + 1) n cs (it :: acc)
     | otherwise -> reverse acc
 
@@ -151,7 +150,7 @@ formatTokens s comments = match items s comments with
           writeRef k (readRef k + 1)
         False -> emitStr (MA.at i gaps)
       let t = text s.chs it.off it.end
-      emitStr (match it.lineCmt with
+      emitStr (match it.tok < 0 with
         True -> trimSpacesEnd t
         False -> t))
     emitStr "\n"
@@ -451,12 +450,10 @@ gap sp a b =
   let orig = text s.chs a.end b.off
   let spaced = orig != ""
   match () with
-    -- a token that follows a multi-line comment keeps its column
-    _ | b.tok >= 0 && tokFirst (tokAt s b.tok) -> orig
-      | b.tok < 0 || a.tok < 0 -> match () with
-          _ | b.lineCmt && spaced -> orig -- keeps trailing comments aligned
-            | b.lineCmt || spaced -> " "
-            | otherwise -> ""
+    -- a comment ends its line; spaces before it keep it aligned
+    _ | b.tok < 0 -> match spaced with
+          True -> orig
+          False -> " "
       | otherwise ->
           let ak = tokKind (tokAt s a.tok)
           let bk = tokKind (tokAt s b.tok)
