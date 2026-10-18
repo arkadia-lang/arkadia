@@ -615,11 +615,20 @@ deriveInstances c decls = concat (map (\d -> match d with
               None -> None) deriv
   _ -> []) decls)
 
+-- A pattern binding every field of the constructor (by name for records).
 private ctorPat : Pos -> CtorDecl -> String -> <IO> (Pattern, List Expr)
-ctorPat p (CtorDecl _ name fields _ _) prefix =
+ctorPat p (CtorDecl _ name fields named _) prefix =
   let names = map (\i -> prefix ++ show i) (range 0 (length fields))
-  let pat = mkPCon p "" name (map (mkPVar p) names)
+  let pat = match named with
+    Some fs -> PRec p "" name (zip fs (map (mkPVar p) names)) (newRef None)
+    None -> mkPCon p "" name (map (mkPVar p) names)
   (pat, map (ev p) names)
+
+-- A pattern matching any value built with the constructor.
+private ctorWild : Pos -> CtorDecl -> <IO> Pattern
+ctorWild p (CtorDecl _ name fields named _) = match named with
+  Some _ -> PRec p "" name [] (newRef None)
+  None -> mkPCon p "" name (map (\_ -> PWild p) fields)
 
 private simpleBind : Pos -> String -> List String -> Expr -> <IO> Bind
 simpleBind p name params body = mkBind p name None [Clause p (map (mkPVar p) params) (RBody body)] None
@@ -654,8 +663,8 @@ deriveOrd p ctors selfType =
   match ctors with
     [_] -> simpleBind p "compare" ["x$", "y$"] (EMatch p (pairScrut p) arms)
     _ ->
-      let idxArms = map (\(i, CtorDecl _ name fields _ _) ->
-        Arm p (mkPCon p "" name (map (\_ -> PWild p) fields)) (RBody (mkNum p i))) (indexed ctors)
+      let idxArms = map (\(i, cd) ->
+        Arm p (ctorWild p cd) (RBody (mkNum p i))) (indexed ctors)
       let idx = EMatch p (ev p "v$") idxArms
       let fallback = Arm p (PWild p) (RBody (appE (pv "compare") [appE (ev p "idx$") [ev p "x$"], appE (ev p "idx$") [ev p "y$"]]))
       let m = EMatch p (pairScrut p) (snoc arms fallback)
@@ -724,13 +733,14 @@ errArm p =
   Arm p pat (RBody (appE (mkCon p "#Prelude" "Err") [ev p "e$"]))
 
 -- Match each of the results in turn, passing errors on, and finally
--- return Ok (con b$0 .. b$n).
-private resultChain : Pos -> List Expr -> String -> <IO> Expr
-resultChain p results con =
-  let c0 = mkCon p "" con
-  let final = match results with
-    [] -> c0
-    _ -> appE c0 (map (\i -> ev p ("b$" ++ show i)) (range 0 (length results)))
+-- return Ok (con b$0 .. b$n), or Ok (con { f0 = b$0, .. }) for a record.
+private resultChain : Pos -> List Expr -> String -> Option (List String) -> <IO> Expr
+resultChain p results con named =
+  let args = map (\i -> ev p ("b$" ++ show i)) (range 0 (length results))
+  let final = match (named, results) with
+    (Some fs, _) -> ERecord p "" con (map (\(f, a) -> FieldInit p f a) (zip fs args)) (newRef None)
+    (None, []) -> mkCon p "" con
+    (None, _) -> appE (mkCon p "" con) args
   let okE = appE (mkCon p "#Prelude" "Ok") [final]
   foldr (\(i, r) acc ->
     let err = errArm p
@@ -753,15 +763,15 @@ private deriveFromJson : Pos -> String -> List CtorDecl -> <IO> Bind
 deriveFromJson p typeName ctors =
   let multi = length ctors > 1
   let decode (CtorDecl _ name fields named _) = match named with
-    Some fs -> resultChain p (map (\f -> appE (jv p "fieldOf") [strLit p f, ev p "j$"]) fs) name
+    Some fs -> resultChain p (map (\f -> appE (jv p "fieldOf") [strLit p f, ev p "j$"]) fs) name (Some fs)
     None
-      | isEmpty fields -> resultChain p [] name
-      | not multi && length fields == 1 -> resultChain p [appE (jv p "fromJson") [ev p "j$"]] name
+      | isEmpty fields -> resultChain p [] name None
+      | not multi && length fields == 1 -> resultChain p [appE (jv p "fromJson") [ev p "j$"]] name None
       | otherwise ->
           let results = map (\i -> appE (jv p "elemOf") [mkNum p i, ev p "vs$"]) (range 0 (length fields))
           let scrut = appE (jv p "valuesOf") [mkNum p (length fields), ev p "j$"]
           let err = errArm p
-          let okArm = Arm p (okPat p (mkPVar p "vs$")) (RBody (resultChain p results name))
+          let okArm = Arm p (okPat p (mkPVar p "vs$")) (RBody (resultChain p results name None))
           EMatch p scrut [err, okArm]
   let body = match ctors with
     [cd@(CtorDecl _ name fields None _)] | isEmpty fields -> tagMatch p typeName [tagArm p name (decode cd)]

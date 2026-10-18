@@ -80,8 +80,7 @@ main () =
   println (show (length b.value))
   println (relabel "nums" b).label
   println (show Empty {})
-  -- positional construction and patterns still work
-  let User n a _ = User "dan" 40 []
+  let User { name = n, age = a } = User { name = "dan", age = 40, tags = [] }
   println "${n} ${a}"
   match ann with
     User { age } | age >= 18 -> println "adult"

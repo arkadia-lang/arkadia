@@ -310,6 +310,7 @@ inferExpr c e eff = match e with
     None -> freshType c
     Some ci ->
       writeRef con (Some ci)
+      positionalRecord c p n ci "build" " = ..."
       let (t, _) = instantiate c (ctorScheme ci) p
       record c p n (Some t) None (ctorTypePos ci) "constructor"
       t
@@ -805,7 +806,16 @@ checkPat c pat t seen = match pat with
           errorf c p "constructor '${name}' expects ${ctorArity ci} argument(s), but the pattern has ${length args}"
       | otherwise ->
           writeRef conRef (Some ci)
+          positionalRecord c p name ci "match" ""
           checkPatCon c p name ci args t seen
+
+-- Records are built and matched by field name only.
+private positionalRecord : Checker -> Pos -> String -> CtorInfo -> String -> String -> <IO> Unit
+positionalRecord c p name ci verb suffix = match ctorFieldNames ci with
+  Some names@(_ :: _) ->
+    let fields = joinWith ", " (map (\f -> f ++ suffix) names)
+    errorf c p "'${name}' has named fields; ${verb} it as ${name} { ${fields} }"
+  _ -> ()
 
 private checkPatCon : Checker -> Pos -> String -> CtorInfo -> List Pattern -> Type -> Ref (List String) -> <IO> Unit
 checkPatCon c p name ci args t seen = match ctorRefines (cG c) ci with
