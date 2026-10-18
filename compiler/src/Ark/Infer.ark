@@ -167,11 +167,14 @@ entailAcc gs cls t = match gs with
           None -> entailAcc rest cls t
 
 -- Report a constraint on type variables that do not appear in any type:
--- nothing determines which instance to use.
+-- nothing determines which instance to use. After another error the type
+-- is usually undetermined because of it, so nothing more is reported.
 defaultAmbiguous : Checker -> Wanted -> <IO> Unit
 defaultAmbiguous c w =
   let Wanted cls ty _ p = w
-  errorf c p "ambiguous type: cannot determine the type for constraint ${shortName (className cls)} ${typeString (zonk ty)}; add a type annotation"
+  match errorCount c == 0 with
+    True -> errorf c p "ambiguous type: cannot determine the type for constraint ${shortName (className cls)} ${typeString (zonk ty)}; add a type annotation"
+    False -> ()
   setSol w errDict
 
 flushRoot : Checker -> <IO> Unit
