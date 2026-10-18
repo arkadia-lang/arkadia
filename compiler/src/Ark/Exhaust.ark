@@ -168,7 +168,10 @@ missing c rows tys n = match n == 0 with
     match ti with
       Some con0 ->
         let all = possibleCons c con0 (columnType tys)
-        match allOf (\con -> elem (sconName con) seen) all with
+        -- a constructor that refines types may rule out cases of the
+        -- other columns: split on each of them even if some is not seen
+        let split = allOf (\con -> elem (sconName con) seen) all || refining c con0
+        match split with
           True -> firstMissing c rows tys n all
           False -> match missing c (defaultRows rows) rest (n - 1) with
             None -> None
@@ -209,7 +212,7 @@ possibleCons c con0 t =
   let g = cG c
   let all = siblings g con0
   match t with
-    Some ty | not (startsWith "tuple" (sconType con0)) && typeRefines g (sconType con0) -> filter (\con -> match sconInfo g con with
+    Some ty | refining c con0 -> filter (\con -> match sconInfo g con with
       None -> True
       Some ci ->
         let saved = readRef (cGivens c)
@@ -217,6 +220,10 @@ possibleCons c con0 t =
         writeRef (cGivens c) saved
         ok) all
     _ -> all
+
+-- Whether some constructor of the type of con may refine types.
+private refining : Checker -> SCon -> <IO> Bool
+refining c con = not (startsWith "tuple" (sconType con)) && typeRefines (cG c) (sconType con)
 
 -- The types of the fields of con in a value of type t, assuming the
 -- equations implied by matching it (pushed on the givens).

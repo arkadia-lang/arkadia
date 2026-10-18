@@ -28,6 +28,11 @@ vzip : Vec n a -> Vec n b -> Vec n (a, b)
 vzip VNil VNil = VNil
 vzip (VCons x xs) (VCons y ys) = VCons (x, y) (vzip xs ys)
 
+-- (VCons .., VNil) cannot happen, so the second case covers the rest
+secondHead : Vec n Int -> Vec n Int -> Int
+secondHead VNil _ = 0
+secondHead _ (VCons y _) = y
+
 vmap : (a -> b) -> Vec n a -> Vec n b
 vmap _ VNil = VNil
 vmap f (VCons x xs) = VCons (f x) (vmap f xs)
@@ -113,3 +118,4 @@ main () =
   println (describe VNil Yes)
   println (describe v No)
   println (show (firstElem [7, 8]))
+  println (show (secondHead v (VCons 5 w)))
