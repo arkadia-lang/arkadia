@@ -16,7 +16,7 @@ isErr (Ok _) = False
 test "parse scalars" =
   assertEq (parsed "null") JNull
   assertEq (parsed " true ") (JBool True)
-  assertEq (parsed "-12.5e1") (JNumber -125.0)
+  assertEq (parsed "-12.5e1") (JNumber (-125.0))
   assertEq (parsed "\"hi\"") (JString "hi")
 
 test "parse nested structures" =

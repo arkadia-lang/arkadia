@@ -8,7 +8,7 @@ close a b = assert (approxEq 0.000000001 a b) "expected ${b}, but got ${a}"
 
 test "trigonometry" =
   close (sin (pi / 2.0)) 1.0
-  close (cos pi) -1.0
+  close (cos pi) (-1.0)
   close (atan2 1.0 1.0) (pi / 4.0)
   close (toDegrees (toRadians 90.0)) 90.0
 
@@ -23,24 +23,24 @@ test "exponentials and logarithms" =
 test "special values" =
   assert (isNaN nan && not (isNaN 1.0)) "isNaN"
   assert (isInfinite infinity && isInfinite (negate infinity)) "isInfinite"
-  assertEq (minInt + maxInt) -1
+  assertEq (minInt + maxInt) (-1)
 
 test "float rounding" =
-  assertEq (floorFloat -1.5, ceilFloat 1.2, roundFloat 2.5, truncateFloat -2.7) (-2.0, 2.0, 3.0, -2.0)
+  assertEq (floorFloat (-1.5), ceilFloat 1.2, roundFloat 2.5, truncateFloat (-2.7)) (-2.0, 2.0, 3.0, -2.0)
   close (roundTo 2 3.14159) 3.14
   close (fmod 7.5 2.0) 1.5
   close (lerp 10.0 20.0 0.25) 12.5
 
 test "generic helpers" =
-  assertEq (signum -5, signum 0, signum 3) (-1, 0, 1)
-  assertEq (signum -2.5) -1.0
-  assertEq (clamp 0 10 15, clamp 0 10 -3, clamp 0 10 4) (10, 0, 4)
+  assertEq (signum (-5), signum 0, signum 3) (-1, 0, 1)
+  assertEq (signum (-2.5)) (-1.0)
+  assertEq (clamp 0 10 15, clamp 0 10 (-3), clamp 0 10 4) (10, 0, 4)
   assertEq (mean [1.0, 2.0, 6.0], mean []) (Some 3.0, None)
 
 test "integers" =
-  assertEq (lcm 4 6, lcm -3 5, lcm 0 7) (12, 15, 0)
-  assertEq (powInt 2 10, powInt 3 0, powInt -2 3) (1024, 1, -8)
-  assertEq (divMod 7 2, divMod -7 2, divMod 7 -2) ((3, 1), (-4, 1), (-4, -1))
+  assertEq (lcm 4 6, lcm (-3) 5, lcm 0 7) (12, 15, 0)
+  assertEq (powInt 2 10, powInt 3 0, powInt (-2) 3) (1024, 1, -8)
+  assertEq (divMod 7 2, divMod (-7) 2, divMod 7 (-2)) ((3, 1), (-4, 1), (-4, -1))
   assertEq (map isqrt [0, 1, 15, 16, 17, 1000000]) [0, 1, 3, 4, 4, 1000]
   assertEq (filter isPrime [1 .. 30]) [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
   assertEq (digits 9051, digits 0) ([9, 0, 5, 1], [0])

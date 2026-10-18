@@ -40,7 +40,7 @@
 
 整数リテラルは `Int` ですが、`Float` が期待される場所では `Float` になります（`area r = 3 * r * r` で `r : Float` なら `3` は `3.0`、`[1.5, 2]` は `[1.5, 2.0]`）。型が文脈から決まらなければ `Int` です（`half x = x / 2` は `Int -> Int`）。
 
-負の数リテラル: `-` の直後に数字があり、`-` の前が空白か開き括弧ならリテラルになります（`f -1` は `f (-1)`、`x-1` と `x - 1` は減算）。
+負の数リテラル: `-` の直後に数字があり、`-` が式の直後に無い（行頭・開き括弧・演算子・`,` などの後にある）ならリテラルになります（`[-1, 2]`、`x = -1`）。式の直後の `-` は減算です（`x-1`、`x - 1`）。式の直後に空白を空けて `-1` と書くと、減算か負の数の引数かが紛らわしいのでエラーになります（`x - 1` か `f (-1)` と書きます）。
 
 予約語: `module import as type alias class instance effect where let in match with handle return foreign infixl infixr infix private test deriving`（`as`, `alias`, `test`, `deriving` は文脈によってのみ予約語）
 
