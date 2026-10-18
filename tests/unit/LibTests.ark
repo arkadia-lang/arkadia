@@ -12,6 +12,7 @@ import Std.Bytes as Bytes
 import Std.Encoding (..)
 import Std.Crypto (..)
 import Std.Args (..)
+import Std.Task (catchError)
 import Std.Result (isErr)
 import Std.Format (..)
 import Std.Csv as Csv
@@ -135,5 +136,6 @@ test "bytes" =
   assertEq (Bytes.toList (Bytes.slice 1 10 b), Bytes.toList (b ++ Bytes.fromList [0])) ([195, 169], [104, 195, 169, 0])
   assert (Bytes.isEmpty Bytes.empty && Bytes.fromList [1] < Bytes.fromList [2]) "empty and ordering"
   assertEq (show (Bytes.fromList [1, 2])) "Bytes.fromList [1, 2]"
+  assertEq (catchError (\_ -> Bytes.fromList [256])) (Err "Std.Bytes.fromList: 256 is not a byte")
   let m = HM.fromList [(Bytes.fromList [1], "one")]
   assertEq (HM.lookup (Bytes.fromList [1]) m) (Some "one")
