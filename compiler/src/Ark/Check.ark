@@ -295,8 +295,13 @@ processFamilies c decls =
     let fam = Map.findWithDefault (FamInfo (typeInfoName ti) 0 []) (typeInfoName ti) (readRef (gFamilies (cG c)))
     let converted = filterMap (familyEq c ti (famArity fam)) eqs
     modifyRef (gFamilies (cG c)) (Map.insert (typeInfoName ti) (FamInfo (typeInfoName ti) (famArity fam) converted))
-    let TypeInfo _ kref _ _ _ _ _ = ti
-    writeRef kref (defaultKind (readRef kref)))
+    let TypeInfo _ kref _ _ _ _ tpos = ti
+    writeRef kref (defaultKind (readRef kref))
+    -- effect rows are not reduced
+    match pruneKind (resultKind (readRef kref) (famArity fam)) with
+      KRow -> errorf c tpos "the result of type family '${shortName (typeInfoName ti)}' cannot be a row"
+      KEffect -> errorf c tpos "the result of type family '${shortName (typeInfoName ti)}' cannot be an effect"
+      _ -> ())
   -- once all equations are known: the families may call each other
   forEach families (\(ti, _) -> checkTermination c (typeInfoName ti))
 
