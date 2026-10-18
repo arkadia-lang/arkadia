@@ -1,10 +1,13 @@
 package rt
 
 import (
+	"os"
+	"os/signal"
 	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -373,6 +376,36 @@ func Timeout(ev *Ev, secs, f Value) Value {
 	timer := time.AfterFunc(seconds(secs), s.cancel)
 	v, r := try(func() Value { return Apply1(withScope(ev, s), f, Unit) })
 	timer.Stop()
+	s.close()
+	if r != nil {
+		if c, ok := r.(*cancelSignal); ok && c.scope == s {
+			return None
+		}
+		panic(r)
+	}
+	return Some(v)
+}
+
+// CancelOnInterrupt runs f () and cancels it when the program is
+// interrupted (Ctrl-C) or asked to terminate: Some result, or None when it
+// was cancelled by the signal. After the first signal, a second one stops
+// the program at once.
+func CancelOnInterrupt(ev *Ev, f Value) Value {
+	s := newScope(ev.cs, false)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sigs:
+			signal.Stop(sigs)
+			s.cancel()
+		case <-done:
+		}
+	}()
+	v, r := try(func() Value { return Apply1(withScope(ev, s), f, Unit) })
+	signal.Stop(sigs)
+	close(done)
 	s.close()
 	if r != nil {
 		if c, ok := r.(*cancelSignal); ok && c.scope == s {

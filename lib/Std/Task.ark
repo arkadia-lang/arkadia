@@ -76,6 +76,12 @@ foreign firstDone : List (Task a) -> <IO> Task a = "ev:rt.FirstDone"
 -- it did not finish in time (it is then cancelled).
 foreign timeout : Float -> (Unit -> <IO | e> a) -> <IO | e> Option a = "rt.Timeout"
 
+-- Run a computation until the program is interrupted (Ctrl-C) or asked to
+-- terminate: Some result, or None if the signal cancelled it. A second
+-- signal stops the program at once. For a server, this gives a graceful
+-- shutdown: `cancelOnInterrupt (\_ -> serve ":8080" app)`.
+foreign cancelOnInterrupt : (Unit -> <IO | e> a) -> <IO | e> Option a = "rt.CancelOnInterrupt"
+
 -- Run a computation that cancellation cannot interrupt. A cancellation
 -- requested meanwhile takes effect when it returns.
 foreign uncancellable : (Unit -> <IO | e> a) -> <IO | e> a = "rt.Uncancellable"
