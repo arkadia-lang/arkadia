@@ -16,17 +16,29 @@ foreign sleep : Float -> <IO> Unit = "ev:rt.Sleep"
 -- Format with a Go layout string, e.g. "2006-01-02 15:04:05".
 foreign formatUtc : String -> Float -> String = "rt.FormatTimeUTC"
 foreign formatLocal : String -> Float -> String = "rt.FormatTimeLocal"
--- (year, month, day, hour, minute, second) in UTC.
-foreign toUtcParts : Float -> (Int, Int, Int, Int, Int, Int) = "rt.TimeParts"
+-- A calendar date and time of day in UTC; `month` and `day` count from 1.
+type DateTime = DateTime { year : Int, month : Int, day : Int, hour : Int, minute : Int, second : Int }
+  deriving (Eq, Show)
+
+private foreign timeParts : Float -> (Int, Int, Int, Int, Int, Int) = "rt.TimeParts"
+private foreign timeFromParts : (Int, Int, Int, Int, Int, Int) -> Float = "rt.TimeFromParts"
+
+-- The date and time of day in UTC (whole seconds).
+toUtcParts : Float -> DateTime
+toUtcParts t =
+  let (y, mo, d, h, mi, s) = timeParts t
+  DateTime { year = y, month = mo, day = d, hour = h, minute = mi, second = s }
+
+-- The time of a date and time of day in UTC. Values out of range are
+-- normalized: month 13 is January of the next year.
+fromUtcParts : DateTime -> Float
+fromUtcParts p = timeFromParts (p.year, p.month, p.day, p.hour, p.minute, p.second)
 
 -- Parse with a Go layout string, as UTC or local time.
 foreign parseUtc : String -> String -> Option Float = "rt.TimeParseUTC"
 foreign parseLocal : String -> String -> Option Float = "rt.TimeParseLocal"
 -- Parse RFC 3339: "2026-10-17T09:30:00Z", "2026-10-17T18:30:00.5+09:00".
 foreign parseIso : String -> Option Float = "rt.TimeParseIso"
--- The time of (year, month, day, hour, minute, second) in UTC. Values out
--- of range are normalized: month 13 is January of the next year.
-foreign fromUtcParts : (Int, Int, Int, Int, Int, Int) -> Float = "rt.TimeFromParts"
 -- The day of the week in UTC, from 0 (Sunday) to 6 (Saturday).
 foreign weekday : Float -> Int = "rt.TimeWeekday"
 -- The day of the year in UTC, from 1.
@@ -46,13 +58,13 @@ formatDate t = formatUtc "2006-01-02" t
 
 -- The time of a date at midnight UTC.
 date : Int -> Int -> Int -> Float
-date y m d = fromUtcParts (y, m, d, 0, 0, 0)
+date y m d = fromUtcParts (DateTime { year = y, month = m, day = d, hour = 0, minute = 0, second = 0 })
 
 -- Midnight UTC of the day of a time.
 startOfDay : Float -> Float
 startOfDay t =
-  let (y, m, d, _, _, _) = toUtcParts t
-  date y m d
+  let p = toUtcParts t
+  date p.year p.month p.day
 
 minute : Float
 minute = 60.0
