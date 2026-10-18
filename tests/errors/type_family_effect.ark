@@ -1,0 +1,4 @@
+type family Eff (a : Type) : Effect where
+  Eff a = IO
+
+main () = println "x"

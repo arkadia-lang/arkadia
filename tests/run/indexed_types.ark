@@ -1,0 +1,161 @@
+-- Indexed types: data kinds, GADTs and closed type families
+type Nat = Z | S Nat
+  deriving (Show)
+
+-- a list whose length is part of its type
+type Vec (n : Nat) a where
+  VNil : Vec Z a
+  VCons : a -> Vec n a -> Vec (S n) a
+  deriving (Eq, Ord, Show)
+
+type family Add (n : Nat) (m : Nat) : Nat where
+  Add Z m = m
+  Add (S n) m = S (Add n m)
+
+-- no VNil case: a Vec (S n) is never empty
+vhead : Vec (S n) a -> a
+vhead (VCons x _) = x
+
+vtail : Vec (S n) a -> Vec n a
+vtail (VCons _ xs) = xs
+
+append : Vec n a -> Vec m a -> Vec (Add n m) a
+append VNil ys = ys
+append (VCons x xs) ys = VCons x (append xs ys)
+
+-- both vectors have the same length: (VNil, VCons ..) cannot happen
+vzip : Vec n a -> Vec n b -> Vec n (a, b)
+vzip VNil VNil = VNil
+vzip (VCons x xs) (VCons y ys) = VCons (x, y) (vzip xs ys)
+
+-- (VCons .., VNil) cannot happen, so the second case covers the rest
+secondHead : Vec n Int -> Vec n Int -> Int
+secondHead VNil _ = 0
+secondHead _ (VCons y _) = y
+
+vmap : (a -> b) -> Vec n a -> Vec n b
+vmap _ VNil = VNil
+vmap f (VCons x xs) = VCons (f x) (vmap f xs)
+
+vtoList : Vec n a -> List a
+vtoList v = match v with
+  VNil -> []
+  VCons x xs -> x :: vtoList xs
+
+-- a singleton: the value determines the type-level number
+type SNat (n : Nat) where
+  SZ : SNat Z
+  SS : SNat n -> SNat (S n)
+
+vreplicate : SNat n -> a -> Vec n a
+vreplicate SZ _ = VNil
+vreplicate (SS k) x = VCons x (vreplicate k x)
+
+-- a typed expression language: eval needs no runtime type checks
+type Expr a where
+  IntE : Int -> Expr Int
+  BoolE : Bool -> Expr Bool
+  Plus : Expr Int -> Expr Int -> Expr Int
+  Equal : Expr Int -> Expr Int -> Expr Bool
+  If : Expr Bool -> Expr a -> Expr a -> Expr a
+  Pair : Expr a -> Expr b -> Expr (a, b)
+
+eval : Expr a -> a
+eval e = match e with
+  IntE n -> n
+  BoolE b -> b
+  Plus x y -> eval x + eval y
+  Equal x y -> eval x == eval y
+  If c t f -> match eval c with
+    True -> eval t
+    False -> eval f
+  Pair x y -> (eval x, eval y)
+
+-- an existential: the type of the value is hidden
+type Showable where
+  MkShowable : a -> (a -> String) -> Showable
+
+display : Showable -> String
+display (MkShowable x f) = f x
+
+-- a type family over Bool, and an index computed by it
+type family IsZero (n : Nat) : Bool where
+  IsZero Z = True
+  IsZero (S n) = False
+
+type Flag (b : Bool) where
+  Yes : Flag True
+  No : Flag False
+
+describe : Vec n a -> Flag (IsZero n) -> String
+describe VNil Yes = "empty"
+describe (VCons _ _) No = "non-empty"
+
+-- a pattern whose head is a variable
+type family Elem (c : Type) : Type where
+  Elem (f a) = a
+
+firstElem : List Int -> Elem (List Int)
+firstElem xs = match xs with
+  x :: _ -> x
+  [] -> 0
+
+-- the types reduced by type families and refined by matches are seen
+-- through: function types, Float literals, constraints
+type family Id (a : Type) : Type where
+  Id a = a
+
+applyId : Id (Int -> Int) -> Int
+applyId f = f 3
+
+halfId : Id Float -> Id Float
+halfId x = x / 2
+
+firstOf : b -> b -> b
+firstOf x _ = x
+
+type Num2 a where
+  FloatN : Num2 Float
+  IntN : Num2 Int
+
+two : Num2 a -> a -> a
+two n v = match n with
+  FloatN -> firstOf 2 v
+  IntN -> firstOf 2 v
+
+pick : c -> Elem c -> Elem c
+pick _ d = d
+
+main () =
+  let v = VCons 1 (VCons 2 VNil)
+  let w = VCons 3 VNil
+  println (show (vhead v))
+  println (show (vtail v))
+  println (show (append v w))
+  println (show (vhead (append w v)))
+  println (show (vtoList (vzip v (vmap (\x -> x * 10) v))))
+  println (show (vreplicate (SS (SS (SS SZ))) 'x'))
+  println (show (v == VCons 1 (VCons 2 VNil)))
+  println (show (compare v (VCons 1 (VCons 3 VNil))))
+  println (show (S (S Z)))
+  println (show (eval (If (Equal (IntE 1) (Plus (IntE 0) (IntE 1))) (IntE 10) (IntE 20))))
+  println (show (eval (Pair (BoolE True) (Equal (IntE 3) (IntE 4)))))
+  println (joinWith ", " (map display [MkShowable 42 show, MkShowable "hi" (\s -> s ++ "!")]))
+  println (describe VNil Yes)
+  println (describe v No)
+  println (show (firstElem [7, 8]))
+  println (show (secondHead v (VCons 5 w)))
+  println (show (applyId (\x -> x + 1)))
+  println (show (halfId 3))
+  println (show (two FloatN 0.5))
+  println (show (two IntN 7))
+  let showPick = \xs d -> show (pick xs d)
+  println (showPick [1] 2)
+  let sameElem = \x -> pick [x] x
+  println (show (sameElem 'c'))
+  -- the length of v is not known here: the arms assume nothing about it
+  let isNil = \(v : Vec n Int) -> match v with
+    VCons _ _ -> False
+    VNil -> True
+  println (show (isNil VNil))
+  println (show (isNil (VCons 1 VNil)))

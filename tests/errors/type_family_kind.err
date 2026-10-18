@@ -1,0 +1,1 @@
+kind mismatch: the result of 'Bad' has kind Nat, but this has kind Type

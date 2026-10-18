@@ -1,0 +1,6 @@
+type Nat = Z | S Nat
+
+type family Bad (n : Nat) : Nat where
+  Bad n = Int
+
+main () = println "x"

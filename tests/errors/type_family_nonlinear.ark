@@ -1,0 +1,7 @@
+type Pair a b = Pair a b
+
+type family Same (a : Type) : Bool where
+  Same (Pair a a) = True
+  Same b = False
+
+main () = println "x"

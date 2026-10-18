@@ -1,0 +1,5 @@
+type Showable where
+  MkShowable : a -> (a -> String) -> Showable
+  deriving (Show)
+
+main () = println "x"

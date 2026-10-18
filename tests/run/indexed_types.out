@@ -1,0 +1,24 @@
+1
+VCons 2 VNil
+VCons 1 (VCons 2 (VCons 3 VNil))
+3
+[(1, 10), (2, 20)]
+VCons 'x' (VCons 'x' (VCons 'x' VNil))
+True
+LT
+S (S Z)
+10
+(True, False)
+42, hi!
+empty
+non-empty
+7
+5
+4
+1.5
+2.0
+2
+2
+'c'
+True
+False

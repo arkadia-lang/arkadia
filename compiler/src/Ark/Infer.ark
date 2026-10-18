@@ -17,8 +17,8 @@ unifyAt c p expected actual what = match try (\_ -> unify c expected actual) wit
 
 reportMismatch : Checker -> Pos -> Type -> Type -> String -> String -> <IO> Unit
 reportMismatch c p expected actual what msg =
-  let ze = zonk expected
-  let za = zonk actual
+  let ze = reduceFamilies c (zonk expected)
+  let za = reduceFamilies c (zonk actual)
   let names = typesString [ze, za]
   let notes = match msg with
     "" -> []
@@ -109,9 +109,11 @@ solveQueue c queue residual = match queue with
     True -> solveQueue c rest residual
     False ->
       let Wanted cls ty _ p = w
-      let t = prune ty
+      let t = whnf c ty
       let (h, args) = headOf t
       match h with
+        -- an application of a type family that may still reduce
+        TCon hn _ | isFamily c hn && not (isEmpty (metasOf t)) -> solveQueue c rest (w :: residual)
         TCon hn _ ->
           match lookupInstance c (className cls) hn with
             Some inst | length args == instNVars inst ->
@@ -155,6 +157,7 @@ entail c cls t = entailAcc (readRef (cGivens c)) cls t
 private entailAcc : List Given -> ClassInfo -> Type -> <IO> Option DictExpr
 entailAcc gs cls t = match gs with
   [] -> None
+  GivenEq _ _ :: rest -> entailAcc rest cls t
   Given gcls gty d :: rest -> match typesEqual gty t with
     False -> entailAcc rest cls t
     True
@@ -287,6 +290,13 @@ checkExpr c e t eff what =
     ENum p _ isFloat ->
       checkIntLit c p isFloat t what
       True
+    -- the expected type reaches the arms (matches on GADTs need it)
+    EMatch p scrut arms ->
+      checkMatch c p scrut arms t eff
+      True
+    EBlock _ stmts ->
+      let _ = inferBlock c stmts eff (Some (t, what))
+      True
     _ -> False
   match done with
     True -> ()
@@ -316,17 +326,10 @@ inferExpr c e eff = match e with
     let t = inferExpr c body eff
     writeRef (cLocals c) saved
     t
-  EBlock _ stmts -> inferBlock c stmts eff
+  EBlock _ stmts -> inferBlock c stmts eff None
   EMatch p scrut arms ->
-    let ts = inferExpr c scrut eff
     let r = freshType c
-    let rows = map (\(Arm _ pat rh) ->
-      let saved = readRef (cLocals c)
-      checkPat c pat ts (newRef [])
-      checkRhs c rh r eff
-      writeRef (cLocals c) saved
-      ([pat], rhsGuarded rh)) arms
-    modifyRef (cMatches c) (\ms -> MatchSite p "match" (map fst rows) (map snd rows) :: ms)
+    checkMatch c p scrut arms r eff
     r
   EHandle _ _ _ _ _ -> inferHandle c e eff
   ETuple p elems ->
@@ -358,6 +361,37 @@ inferExpr c e eff = match e with
   ERecord _ _ _ _ _ -> inferRecord c e eff
   EUpdate _ _ _ _ -> inferUpdate c e eff
   _ -> error "inferExpr: unexpected expression after desugaring"
+
+-- Check a match whose arms have type r.
+checkMatch : Checker -> Pos -> Expr -> List Arm -> Type -> Type -> <IO> Unit
+checkMatch c p scrut arms r eff =
+  let ts = inferExpr c scrut eff
+  let givens = readRef (cGivens c)
+  let rows = map (\(Arm _ pat rh) -> withArm c (\_ ->
+    let saved = readRef (cLocals c)
+    checkPat c pat ts (newRef [])
+    checkRhs c rh r eff
+    writeRef (cLocals c) saved
+    ([pat], rhsGuarded rh))) arms
+  modifyRef (cMatches c) (\ms -> MatchSite p "match" (map fst rows) (map snd rows) [ts] givens :: ms)
+
+-- Check a match arm (its patterns and body). The equations assumed by
+-- matching constructors that refine types, and the existential type
+-- variables of these constructors, are local to the arm; so are the class
+-- constraints that need the equations.
+withArm : Checker -> (Unit -> <IO> a) -> <IO> a
+withArm c f =
+  let saved = readRef (cGivens c)
+  incLevel c
+  pushWanted c
+  let r = f ()
+  let ws = popWanted c
+  match length (readRef (cGivens c)) == length saved with
+    True -> floatWanted c ws
+    False -> floatWanted c (solve c ws)
+  decLevel c
+  writeRef (cGivens c) saved
+  r
 
 litType : Checker -> Lit -> <IO> Type
 litType c l = match l with
@@ -423,7 +457,7 @@ applyArgs c masks fun ft0 args eff = applyLoop c masks fun ft0 (indexed args) ef
 private applyLoop : Checker -> Option (Ref (Map.Map Int (List String))) -> Expr -> Type -> List (Int, Expr) -> Type -> Bool -> <IO> Type
 applyLoop c masks fun ft0 args eff effFailed = match args with
   [] -> ft0
-  (i, a) :: rest -> match prune ft0 with
+  (i, a) :: rest -> match whnf c ft0 with
     TFun farg feff fres ->
       -- check the argument before the call's effect: arguments are
       -- evaluated first and may determine the callee's effect row
@@ -485,16 +519,17 @@ inferBinOp c e eff = match e with
 
 inferLam : Checker -> List Pattern -> Expr -> <IO> Type
 inferLam c params body =
-  let saved = readRef (cLocals c)
-  let seen = newRef []
-  let pts = map (\pat ->
-    let t = freshType c
-    checkPat c pat t seen
-    t) params
+  let pts = map (\_ -> freshType c) params
   let bodyEff = freshRow c
-  let r = inferExpr c body bodyEff
-  writeRef (cLocals c) saved
-  recordParamMatch c params
+  let givens = readRef (cGivens c)
+  let r = withArm c (\_ ->
+    let saved = readRef (cLocals c)
+    let seen = newRef []
+    forEach (zip params pts) (\(pat, t) -> checkPat c pat t seen)
+    let rb = inferExpr c body bodyEff
+    writeRef (cLocals c) saved
+    rb)
+  recordParamMatch c params pts givens
   funType c pts bodyEff r
 
 -- Check a lambda against a known function type, propagating parameter
@@ -504,19 +539,21 @@ checkLam : Checker -> List Pattern -> Expr -> Type -> <IO> Bool
 checkLam c params body t =
   let collect ps cur acc = match ps with
     [] -> Some (reverse acc)
-    _ :: more -> match prune cur with
+    _ :: more -> match whnf c cur with
       TFun a e r -> collect more r ((a, e, r) :: acc)
       _ -> None
   match collect params t [] with
     None -> False
     Some arrows ->
-      let saved = readRef (cLocals c)
-      let seen = newRef []
-      forEach (zip params arrows) (\(pat, (a, _, _)) -> checkPat c pat a seen)
-      let (_, le, lr) = lastOf arrows
-      checkExpr c body lr le "the body of this function"
-      writeRef (cLocals c) saved
-      recordParamMatch c params
+      let givens = readRef (cGivens c)
+      withArm c (\_ ->
+        let saved = readRef (cLocals c)
+        let seen = newRef []
+        forEach (zip params arrows) (\(pat, (a, _, _)) -> checkPat c pat a seen)
+        let (_, le, lr) = lastOf arrows
+        checkExpr c body lr le "the body of this function"
+        writeRef (cLocals c) saved)
+      recordParamMatch c params (map (\(a, _, _) -> a) arrows) givens
       True
 
 -- A curried function type; only the last arrow carries the body's effect.
@@ -532,12 +569,31 @@ funTypeAcc c ps bodyEff t isLast = match ps with
       False -> freshRow c
     funTypeAcc c rest bodyEff (TFun p eff t) False
 
-recordParamMatch : Checker -> List Pattern -> <IO> Unit
-recordParamMatch c params = match anyOf (\p -> not (irrefutable p)) params with
+recordParamMatch : Checker -> List Pattern -> List Type -> List Given -> <IO> Unit
+recordParamMatch c params types givens = match anyOf (\p -> not (irrefutable p)) params with
   True -> match params with
-    first :: _ -> modifyRef (cMatches c) (\ms -> MatchSite (patPos first) "lambda" [params] [False] :: ms)
+    first :: _ -> modifyRef (cMatches c) (\ms -> MatchSite (patPos first) "lambda" [params] [False] types givens :: ms)
     [] -> ()
   False -> ()
+
+-- Whether a checked pattern matches a constructor that refines types.
+patRefines : Global -> Pattern -> <IO> Bool
+patRefines g p = match p with
+  PCon _ _ _ args r ->
+    let here = match readRef r with
+      Some ci -> ctorRefines g ci
+      None -> False
+    here || anyOf (patRefines g) args
+  PRec _ _ _ fields r ->
+    let here = match readRef r with
+      Some ci -> ctorRefines g ci
+      None -> False
+    here || anyOf (\(_, x) -> patRefines g x) fields
+  PTuple _ es -> anyOf (patRefines g) es
+  PList _ es -> anyOf (patRefines g) es
+  PAs _ _ _ q -> patRefines g q
+  PAnnot _ q _ -> patRefines g q
+  _ -> False
 
 irrefutable : Pattern -> Bool
 irrefutable p = match p with
@@ -549,8 +605,10 @@ irrefutable p = match p with
   PAnnot _ q _ -> irrefutable q
   _ -> False
 
-inferBlock : Checker -> List Stmt -> Type -> <IO> Type
-inferBlock c stmts eff =
+-- The type of a block; with an expected type (and a description of the
+-- final expression), the final expression is checked against it.
+inferBlock : Checker -> List Stmt -> Type -> Option (Type, String) -> <IO> Type
+inferBlock c stmts eff expected =
   let saved = readRef (cLocals c)
   let n = length stmts
   let loop i ss result = match ss with
@@ -567,15 +625,19 @@ inferBlock c stmts eff =
               inferLocalBinds c binds eff
               let k = length binds
               loop (i + k) (drop (k - 1) rest) result
-        SExpr x ->
-          let t = inferExpr c x eff
-          match isLast with
-            True -> loop (i + 1) rest t
-            False ->
-              match try (\_ -> unify c (tUnit c) t) with
-                Ok _ -> ()
-                Err _ -> errorf c (exprPos x) "the result of this statement (of type ${typeString (zonk t)}) is discarded; use `let _ = ...` to ignore it explicitly"
-              loop (i + 1) rest result
+        SExpr x -> match (isLast, expected) with
+          (True, Some (et, what)) ->
+            checkExpr c x et eff what
+            loop (i + 1) rest et
+          _ ->
+            let t = inferExpr c x eff
+            match isLast with
+              True -> loop (i + 1) rest t
+              False ->
+                match try (\_ -> unify c (tUnit c) t) with
+                  Ok _ -> ()
+                  Err _ -> errorf c (exprPos x) "the result of this statement (of type ${typeString (zonk t)}) is discarded; use `let _ = ...` to ignore it explicitly"
+                loop (i + 1) rest result
   let r = loop 0 stmts (tUnit c)
   writeRef (cLocals c) saved
   r
@@ -654,11 +716,11 @@ inferHandle c e eff = match e with
         let bodyT = inferExpr c body (TRowExt label eff)
         let res = freshType c
         match ret with
-          Some (HandlerClause _ _ rps rbody _) ->
+          Some (HandlerClause _ _ rps rbody _) -> withArm c (\_ ->
             let saved = readRef (cLocals c)
             checkPat c (at 0 rps) bodyT (newRef [])
             checkExpr c rbody res eff "the return clause"
-            writeRef (cLocals c) saved
+            writeRef (cLocals c) saved)
           None -> unifyAt c p res bodyT "the handled expression"
         forEach ops (\(HandlerClause cp _ params cbody opRef) -> match readRef opRef with
           None -> ()
@@ -678,15 +740,18 @@ inferHandle c e eff = match e with
                           True -> at i onames
                           False -> ""
                         newSkolem c name k) (indexed okinds)
-                let saved = readRef (cLocals c)
-                let seen = newRef []
-                forEach (zip params (opParams op)) (\(pat, pt) -> checkPat c pat (substGen pt sub) seen)
+                let givens = readRef (cGivens c)
+                let pts = map (\pt -> substGen pt sub) (opParams op)
                 let k = TFun (substGen (opRes op) sub) eff res
-                checkPat c (at (opArity op) params) k seen
-                checkExpr c cbody res eff "this handler clause"
-                writeRef (cLocals c) saved
+                withArm c (\_ ->
+                  let saved = readRef (cLocals c)
+                  let seen = newRef []
+                  forEach (zip params pts) (\(pat, pt) -> checkPat c pat pt seen)
+                  checkPat c (at (opArity op) params) k seen
+                  checkExpr c cbody res eff "this handler clause"
+                  writeRef (cLocals c) saved)
                 decLevel c
-                recordParamMatch c params)
+                recordParamMatch c params (snoc pts k) givens)
         res
   _ -> error "inferHandle"
 
@@ -746,7 +811,30 @@ checkPat c pat t seen = match pat with
           checkPatCon c p name ci args t seen
 
 private checkPatCon : Checker -> Pos -> String -> CtorInfo -> List Pattern -> Type -> Ref (List String) -> <IO> Unit
-checkPatCon c p name ci args t seen =
+checkPatCon c p name ci args t seen = match ctorRefines (cG c) ci with
+  True -> checkPatRefining c p name ci args t seen
+  False -> checkPatPlain c p ci args t seen
+
+-- A constructor that may refine the type of the matched value: the
+-- equations it implies are assumed in the rest of the arm.
+private checkPatRefining : Checker -> Pos -> String -> CtorInfo -> List Pattern -> Type -> Ref (List String) -> <IO> Unit
+checkPatRefining c p name ci args t seen =
+  let (h, _) = headOf (whnf c t)
+  let fields = match h with
+    TMeta _ ->
+      errorf c p "the type of the value matched by constructor '${name}' must be known here; add a type signature"
+      None
+    _ -> match ctorFieldsAt c ci t with
+      Some fs -> Some fs
+      None ->
+        errorf c p "constructor '${name}' can never match a value of type ${typeString (normalize c (zonk t))}"
+        None
+  match fields with
+    Some fs -> forEach (zip args fs) (\(x, ft) -> checkPat c x ft seen)
+    None -> forEach args (\x -> checkPat c x (freshType c) seen)
+
+private checkPatPlain : Checker -> Pos -> CtorInfo -> List Pattern -> Type -> Ref (List String) -> <IO> Unit
+checkPatPlain c p ci args t seen =
   let (ct, _) = instantiate c (ctorScheme ci) p
   let fieldsOf n ty acc = match n == 0 with
     True -> (reverse acc, ty)
@@ -797,7 +885,7 @@ inferIntLit c p isFloat =
 
 -- Check a literal against an expected type.
 private checkIntLit : Checker -> Pos -> Ref Bool -> Type -> String -> <IO> Unit
-checkIntLit c p isFloat t what = match prune t with
+checkIntLit c p isFloat t what = match whnf c t with
   TMeta m ->
     markLit c m
     modifyRef (cLits c) (\ls -> snoc ls (LitWanted p isFloat t))
@@ -872,7 +960,7 @@ recordArgs c p ti t =
 -- after an error).
 private fieldOf : Checker -> Pos -> Type -> String -> <IO> (Bool, Option (TypeInfo, Type))
 fieldOf c p t name =
-  let (h, _) = headOf t
+  let (h, _) = headOf (whnf c t)
   let noField () =
     errorf c p "type ${typeString (zonk t)} has no field '${name}'"
     (True, None)
@@ -987,7 +1075,7 @@ inferUpdate c e eff = match e with
     let t = inferExpr c x eff
     checkDupFields c fs
     let group = map (\(FieldInit _ n _) -> n) fs
-    let (h, _) = headOf t
+    let (h, _) = headOf (whnf c t)
     match isMeta h with
       False ->
         -- the record type is known: check the new values against the fields
@@ -1087,17 +1175,18 @@ checkClauses c b t eff =
         Ok _ -> ()
         Err msg -> reportMismatch c (bindPos b) t ft what msg
       let clauses = bindClauses b
-      let rows = map (\(Clause _ params rh) ->
+      let givens = readRef (cGivens c)
+      let rows = map (\(Clause _ params rh) -> withArm c (\_ ->
         let saved = readRef (cLocals c)
         let seen = newRef []
         forEach (zip params pts) (\(pat, pt) -> checkPat c pat pt seen)
         checkRhs c rh r bodyEff
         writeRef (cLocals c) saved
-        (params, rhsGuarded rh)) clauses
+        (params, rhsGuarded rh))) clauses
       let trivial = length clauses == 1 && allOf (\(ps, g) -> allOf irrefutable ps && not g) rows
       match trivial with
         True -> ()
-        False -> modifyRef (cMatches c) (\ms -> MatchSite (bindPos b) ("function " ++ what) (map fst rows) (map snd rows) :: ms)
+        False -> modifyRef (cMatches c) (\ms -> MatchSite (bindPos b) ("function " ++ what) (map fst rows) (map snd rows) pts givens :: ms)
 
 -- Report effects performed while evaluating a top-level value.
 checkPure : Checker -> Bind -> Type -> <IO> Unit
@@ -1214,9 +1303,14 @@ inferLocalBind c b eff = match bindPat b with
       _ -> error "pattern binding without a body"
     let t = inferExpr c body eff
     checkPat c pat t (newRef [])
+    match patRefines (cG c) pat with
+      True -> errorf c (bindPos b) "a let binding cannot match a constructor that refines types; use match"
+      False -> ()
     match irrefutable pat with
       True -> ()
-      False -> modifyRef (cMatches c) (\ms -> MatchSite (bindPos b) "let pattern" [[pat]] [False] :: ms)
+      False ->
+        let givens = readRef (cGivens c)
+        modifyRef (cMatches c) (\ms -> MatchSite (bindPos b) "let pattern" [[pat]] [False] [t] givens :: ms)
   None ->
     let id = freshLocalID c (bindName b)
     writeRef (bindId b) id

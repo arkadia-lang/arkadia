@@ -1,0 +1,12 @@
+type Nat = Z | S Nat
+
+type family Add (n : Nat) (m : Nat) : Nat where
+  Add Z m = m
+  Add (S n) m = S (Add n m)
+
+type Proxy (n : Nat) = Proxy
+
+p : Proxy (Add Z)
+p = Proxy
+
+main () = println "x"

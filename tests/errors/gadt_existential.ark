@@ -1,0 +1,7 @@
+type Some where
+  MkSome : a -> Some
+
+unwrap : Some -> Int
+unwrap (MkSome x) = x
+
+main () = println "x"

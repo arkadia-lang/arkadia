@@ -1,0 +1,9 @@
+type Expr a where
+  IntE : Int -> Expr Int
+
+value : Expr Int -> Int
+value e =
+  let IntE n = e
+  n
+
+main () = println "x"
