@@ -76,5 +76,14 @@ take n h = Prelude.take n (toSortedList h)
 instance (Ord a, Show a) => Show (Heap a) where
   show h = "Heap.fromList " ++ show (toSortedList h)
 
+instance (Ord a, Show a) => Display (Heap a) where
+  display h = show h
+
+instance Ord a => Semigroup (Heap a) where
+  a <> b = merge a b
+
+instance Ord a => Monoid (Heap a) where
+  empty = Leaf
+
 instance Ord a => Eq (Heap a) where
   a == b = toSortedList a == toSortedList b

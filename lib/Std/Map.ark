@@ -1,8 +1,12 @@
--- Persistent ordered maps (AVL trees).
+-- Persistent ordered maps (AVL trees), meant to be imported qualified:
 --
 --   import Std.Map as Map
 --   let m = Map.fromList [(1, "one"), (2, "two")]
---   Map.lookup 1 m   -- Some "one"
+--   Map.lookup 1 m                     -- Some "one"
+--   Map.map toUpper m                  -- Map.fromList [(1, "ONE"), (2, "TWO")]
+--   m <> Map.singleton 3 "three"       -- left-biased union
+--
+-- Functions that visit several bindings do so in ascending key order.
 module Std.Map
 
 type Map k v = Tip | Bin Int k v (Map k v) (Map k v)
@@ -116,6 +120,17 @@ foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
 foldlWithKey : (b -> k -> v -> b) -> b -> Map k v -> b
 foldlWithKey _ z Tip = z
 foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
+
+-- Apply a function to every value; unlike the Functor method `map`, it may
+-- perform effects.
+map : (a -> b) -> Map k a -> Map k b
+map f m = mapWithKey (\_ v -> f v) m
+
+foldl : (b -> v -> b) -> b -> Map k v -> b
+foldl f z m = foldlWithKey (\acc _ v -> f acc v) z m
+
+foldr : (v -> b -> b) -> b -> Map k v -> b
+foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
 
 mapWithKey : (k -> a -> b) -> Map k a -> Map k b
 mapWithKey _ Tip = Tip
@@ -236,6 +251,13 @@ instance Foldable (Map k) where
   foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
   foldl f z m = foldlWithKey (\acc _ v -> f acc v) z m
 
+-- Left-biased union, like `union`.
+instance Ord k => Semigroup (Map k v) where
+  a <> b = union a b
+
+instance Ord k => Monoid (Map k v) where
+  empty = Tip
+
 instance (Eq k, Eq v) => Eq (Map k v) where
   a == b = toList a == toList b
 
@@ -244,3 +266,6 @@ instance (Ord k, Ord v) => Ord (Map k v) where
 
 instance (Show k, Show v) => Show (Map k v) where
   show m = "Map.fromList " ++ show (toList m)
+
+instance (Show k, Show v) => Display (Map k v) where
+  display m = show m
