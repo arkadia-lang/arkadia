@@ -29,7 +29,8 @@ test "time" =
   assert (t > 1700000000.0) "now is after 2023"
   assert (nowMillis () >= truncate (t * 1000.0)) "millis agree"
   assertEq (formatIso 0.0) "1970-01-01T00:00:00Z"
-  assertEq (toUtcParts 1000000000.0) (2001, 9, 9, 1, 46, 40)
+  assertEq (toUtcParts 1000000000.0) (DateTime { year = 2001, month = 9, day = 9, hour = 1, minute = 46, second = 40 })
+  assertEq (toUtcParts 1000000000.0).hour 1
   assertEq (formatUtc "2006/01/02" 86400.0) "1970/01/02"
   let (v, secs) = measure (\_ ->
     sleep 0.01
@@ -47,7 +48,7 @@ test "files" =
   ok (makeDir (dir </> "sub"))
   ok (writeLines (dir </> "a.txt") ["one", "two"])
   ok (copyFile (dir </> "a.txt") (dir </> "sub" </> "b.txt"))
-  assertEq (readLines (dir </> "sub" </> "b.txt")) (Ok ["one", "two", ""])
+  assertEq (readLines (dir </> "sub" </> "b.txt")) (Ok ["one", "two"])
   ok (renameFile (dir </> "a.txt") (dir </> "c.txt"))
   assertEq (map sort (walkFiles dir)) (Ok [dir </> "c.txt", dir </> "sub" </> "b.txt"])
   assert (isDirectory dir && not (isDirectory (dir </> "c.txt"))) "isDirectory"
@@ -61,7 +62,7 @@ test "dates" =
   assertEq (Time.formatIso t) "2024-02-28T12:30:00Z"
   assertEq (Time.formatDate (Time.addDays 2 t)) "2024-03-01"
   assertEq (Time.weekday t, Time.dayOfYear t) (3, 59)
-  assertEq (Time.fromUtcParts (2024, 2, 28, 12, 30, 0)) t
+  assertEq (Time.fromUtcParts (Time.DateTime { year = 2024, month = 2, day = 28, hour = 12, minute = 30, second = 0 })) t
   assertEq (Time.formatDate (Time.date 2024 13 1)) "2025-01-01"
   assertEq (Time.daysBetween (Time.date 2024 1 1) (Time.date 2024 12 31)) 365
   assertEq (Time.formatIso (Time.addMonths 1 (Time.date 2024 1 15))) "2024-02-15T00:00:00Z"
@@ -69,3 +70,11 @@ test "dates" =
   assertEq (Time.parseIso "2026-10-17T18:30:00+09:00" |> map Time.formatIso) (Some "2026-10-17T09:30:00Z")
   assertEq (Time.parseIso "yesterday") None
   assertEq (Time.startOfDay t |> Time.formatIso) "2024-02-28T00:00:00Z"
+
+test "commands" =
+  match runCommand "sh" ["-c", "echo out; echo err >&2; exit 3"] with
+    Ok r -> assertEq r (CommandOutput { exitCode = 3, stdout = "out\n", stderr = "err\n" })
+    Err e -> fail e
+  match runCommand "arkadia-no-such-command" [] with
+    Ok _ -> fail "a missing program is an error"
+    Err _ -> ()

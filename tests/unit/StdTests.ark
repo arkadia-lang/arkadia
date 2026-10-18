@@ -7,6 +7,8 @@ import Std.Set as Set
 import Std.State (..)
 import Std.Exn (..)
 import Std.String as S
+import Std.Random (..)
+import Std.Task (catchError)
 
 test "sort is stable and ordered" =
   assertEq (sortOn fst [(2, 'a'), (1, 'b'), (2, 'c'), (1, 'd')]) [(1, 'b'), (1, 'd'), (2, 'a'), (2, 'c')]
@@ -77,3 +79,13 @@ test "tuples and orderings interpolate" =
   assertEq "${(1, "a")}" "(1, \"a\")"
   assertEq "${(1, 'b', 2.5)}" "(1, 'b', 2.5)"
   assertEq "at ${compare 1 2}" "at LT"
+
+test "random choices" =
+  let picks = runRandom 1 (\_ -> map (\_ -> choose ["a", "b", "c"]) [1 .. 20])
+  assert (all (\p -> elem p ["a", "b", "c"]) picks) "choose picks an element"
+  assertEq (runRandom 3 (\_ -> choose [7])) 7
+  assertEq (runRandom 5 (\_ -> randomInt 4 4)) 4
+  assertEq (catchError (\_ -> runRandom 1 (\_ -> choose ([] : List Int)))) (Err "Std.Random.choose: empty list")
+  assertEq (catchError (\_ -> runRandom 1 (\_ -> randomInt 3 1))) (Err "Std.Random.randomInt: empty range [3, 1]")
+  let wide = runRandom 7 (\_ -> map (\_ -> (randomInt (-9223372036854775807 - 1) 9223372036854775807, randomInt 0 9223372036854775807)) [1 .. 20])
+  assert (all (\(_, n) -> n >= 0) wide) "ranges as wide as Int"

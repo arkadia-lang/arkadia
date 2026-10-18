@@ -471,13 +471,15 @@ any p xs = foldl (\acc x -> acc || p x) False xs
 elem : (Foldable t, Eq a) => a -> t a -> Bool
 elem x xs = any (\y -> y == x) xs
 
-maximum : Ord a => List a -> Option a
-maximum [] = None
-maximum (x :: xs) = Some (foldl max x xs)
+maximum : (Foldable t, Ord a) => t a -> Option a
+maximum xs = foldl (\acc x -> match acc with
+  None -> Some x
+  Some m -> Some (max m x)) None xs
 
-minimum : Ord a => List a -> Option a
-minimum [] = None
-minimum (x :: xs) = Some (foldl min x xs)
+minimum : (Foldable t, Ord a) => t a -> Option a
+minimum xs = foldl (\acc x -> match acc with
+  None -> Some x
+  Some m -> Some (min m x)) None xs
 
 -- List instances
 
@@ -813,14 +815,30 @@ foreign isSpace : Char -> Bool = "rt.CharIsSpace"
 foreign isUpper : Char -> Bool = "rt.CharIsUpper"
 foreign isLower : Char -> Bool = "rt.CharIsLower"
 
+-- Split at "\n" or "\r\n". A final line ending does not start another
+-- line: lines "a\nb\n" == ["a", "b"], lines "" == [].
 lines : String -> List String
-lines s = split "\n" s
+lines "" = []
+lines s =
+  let ls = map (\l -> match endsWith "\r" l with
+    True -> substring 0 (stringLength l - 1) l
+    False -> l) (split "\n" s)
+  match endsWith "\n" s with
+    True -> take (length ls - 1) ls
+    False -> ls
 
 unlines : List String -> String
 unlines ls = joinWith "\n" ls
 
+-- Split at runs of whitespace (spaces, tabs, line endings, ...).
 words : String -> List String
-words s = filter (\w -> w != "") (split " " (replace "\n" " " (replace "\t" " " s)))
+words s = map fromChars (filter (\w -> not (isEmpty w)) (splitChars isSpace (chars s) [] []))
+
+private splitChars : (Char -> Bool) -> List Char -> List Char -> List (List Char) -> List (List Char)
+splitChars _ [] cur acc = reverse (reverse cur :: acc)
+splitChars p (c :: cs) cur acc
+  | p c = splitChars p cs [] (reverse cur :: acc)
+  | otherwise = splitChars p cs (c :: cur) acc
 
 unwords : List String -> String
 unwords ws = joinWith " " ws

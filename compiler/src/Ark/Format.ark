@@ -90,7 +90,7 @@ findWhere toks = match toks with
 
 private splitWhereAt : String -> Int -> Int -> List Int -> String
 splitWhereAt src line col inside =
-  let ls = map chars (lines src)
+  let ls = map chars (split "\n" src)
   let indentOf l = length (takeWhile (\ch -> ch == ' ') l)
   let blank l = all (\ch -> ch == ' ' || ch == '\r') l
   let cur = at (line - 1) ls

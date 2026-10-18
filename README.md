@@ -314,7 +314,8 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 | `Std.Regex` | 正規表現（RE2 構文）。一致・キャプチャ・名前付きグループ・置換（関数による置換も可）・分割 |
 | `Std.MArray` / `Std.HashMap` | 可変配列（push/pop・その場ソート・freeze/thaw）、挿入順を保つ可変ハッシュマップ（構造的なキー比較） |
 | `Std.BigInt` | 多倍長整数（`Num`/`Ord`/`Show` のインスタンス、`pow`, `powMod`, `gcd`, `isqrt`, 基数変換） |
-| `Std.Encoding` / `Std.Crypto` | Base64（URL セーフ版を含む）・16 進、MD5/SHA-1/SHA-256/SHA-512・HMAC-SHA256、安全な乱数・UUID |
+| `Std.Bytes` | 不変のバイト列（テキストの `String` と区別するバイナリデータ。UTF-8 との相互変換） |
+| `Std.Encoding` / `Std.Crypto` | Base64（URL セーフ版を含む）・16 進、MD5/SHA-1/SHA-256/SHA-512・HMAC-SHA256、安全な乱数（`Bytes`）・UUID。`String` と `Bytes` のどちらも受け付ける |
 | `Std.Args` | コマンドライン引数の解析（`--name=value`, `-n value`, `-abc`, `--`） |
 | `Std.Csv` | CSV の解析・出力（引用符・改行を含むフィールド、区切り文字の指定、ヘッダ付きレコード） |
 | `Std.Format` | 数値の書式化（小数点以下の桁数 `fixed 2 x`、指数表記、基数変換、桁区切り、ゼロ埋め、パーセント、バイト数） |

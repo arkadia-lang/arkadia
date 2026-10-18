@@ -38,7 +38,9 @@ test "predicates and lines" =
   assert (S.isBlank " \t" && not (S.isBlank " x")) "isBlank"
   assert (S.equalIgnoringCase "Straße" "STRASSE" == False && S.equalIgnoringCase "Go" "gO") "equalIgnoringCase"
   assertEq (S.byteLength "é", stringLength "é") (2, 1)
-  assertEq (S.splitLines "a\r\nb\nc") ["a", "b", "c"]
+  assertEq (S.lines "a\r\nb\nc") ["a", "b", "c"]
+  assertEq (S.lines "a\nb\n", S.lines "a\n\n", S.lines "", S.lines "\n") (["a", "b"], ["a", ""], [], [""])
+  assertEq (S.words "a\tb\r\nc\n") ["a", "b", "c"]
 
 test "wrap" =
   assertEq (S.wrap 10 "the quick brown fox jumps over") ["the quick", "brown fox", "jumps over"]

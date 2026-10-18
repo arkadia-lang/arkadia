@@ -101,3 +101,8 @@ test "collections interpolate" =
   assertEq "${Map.fromList [(1, "a")]}" "Map.fromList [(1, \"a\")]"
   assertEq "${Set.fromList [2, 1]}" "Set.fromList [1, 2]"
   assertEq "${Array.fromList ['x']}" "Array.fromList ['x']"
+
+test "maximum and minimum of any foldable" =
+  assertEq (maximum (Set.fromList [3, 9, 1]), minimum (Array.fromList [4, 2, 8])) (Some 9, Some 2)
+  assertEq (maximum (Map.fromList [("a", 5), ("b", 7)]), minimum (Some 'x')) (Some 7, Some 'x')
+  assertEq (maximum ([] : List Int), minimum (Set.empty : Set.Set Int)) (None, None)

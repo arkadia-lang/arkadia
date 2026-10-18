@@ -42,6 +42,7 @@ foreign substring : Int -> Int -> String -> String = "rt.StringSubstring"
 foreign toInt : String -> Option Int = "rt.ParseInt"
 foreign toFloat : String -> Option Float = "rt.ParseFloat"
 
+-- Split at "\n" or "\r\n"; a final line ending does not start another line.
 lines : String -> List String
 lines s = Prelude.lines s
 
@@ -147,10 +148,6 @@ center n c s =
 -- Only whitespace (or empty).
 isBlank : String -> Bool
 isBlank s = trim s == ""
-
--- Lines, accepting both "\n" and "\r\n" line endings.
-splitLines : String -> List String
-splitLines s = lines (replace "\r\n" "\n" s)
 
 uncapitalize : String -> String
 uncapitalize s = match chars s with

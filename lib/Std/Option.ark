@@ -72,10 +72,11 @@ whenSome (Some x) f = f x
 -- Combining
 -- ===================================================================
 
--- The first option if it is Some, otherwise the fallback.
-orElse : Option a -> Option a -> Option a
+-- The option if it is Some, otherwise the (possibly effectful) fallback,
+-- like `Result.orElse`: `lookup a |> Option.orElse (\_ -> lookup b)`.
+orElse : (Unit -> Option a) -> Option a -> Option a
 orElse _ (Some x) = Some x
-orElse fallback None = fallback
+orElse fallback None = fallback ()
 
 -- The first Some in the list.
 firstSome : List (Option a) -> Option a
