@@ -14,7 +14,7 @@ import (
 	"github.com/verniyyy/arkadia/bootstrap/internal/codegen"
 	"github.com/verniyyy/arkadia/bootstrap/internal/core"
 	"github.com/verniyyy/arkadia/bootstrap/internal/types"
-	"github.com/verniyyy/arkadia/runtime"
+	"github.com/verniyyy/arkadia/bootstrap/runtime"
 )
 
 // BuildOptions controls compilation to a native executable.
