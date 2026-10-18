@@ -1,0 +1,34 @@
+-- Atomic references: mutable cells that tasks share without locks (see
+-- Std.Task). Updates are functions applied atomically; they may run more
+-- than once when tasks update the same reference at the same time, so
+-- they are pure.
+--
+--   import Std.Atomic
+--   let hits = newAtomic 0
+--   runAsync (\_ -> forEach [1 .. 100] (\_ -> fork (\_ -> modifyAtomic hits (+ 1))))
+--   readAtomic hits   -- 100
+module Std.Atomic
+
+-- An atomic reference to a value of type a.
+type Atomic a
+
+foreign newAtomic : a -> <IO> Atomic a = "rt.AtomicNew"
+foreign readAtomic : Atomic a -> <IO> a = "rt.AtomicRead"
+foreign writeAtomic : Atomic a -> a -> <IO> Unit = "rt.AtomicWrite"
+
+-- Replace the value and return the old one.
+foreign swapAtomic : Atomic a -> a -> <IO> a = "rt.AtomicSwap"
+
+-- Update the value and return a result computed from the old value, as
+-- one atomic step.
+foreign updateAtomic : Atomic a -> (a -> <> (a, b)) -> <IO> b = "rt.AtomicUpdate"
+
+-- Apply a function to the value atomically.
+modifyAtomic : Atomic a -> (a -> <> a) -> <IO> Unit
+modifyAtomic r f = updateAtomic r (\x -> (f x, ()))
+
+-- Apply a function to the value atomically and return the new value.
+modifyAtomicAndGet : Atomic a -> (a -> <> a) -> <IO> a
+modifyAtomicAndGet r f = updateAtomic r (\x ->
+  let y = f x
+  (y, y))

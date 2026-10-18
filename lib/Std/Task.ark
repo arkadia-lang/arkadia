@@ -48,6 +48,12 @@ foreign runAsync : (Unit -> <Async, IO | e> a) -> <IO | e> a = "rt.RunAsync"
 -- same scope.
 foreign spawn : (Unit -> <Async, IO> a) -> <Async> Task a = "rt.Spawn"
 
+-- Start a task whose value is not needed (the scope still waits for it).
+fork : (Unit -> <Async, IO> a) -> <Async> Unit
+fork action =
+  let _ = spawn action
+  ()
+
 -- Wait for a task and return its value. If the task failed, its error is
 -- raised again; awaiting a cancelled task is a runtime error.
 foreign await : Task a -> <IO> a = "ev:rt.Await"

@@ -1,0 +1,66 @@
+-- Channels: queues that carry values between tasks (see Std.Task).
+--
+--   import Std.Task
+--   import Std.Channel as Chan
+--
+--   main () =
+--     let ch = Chan.newChannel 16
+--     runAsync (\_ ->
+--       let _ = spawn (\_ ->
+--         forEach [1 .. 3] (\i -> Chan.send ch i)
+--         Chan.closeChannel ch)
+--       Chan.forEachMessage ch (\i -> println "got ${i}"))
+--
+-- Sending waits while the channel is full and receiving while it is
+-- empty; both can be cancelled.
+module Std.Channel
+
+-- A channel of values of type a.
+type Channel a
+
+-- A channel holding up to n values before senders wait (0: every send
+-- waits for a receiver).
+foreign newChannel : Int -> <IO> Channel a = "rt.NewChannel"
+
+-- Send a value, waiting while the channel is full. Sending on a closed
+-- channel is a runtime error.
+foreign send : Channel a -> a -> <IO> Unit = "ev:rt.ChannelSend"
+
+-- Send a value if the channel has room now; whether it was sent.
+foreign trySend : Channel a -> a -> <IO> Bool = "rt.ChannelTrySend"
+
+-- Receive the next value, waiting while the channel is empty; None once
+-- the channel is closed and empty.
+foreign receive : Channel a -> <IO> Option a = "ev:rt.ChannelReceive"
+
+-- Receive a value if one is waiting now.
+foreign tryReceive : Channel a -> <IO> Option a = "rt.ChannelTryReceive"
+
+-- Close a channel: no more values can be sent, and receivers get None
+-- after the remaining values. Closing it again does nothing.
+foreign closeChannel : Channel a -> <IO> Unit = "rt.ChannelClose"
+
+-- The number of values waiting in the channel.
+foreign pending : Channel a -> <IO> Int = "rt.ChannelLength"
+
+-- Receive values until the channel is closed.
+forEachMessage : Channel a -> (a -> <IO | e> Unit) -> <IO | e> Unit
+forEachMessage ch f = match receive ch with
+  None -> ()
+  Some x ->
+    f x
+    forEachMessage ch f
+
+-- All the values received until the channel is closed.
+drain : Channel a -> <IO> List a
+drain ch =
+  let go acc = match receive ch with
+    None -> reverse acc
+    Some x -> go (x :: acc)
+  go []
+
+-- Send all the values of a list, then close the channel.
+sendAll : Channel a -> List a -> <IO> Unit
+sendAll ch xs =
+  forEach xs (send ch)
+  closeChannel ch
