@@ -10,7 +10,7 @@ test "option accessors" =
   assertEq (Option.withDefaultLazy (\_ -> 9) None) 9
 
 test "option combinators" =
-  assertEq (Option.orElse (Some 2) None, Option.orElse (Some 2) (Some 1)) (Some 2, Some 1)
+  assertEq (Option.orElse (\_ -> Some 2) None, Option.orElse (\_ -> error "not called") (Some 1)) (Some 2, Some 1)
   assertEq (Option.firstSome [None, Some 'a', Some 'b']) (Some 'a')
   assertEq (Option.filter even (Some 3), Option.filter even (Some 4)) (None, Some 4)
   assertEq (Option.map2 (+) (Some 1) (Some 2)) (Some 3)
