@@ -1,8 +1,8 @@
 package types
 
 import (
-	"github.com/verniyyy/arkadia/bootstrap/internal/diag"
-	"github.com/verniyyy/arkadia/bootstrap/internal/syntax"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/syntax"
 )
 
 // TypeInfo describes a data type or builtin type constructor.

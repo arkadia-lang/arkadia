@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/diag"
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
 )
 
 // Version of the Arkadia toolchain.

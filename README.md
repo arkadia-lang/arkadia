@@ -45,10 +45,10 @@ main () =
 
 Linux と macOS（amd64・arm64）に対応しています。`ark` は Go のコードを生成して `go build` するので、**Go 1.22 以降**が必要です。
 
-[Releases](https://github.com/verniyyy/arkadia/releases) から環境に合ったアーカイブを取得して展開し、`bin/` を `PATH` に加えます。
+[Releases](https://github.com/arkadia-lang/arkadia/releases) から環境に合ったアーカイブを取得して展開し、`bin/` を `PATH` に加えます。
 
 ```sh
-curl -LO https://github.com/verniyyy/arkadia/releases/download/v0.1.0/arkadia-0.1.0-linux-amd64.tar.gz
+curl -LO https://github.com/arkadia-lang/arkadia/releases/download/v0.1.0/arkadia-0.1.0-linux-amd64.tar.gz
 tar xzf arkadia-0.1.0-linux-amd64.tar.gz
 export PATH="$PWD/arkadia-0.1.0-linux-amd64/bin:$PATH"
 ark version
@@ -86,6 +86,8 @@ ark build          # bin/hello を生成
 
 ## ドキュメント
 
+ガイドと標準ライブラリのリファレンスは **[arkadia-lang.github.io](https://arkadia-lang.github.io/)** でも読めます（サイトのソースは [arkadia-lang.github.io](https://github.com/arkadia-lang/arkadia-lang.github.io) リポジトリ。ガイドなどの内容はこのリポジトリから生成されます）。
+
 - [言語ガイド](docs/guide.md) — 構文・型・型クラス・エフェクト・タスク・テスト・FFI のリファレンス
 - 標準ライブラリ — `ark doc <Module>` で各モジュールの API とドキュメントを表示できます
 - [変更履歴](CHANGELOG.md)
@@ -112,7 +114,7 @@ ark build          # bin/hello を生成
 ソースからのビルドには Go と [just](https://github.com/casey/just) が必要です（`nix develop` で開発環境に入れます）。
 
 ```sh
-git clone https://github.com/verniyyy/arkadia.git && cd arkadia
+git clone https://github.com/arkadia-lang/arkadia.git && cd arkadia
 just build      # bin/ark0 (Go) → bin/ark1 → bin/ark
 just install    # $GOBIN/ark から bin/ark へのシンボリックリンクを張る
 just test       # テストスイート

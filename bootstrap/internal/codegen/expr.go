@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/core"
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/core"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
 )
 
 // val is a compiled Go expression. typ is "" for rt.Value, otherwise an

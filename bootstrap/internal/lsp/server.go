@@ -16,10 +16,10 @@ import (
 	"sync"
 	"unicode/utf16"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/diag"
-	"github.com/verniyyy/arkadia/bootstrap/internal/driver"
-	"github.com/verniyyy/arkadia/bootstrap/internal/syntax"
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/driver"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/syntax"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
 )
 
 type message struct {

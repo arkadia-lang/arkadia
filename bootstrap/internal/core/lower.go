@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/syntax"
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/syntax"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
 )
 
 type lowerer struct {

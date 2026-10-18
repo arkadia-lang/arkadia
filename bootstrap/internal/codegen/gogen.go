@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/core"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/core"
 )
 
 // RuntimeImport is the import path of the runtime inside generated modules.

@@ -1,6 +1,6 @@
 package syntax
 
-import "github.com/verniyyy/arkadia/bootstrap/internal/diag"
+import "github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
 
 // Layout rules
 //

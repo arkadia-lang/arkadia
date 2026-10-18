@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/driver"
-	"github.com/verniyyy/arkadia/bootstrap/internal/lsp"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/driver"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/lsp"
 )
 
 func main() {

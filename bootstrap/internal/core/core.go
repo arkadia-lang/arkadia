@@ -3,7 +3,7 @@
 // already turned into explicit dictionaries, and syntactic sugar is gone.
 package core
 
-import "github.com/verniyyy/arkadia/bootstrap/internal/types"
+import "github.com/arkadia-lang/arkadia/bootstrap/internal/types"
 
 type Expr interface{ isExpr() }
 

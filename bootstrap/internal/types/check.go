@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/diag"
-	"github.com/verniyyy/arkadia/bootstrap/internal/syntax"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/diag"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/syntax"
 )
 
 // Checker type checks one module.

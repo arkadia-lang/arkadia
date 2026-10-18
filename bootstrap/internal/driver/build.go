@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/verniyyy/arkadia/bootstrap/internal/codegen"
-	"github.com/verniyyy/arkadia/bootstrap/internal/core"
-	"github.com/verniyyy/arkadia/bootstrap/internal/types"
-	"github.com/verniyyy/arkadia/bootstrap/runtime"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/codegen"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/core"
+	"github.com/arkadia-lang/arkadia/bootstrap/internal/types"
+	"github.com/arkadia-lang/arkadia/bootstrap/runtime"
 )
 
 // BuildOptions controls compilation to a native executable.
