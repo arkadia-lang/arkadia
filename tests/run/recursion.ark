@@ -34,7 +34,7 @@ collatz n =
       | otherwise -> steps (3 * x + 1) (acc + 1)
   steps n 0
 
-compose3 = (+ 1) >> (* 2) >> show
+compose3 x = show ((x + 1) * 2)
 
 main () =
   printLn (countDown 10000000 0)

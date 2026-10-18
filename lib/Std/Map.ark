@@ -4,7 +4,7 @@
 --   let m = Map.fromList [(1, "one"), (2, "two")]
 --   Map.lookup 1 m                     -- Some "one"
 --   map toUpper m                      -- Map.fromList [(1, "ONE"), (2, "TWO")]
---   m <> Map.singleton 3 "three"       -- left-biased union
+--   m ++ Map.singleton 3 "three"       -- left-biased union
 --
 -- Functions that visit several bindings do so in ascending key order.
 module Std.Map
@@ -237,7 +237,7 @@ instance Foldable (Map k) where
 
 -- Left-biased union, like `union`.
 instance Ord k => Semigroup (Map k v) where
-  a <> b = union a b
+  a ++ b = union a b
 
 instance Ord k => Monoid (Map k v) where
   empty = Tip

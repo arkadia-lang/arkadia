@@ -39,14 +39,14 @@ program () =
 eval : Expr -> Result String Int
 eval (Lit n) = Ok n
 eval (BinOp op a b) =
-  eval a >>= (\x ->
-    eval b >>= (\y ->
+  eval a |> andThen \x ->
+    eval b |> andThen \y ->
       match op with
         '+' -> Ok (x + y)
         '-' -> Ok (x - y)
         '*' -> Ok (x * y)
         _ | y == 0 -> Err "division by zero"
-          | otherwise -> Ok (x / y)))
+          | otherwise -> Ok (x / y)
 
 calculate : String -> String
 calculate src = match runParser program src with

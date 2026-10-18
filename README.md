@@ -324,9 +324,9 @@ just fixpoint     # bin/ark で自分自身をビルドし、生成コードと�
 `import Std.String` は `String.split` のように**修飾名だけ**を使えるようにします。非修飾で使いたい名前は `import Std.State (..)` や `import Std.Time (sleep)` のように明示します。
 `Std.State`・`Std.Task`・`Std.Http`・`Std.List` などエフェクトや DSL のモジュールは `(..)` で、`Std.String`・`Std.Map`・`Std.Option` などデータ型のモジュールは修飾名で使う前提で設計されています。
 
-`map`・`andThen`（`>>=`）・`length`・`isEmpty`・`toList`・`foldl` などは型クラス（`Functor` / `Monad` / `Foldable`）のメソッドで、`Option`・`Result`・`Map`・`Array`・`Queue`・`Set` で同じ名前のまま使えます。各モジュールに同名の別関数はありません（例外は `Map.toList` で、値ではなくキーと値の組のリストを返します）。
+`map`・`andThen`・`length`・`isEmpty`・`toList`・`foldl` などは型クラス（`Functor` / `Monad` / `Foldable`）のメソッドで、`Option`・`Result`・`Map`・`Array`・`Queue`・`Set` で同じ名前のまま使えます。各モジュールに同名の別関数はありません（例外は `Map.toList` で、値ではなくキーと値の組のリストを返します）。
 これらのメソッドは渡された関数をその場で呼ぶので、エフェクトを起こす関数も渡せます。
-`Map`・`Set`・`Array`・`Queue`・`Heap` は `<>` で結合でき（`Monoid`）、タプルやコレクションは `"${x}"` で文字列に埋め込めます。
+`Map`・`Set`・`Array`・`Queue`・`Heap` は `++` で結合でき（`Monoid`）、タプルやコレクションは `"${x}"` で文字列に埋め込めます。
 
 ```haskell
 import Std.String
