@@ -1,10 +1,16 @@
 -- Helpers for Result, meant to be imported qualified:
 --
 --   import Std.Result as Result
---   Result.withDefault 0 (Err "oops")   -- 0
+--   Result.withDefault 0 (Err "oops")                  -- 0
+--   readFile path |> Result.map lines |> Result.mapErr (\e -> "config: ${e}")
 --
--- `mapErr` lives in the Prelude.
+-- Unlike the Functor method `map`, `Result.map`, `Result.mapErr` and
+-- `Result.andThen` take functions that may perform effects.
 module Std.Result
+
+-- ===================================================================
+-- Inspecting
+-- ===================================================================
 
 isOk : Result e a -> Bool
 isOk (Ok _) = True
@@ -13,14 +19,28 @@ isOk (Err _) = False
 isErr : Result e a -> Bool
 isErr r = not (isOk r)
 
+-- ===================================================================
+-- Extracting
+-- ===================================================================
+
 withDefault : a -> Result e a -> a
 withDefault _ (Ok x) = x
 withDefault d (Err _) = d
+
+-- The value, or one computed from the error.
+recover : (e -> a) -> Result e a -> a
+recover _ (Ok x) = x
+recover f (Err e) = f e
 
 -- The value, or a runtime error.
 unwrap : Show e => Result e a -> a
 unwrap (Ok x) = x
 unwrap (Err e) = error "Std.Result.unwrap: Err ${show e}"
+
+-- The value, or a runtime error with the given message.
+expect : String -> Result e a -> a
+expect _ (Ok x) = x
+expect msg (Err _) = error msg
 
 unwrapErr : Result e a -> e
 unwrapErr (Err e) = e
@@ -31,24 +51,71 @@ fold : (e -> b) -> (a -> b) -> Result e a -> b
 fold onErr _ (Err e) = onErr e
 fold _ onOk (Ok x) = onOk x
 
+-- Fail with the error message, for use inside `runFail` and tests.
+orFail : Result String a -> <Fail> a
+orFail (Ok x) = x
+orFail (Err e) = fail e
+
+-- ===================================================================
+-- Transforming
+-- ===================================================================
+
+map : (a -> b) -> Result e a -> Result e b
+map f (Ok x) = Ok (f x)
+map _ (Err e) = Err e
+
+mapErr : (e -> f) -> Result e a -> Result f a
+mapErr _ (Ok x) = Ok x
+mapErr f (Err e) = Err (f e)
+
 mapBoth : (e -> f) -> (a -> b) -> Result e a -> Result f b
 mapBoth f _ (Err e) = Err (f e)
 mapBoth _ g (Ok x) = Ok (g x)
 
--- Map with a function that may perform effects.
-mapResult : (a -> b) -> Result e a -> Result e b
-mapResult f (Ok x) = Ok (f x)
-mapResult _ (Err e) = Err e
+-- Chain a computation that may itself fail.
+andThen : (a -> Result e b) -> Result e a -> Result e b
+andThen f (Ok x) = f x
+andThen _ (Err e) = Err e
+
+-- Recover from an error.
+orElse : (e -> Result f a) -> Result e a -> Result f a
+orElse _ (Ok x) = Ok x
+orElse f (Err e) = f e
+
+-- Run an action on the value, if there is one.
+whenOk : Result e a -> (a -> Unit) -> Unit
+whenOk (Ok x) f = f x
+whenOk (Err _) _ = ()
+
+-- ===================================================================
+-- Combining
+-- ===================================================================
 
 map2 : (a -> b -> c) -> Result e a -> Result e b -> Result e c
 map2 f (Ok a) (Ok b) = Ok (f a b)
 map2 _ (Err e) _ = Err e
 map2 _ _ (Err e) = Err e
 
--- Recover from an error.
-orElse : (e -> Result f a) -> Result e a -> Result f a
-orElse _ (Ok x) = Ok x
-orElse f (Err e) = f e
+-- All the values, or the first error.
+combine : List (Result e a) -> Result e (List a)
+combine rs = combineAcc rs []
+
+private combineAcc : List (Result e a) -> List a -> Result e (List a)
+combineAcc [] acc = Ok (reverse acc)
+combineAcc (Ok x :: rest) acc = combineAcc rest (x :: acc)
+combineAcc (Err e :: _) _ = Err e
+
+-- All the values, or every error.
+combineAll : List (Result e a) -> Result (List e) (List a)
+combineAll rs = match foldr (\r (es, as) -> match r with
+    Ok a -> (es, a :: as)
+    Err e -> (e :: es, as)) ([], []) rs with
+  ([], as) -> Ok as
+  (es, _) -> Err es
+
+-- ===================================================================
+-- Converting
+-- ===================================================================
 
 toOption : Result e a -> Option a
 toOption (Ok x) = Some x
@@ -61,16 +128,3 @@ errToOption (Ok _) = None
 fromOption : e -> Option a -> Result e a
 fromOption _ (Some x) = Ok x
 fromOption e None = Err e
-
--- Fail with the error message, for use inside `runFail` and tests.
-orFail : Result String a -> <Fail> a
-orFail (Ok x) = x
-orFail (Err e) = fail e
-
--- Collect all values, or every error.
-combineAll : List (Result e a) -> Result (List e) (List a)
-combineAll rs = match foldr (\r (es, as) -> match r with
-    Ok a -> (es, a :: as)
-    Err e -> (e :: es, as)) ([], []) rs with
-  ([], as) -> Ok as
-  (es, _) -> Err es

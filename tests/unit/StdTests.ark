@@ -72,3 +72,8 @@ test "option and result helpers" =
 
 test "foldable on option" =
   assertEq (sum (Some 5), sum (None : Option Int), toList (Some 'x')) (5, 0, ['x'])
+
+test "tuples and orderings interpolate" =
+  assertEq "${(1, "a")}" "(1, \"a\")"
+  assertEq "${(1, 'b', 2.5)}" "(1, 'b', 2.5)"
+  assertEq "at ${compare 1 2}" "at LT"

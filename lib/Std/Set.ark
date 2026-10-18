@@ -1,4 +1,11 @@
--- Persistent ordered sets.
+-- Persistent ordered sets, meant to be imported qualified:
+--
+--   import Std.Set as Set
+--   let s = Set.fromList [3, 1, 2]
+--   Set.member 2 s            -- True
+--   s <> Set.fromList [4]     -- union
+--
+-- Functions that visit several elements do so in ascending order.
 module Std.Set
 
 import Std.Map as M
@@ -84,6 +91,12 @@ lookupGE x (Set m) = Prelude.map fst (M.lookupGE x m)
 toDescList : Set a -> List a
 toDescList s = Prelude.reverse (toList s)
 
+foldl : (b -> a -> b) -> b -> Set a -> b
+foldl f z s = Prelude.foldl f z (toList s)
+
+foldr : (a -> b -> b) -> b -> Set a -> b
+foldr f z s = Prelude.foldr f z (toList s)
+
 instance Foldable Set where
   foldr f z s = Prelude.foldr f z (toList s)
   foldl f z s = Prelude.foldl f z (toList s)
@@ -96,3 +109,12 @@ instance Ord a => Ord (Set a) where
 
 instance Show a => Show (Set a) where
   show s = "Set.fromList " ++ show (toList s)
+
+instance Show a => Display (Set a) where
+  display s = show s
+
+instance Ord a => Semigroup (Set a) where
+  a <> b = union a b
+
+instance Ord a => Monoid (Set a) where
+  empty = Set M.empty

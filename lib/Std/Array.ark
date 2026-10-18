@@ -1,4 +1,10 @@
--- Immutable arrays with constant-time indexing.
+-- Immutable arrays with constant-time indexing, meant to be imported
+-- qualified:
+--
+--   import Std.Array as Array
+--   let a = Array.fromList [10, 20, 30]
+--   Array.get 1 a            -- Some 20
+--   Array.map (* 2) a        -- Array.fromList [20, 40, 60]
 module Std.Array
 
 type Array a
@@ -20,8 +26,9 @@ foreign empty : Array a = "rt.ArrayEmpty"
 sort : Ord a => Array a -> Array a
 sort a = sortBy compare a
 
--- Map with a function that may perform effects.
-foreign mapArray : (a -> b) -> Array a -> Array b = "rt.ArrayMap"
+-- Apply a function to every element; unlike the Functor method `map`, it
+-- may perform effects.
+foreign map : (a -> b) -> Array a -> Array b = "rt.ArrayMap"
 foreign reverse : Array a -> Array a = "rt.ArrayReverse"
 
 isEmpty : Array a -> Bool
@@ -56,6 +63,12 @@ mapWithIndex f a = generate (length a) (\i -> f i (at i a))
 
 foldlWithIndex : (b -> Int -> a -> b) -> b -> Array a -> b
 foldlWithIndex f z a = Prelude.foldl (\acc i -> f acc i (at i a)) z (Prelude.range 0 (length a))
+
+foldl : (b -> a -> b) -> b -> Array a -> b
+foldl f z a = Prelude.foldl f z (toList a)
+
+foldr : (a -> b -> b) -> b -> Array a -> b
+foldr f z a = Prelude.foldr f z (toList a)
 
 filter : (a -> Bool) -> Array a -> Array a
 filter p a = fromList (Prelude.filter p (toList a))
@@ -96,17 +109,26 @@ search x a lo hi
         EQ -> Some mid
 
 instance Functor Array where
-  map f a = mapArray f a
+  map f a = Std.Array.map f a
 
 instance Foldable Array where
   foldl f z a = Prelude.foldl f z (toList a)
   foldr f z a = Prelude.foldr f z (toList a)
 
 instance Traversable Array where
-  traverse f a = map fromList (traverse f (toList a))
+  traverse f a = Prelude.map fromList (traverse f (toList a))
 
 instance Show a => Show (Array a) where
   show a = "Array.fromList " ++ show (toList a)
+
+instance Show a => Display (Array a) where
+  display a = show a
+
+instance Semigroup (Array a) where
+  a <> b = append a b
+
+instance Monoid (Array a) where
+  empty = Std.Array.empty
 
 instance Eq a => Eq (Array a) where
   a == b = toList a == toList b

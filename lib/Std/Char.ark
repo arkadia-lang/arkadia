@@ -2,10 +2,25 @@
 --
 --   import Std.Char as Char
 --   Char.digitToInt 'f'   -- Some 15
+--   Char.toCode 'A'       -- 65
 --
--- `isDigit`, `isAlpha`, `isSpace`, `isUpper`, `isLower`, `charCode` and
--- `fromCharCode` live in the Prelude.
+-- The module repeats the character functions of the Prelude (`isDigit`,
+-- `charCode` as `toCode`, ...) so that every one can be written
+-- `Char.name`.
 module Std.Char
+
+foreign isDigit : Char -> Bool = "rt.CharIsDigit"
+foreign isAlpha : Char -> Bool = "rt.CharIsAlpha"
+foreign isSpace : Char -> Bool = "rt.CharIsSpace"
+foreign isUpper : Char -> Bool = "rt.CharIsUpper"
+foreign isLower : Char -> Bool = "rt.CharIsLower"
+
+-- The Unicode code point.
+foreign toCode : Char -> Int = "rt.CharCode"
+foreign fromCode : Int -> Char = "rt.FromCharCode"
+
+-- A string of one character.
+foreign toString : Char -> String = "rt.CharToString"
 
 foreign toUpper : Char -> Char = "rt.CharToUpper"
 foreign toLower : Char -> Char = "rt.CharToLower"
@@ -18,7 +33,7 @@ isAlphaNum : Char -> Bool
 isAlphaNum c = isAlpha c || isDigit c
 
 isAscii : Char -> Bool
-isAscii c = charCode c < 128
+isAscii c = toCode c < 128
 
 isAsciiDigit : Char -> Bool
 isAsciiDigit c = c >= '0' && c <= '9'
@@ -35,14 +50,14 @@ isOctDigit c = c >= '0' && c <= '7'
 -- The value of a hexadecimal digit (either case).
 digitToInt : Char -> Option Int
 digitToInt c
-  | c >= '0' && c <= '9' = Some (charCode c - charCode '0')
-  | c >= 'a' && c <= 'f' = Some (charCode c - charCode 'a' + 10)
-  | c >= 'A' && c <= 'F' = Some (charCode c - charCode 'A' + 10)
+  | c >= '0' && c <= '9' = Some (toCode c - toCode '0')
+  | c >= 'a' && c <= 'f' = Some (toCode c - toCode 'a' + 10)
+  | c >= 'A' && c <= 'F' = Some (toCode c - toCode 'A' + 10)
   | otherwise = None
 
 -- The lowercase hexadecimal digit for 0 .. 15.
 intToDigit : Int -> Option Char
 intToDigit n
-  | n >= 0 && n <= 9 = Some (fromCharCode (charCode '0' + n))
-  | n >= 10 && n <= 15 = Some (fromCharCode (charCode 'a' + n - 10))
+  | n >= 0 && n <= 9 = Some (fromCode (toCode '0' + n))
+  | n >= 10 && n <= 15 = Some (fromCode (toCode 'a' + n - 10))
   | otherwise = None

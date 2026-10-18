@@ -44,3 +44,18 @@ test "wrap" =
   assertEq (S.wrap 10 "the quick brown fox jumps over") ["the quick", "brown fox", "jumps over"]
   assertEq (S.wrap 3 "abcdef gh") ["abcdef", "gh"]
   assertEq (S.wrap 5 "  ") []
+
+test "string qualified api" =
+  assertEq (S.length "héllo", S.split "," "a,b", S.join "-" ["a", "b"]) (5, ["a", "b"], "a-b")
+  assertEq ("  Hi " |> S.trim |> S.toLower) "hi"
+  assert (S.contains "ell" "hello" && S.startsWith "he" "hello" && S.endsWith "lo" "hello") "contains"
+  assertEq (S.toInt "42", S.toInt "x", S.toFloat "1.5") (Some 42, None, Some 1.5)
+  assertEq (S.lines "a\nb", S.words " a  b ", S.concat ["a", "b"]) (["a", "b"], ["a", "b"], "ab")
+  assertEq (S.map Char.toUpper "abc", S.filter Char.isDigit "a1b2") ("ABC", "12")
+  assert (S.all Char.isDigit "123" && S.any Char.isSpace "a b") "any / all"
+  assertEq (S.fromChar 'x' ++ S.fromChars ['y', 'z']) "xyz"
+
+test "char qualified api" =
+  assert (Char.isDigit '7' && Char.isAlpha 'a' && Char.isSpace ' ') "classification"
+  assert (Char.isUpper 'A' && Char.isLower 'a') "case"
+  assertEq (Char.toCode 'A', Char.fromCode 97, Char.toString 'z') (65, 'a', "z")

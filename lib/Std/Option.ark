@@ -1,10 +1,45 @@
 -- Helpers for Option, meant to be imported qualified:
 --
 --   import Std.Option as Option
---   Option.map2 (+) (Some 1) (Some 2)   -- Some 3
+--   Option.map2 (+) (Some 1) (Some 2)            -- Some 3
+--   Option.withDefault 0 (Option.map (* 2) o)
+--   o |> Option.andThen parseInt |> Option.isSome
 --
--- `withDefault`, `isSome` and `isNone` live in the Prelude.
+-- Unlike the Functor method `map`, `Option.map` and `Option.andThen` take
+-- functions that may perform effects.
 module Std.Option
+
+-- ===================================================================
+-- Inspecting
+-- ===================================================================
+
+isSome : Option a -> Bool
+isSome o = Prelude.isSome o
+
+isNone : Option a -> Bool
+isNone o = Prelude.isNone o
+
+-- Does the option hold this value?
+contains : Eq a => a -> Option a -> Bool
+contains x o = exists (\y -> y == x) o
+
+-- Does the option hold a value satisfying p?
+exists : (a -> Bool) -> Option a -> Bool
+exists p (Some x) = p x
+exists _ None = False
+
+-- Is the option empty or its value satisfying p?
+forAll : (a -> Bool) -> Option a -> Bool
+forAll p (Some x) = p x
+forAll _ None = True
+
+-- ===================================================================
+-- Extracting
+-- ===================================================================
+
+-- The value, or a default.
+withDefault : a -> Option a -> a
+withDefault d o = Prelude.withDefault d o
 
 -- The value, or a runtime error.
 unwrap : Option a -> a
@@ -26,6 +61,33 @@ withDefaultLazy : (Unit -> a) -> Option a -> a
 withDefaultLazy _ (Some x) = x
 withDefaultLazy f None = f ()
 
+-- ===================================================================
+-- Transforming
+-- ===================================================================
+
+map : (a -> b) -> Option a -> Option b
+map _ None = None
+map f (Some x) = Some (f x)
+
+-- Chain a computation that may itself produce None.
+andThen : (a -> Option b) -> Option a -> Option b
+andThen _ None = None
+andThen f (Some x) = f x
+
+filter : (a -> Bool) -> Option a -> Option a
+filter p (Some x)
+  | p x = Some x
+filter _ _ = None
+
+-- Run an action on the value, if there is one.
+whenSome : Option a -> (a -> Unit) -> Unit
+whenSome None _ = ()
+whenSome (Some x) f = f x
+
+-- ===================================================================
+-- Combining
+-- ===================================================================
+
 -- The first option if it is Some, otherwise the fallback.
 orElse : Option a -> Option a -> Option a
 orElse _ (Some x) = Some x
@@ -36,21 +98,6 @@ firstSome : List (Option a) -> Option a
 firstSome [] = None
 firstSome (Some x :: _) = Some x
 firstSome (None :: rest) = firstSome rest
-
-filter : (a -> Bool) -> Option a -> Option a
-filter p (Some x)
-  | p x = Some x
-filter _ _ = None
-
--- Map with a function that may perform effects.
-mapOption : (a -> b) -> Option a -> Option b
-mapOption _ None = None
-mapOption f (Some x) = Some (f x)
-
--- Run an action on the value, if there is one.
-whenSome : Option a -> (a -> Unit) -> Unit
-whenSome None _ = ()
-whenSome (Some x) f = f x
 
 map2 : (a -> b -> c) -> Option a -> Option b -> Option c
 map2 f (Some a) (Some b) = Some (f a b)
@@ -63,10 +110,9 @@ flatten : Option (Option a) -> Option a
 flatten (Some o) = o
 flatten None = None
 
--- Does the option hold a value satisfying p?
-exists : (a -> Bool) -> Option a -> Bool
-exists p (Some x) = p x
-exists _ None = False
+-- ===================================================================
+-- Converting
+-- ===================================================================
 
 toList : Option a -> List a
 toList (Some x) = [x]
