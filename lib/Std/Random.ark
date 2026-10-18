@@ -6,11 +6,11 @@ import Std.Bits (..)
 effect Random where
   nextInt : Unit -> Int
 
--- A uniformly distributed integer in [lo, hi].
+-- A uniformly distributed integer in [lo, hi]; lo > hi is a runtime error.
 randomInt : Int -> Int -> <Random> Int
-randomInt lo hi =
-  let span = hi - lo + 1
-  lo + mod (shiftRightUnsigned (nextInt ()) 1) span
+randomInt lo hi
+  | lo > hi = error "Std.Random.randomInt: empty range [${lo}, ${hi}]"
+  | otherwise = lo + mod (shiftRightUnsigned (nextInt ()) 1) (hi - lo + 1)
 
 -- A float in [0, 1).
 randomFloat : Unit -> <Random> Float
@@ -19,10 +19,12 @@ randomFloat () = toFloat (shiftRightUnsigned (nextInt ()) 11) / 9007199254740992
 randomBool : Unit -> <Random> Bool
 randomBool () = testBit (nextInt ()) 7
 
--- Pick a random element of a non-empty list.
-choose : List a -> <Random> Option a
-choose [] = None
-choose xs = nth (randomInt 0 (length xs - 1)) xs
+-- A random element of a list; the empty list is a runtime error.
+choose : List a -> <Random> a
+choose [] = error "Std.Random.choose: empty list"
+choose xs = match nth (randomInt 0 (length xs - 1)) xs with
+  Some x -> x
+  None -> error "unreachable"
 
 shuffle : List a -> <Random> List a
 shuffle xs = map snd (sortOn fst (map (\x -> (nextInt (), x)) xs))
