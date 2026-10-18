@@ -944,19 +944,38 @@ addUnqualCtor m name ci mod = match Map.lookup name (readRef m) with
   Some (CEAmbig mods) -> modifyRef m (Map.insert name (CEAmbig (snoc mods mod)))
   None -> modifyRef m (Map.insert name (CEctor ci))
 
+-- Bring the imports into scope. Every import adds its qualifiers; its
+-- unqualified names follow a precedence so that a module can be imported
+-- without `as` even when it reuses Prelude names: names listed explicitly
+-- (`import M (x)`) win over the Prelude, which wins over wildcard imports
+-- (`import M`, `import M (..)`). `import Std.String` thus makes `String.map`
+-- the string one and leaves `map` the Prelude's. Clashes within one level
+-- are ambiguous (an error only where the name is used).
 processImports : Checker -> List Import -> <IO> Unit
 processImports c imports0 =
   let imports = match cMod c == preludeMod || anyOf (\i -> importPath i == preludeMod) imports0 with
     True -> imports0
     False -> Import noPos preludeMod "" [] True :: imports0
-  forEach imports (processImport c)
+  let resolved = filterMap (resolveImport c) imports
+  let (wild, listed) = partition (\(i, _) -> isWildcardImport i) resolved
+  forEach listed (\(i, ex) -> importListed c i ex)
+  let (prelude, others) = partition (\(i, _) -> importPath i == preludeMod) wild
+  importWildcards c prelude
+  importWildcards c others
 
-private processImport : Checker -> Import -> <IO> Unit
-processImport c (Import ipos path ialias names all) =
-  let sc = cScope c
-  match Map.lookup path (readRef (gModules (cG c))) with
-    None -> errorf c ipos "unknown module '${path}'"
+private isWildcardImport : Import -> Bool
+isWildcardImport (Import _ _ alias names all) = all || alias == "" && isEmpty names
+
+-- Look up an imported module and register its qualifiers: the alias, or
+-- else both the last component of its path and the full path.
+private resolveImport : Checker -> Import -> <IO> Option (Import, Exports)
+resolveImport c imp = match imp with
+  Import ipos path ialias _ _ -> match Map.lookup path (readRef (gModules (cG c))) with
+    None ->
+      errorf c ipos "unknown module '${path}'"
+      None
     Some ex ->
+      let sc = cScope c
       let alias = match ialias with
         "" -> shortName path
         a -> a
@@ -965,33 +984,54 @@ processImport c (Import ipos path ialias names all) =
       match ialias == "" && alias != path with
         True -> addQual path
         False -> ()
-      let exMod = exportsModule ex
-      match all || ialias == "" && isEmpty names with
-        True ->
-          forEach (Map.toList (readRef (exportsValues ex))) (\(n, v) -> addUnqualValue (scopeValues sc) n v exMod)
-          forEach (Map.toList (readRef (exportsTypes ex))) (\(n, v) -> addUnqualType (scopeTypes sc) n v exMod)
-          forEach (Map.toList (readRef (exportsCtors ex))) (\(n, v) -> addUnqualCtor (scopeCtors sc) n v exMod)
-        False -> forEach names (\(ImportName np n kind nall) -> match kind with
-          0 -> match Map.lookup n (readRef (exportsValues ex)) with
-            None -> errorf c np "module '${path}' does not export '${n}'"
-            Some v -> addUnqualValue (scopeValues sc) n v exMod
-          _ -> match Map.lookup n (readRef (exportsTypes ex)) with
-            None -> errorf c np "module '${path}' does not export type '${n}'"
-            Some t ->
-              addUnqualType (scopeTypes sc) n t exMod
-              match nall with
-                False -> ()
-                True -> match t with
-                  TEType ti -> forEach (typeInfoCtors ti) (\ci -> match Map.member (ctorShort ci) (readRef (exportsCtors ex)) with
-                    True -> addUnqualCtor (scopeCtors sc) (ctorShort ci) ci exMod
-                    False -> ())
-                  TEClass cl -> forEach (classMethods cl) (\mi -> match Map.lookup (methodName mi) (readRef (exportsValues ex)) with
-                    Some v -> addUnqualValue (scopeValues sc) (methodName mi) v exMod
-                    None -> ())
-                  TEEffect ei -> forEach (effectOps ei) (\op -> match Map.lookup (opName op) (readRef (exportsValues ex)) with
-                    Some v -> addUnqualValue (scopeValues sc) (opName op) v exMod
-                    None -> ())
-                  _ -> ())
+      Some (imp, ex)
+
+-- Import every name of the modules, except those already in scope (from a
+-- higher precedence level).
+private importWildcards : Checker -> List (Import, Exports) -> <IO> Unit
+importWildcards c imps =
+  let sc = cScope c
+  let values = readRef (scopeValues sc)
+  let types = readRef (scopeTypes sc)
+  let ctors = readRef (scopeCtors sc)
+  forEach imps (\(_, ex) ->
+    let exMod = exportsModule ex
+    forEach (Map.toList (readRef (exportsValues ex))) (\(n, v) -> match Map.member n values with
+      True -> ()
+      False -> addUnqualValue (scopeValues sc) n v exMod)
+    forEach (Map.toList (readRef (exportsTypes ex))) (\(n, v) -> match Map.member n types with
+      True -> ()
+      False -> addUnqualType (scopeTypes sc) n v exMod)
+    forEach (Map.toList (readRef (exportsCtors ex))) (\(n, v) -> match Map.member n ctors with
+      True -> ()
+      False -> addUnqualCtor (scopeCtors sc) n v exMod))
+
+-- Import the names listed in `import M (x, T(..))`.
+private importListed : Checker -> Import -> Exports -> <IO> Unit
+importListed c (Import _ path _ names _) ex =
+  let sc = cScope c
+  let exMod = exportsModule ex
+  forEach names (\(ImportName np n kind nall) -> match kind with
+    0 -> match Map.lookup n (readRef (exportsValues ex)) with
+      None -> errorf c np "module '${path}' does not export '${n}'"
+      Some v -> addUnqualValue (scopeValues sc) n v exMod
+    _ -> match Map.lookup n (readRef (exportsTypes ex)) with
+      None -> errorf c np "module '${path}' does not export type '${n}'"
+      Some t ->
+        addUnqualType (scopeTypes sc) n t exMod
+        match nall with
+          False -> ()
+          True -> match t with
+            TEType ti -> forEach (typeInfoCtors ti) (\ci -> match Map.member (ctorShort ci) (readRef (exportsCtors ex)) with
+              True -> addUnqualCtor (scopeCtors sc) (ctorShort ci) ci exMod
+              False -> ())
+            TEClass cl -> forEach (classMethods cl) (\mi -> match Map.lookup (methodName mi) (readRef (exportsValues ex)) with
+              Some v -> addUnqualValue (scopeValues sc) (methodName mi) v exMod
+              None -> ())
+            TEEffect ei -> forEach (effectOps ei) (\op -> match Map.lookup (opName op) (readRef (exportsValues ex)) with
+              Some v -> addUnqualValue (scopeValues sc) (opName op) v exMod
+              None -> ())
+            _ -> ())
 
 -- Resolve a module qualifier to its export tables.
 qualified : Checker -> Pos -> String -> <IO> Option (List Exports)

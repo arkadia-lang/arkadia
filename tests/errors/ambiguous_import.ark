@@ -1,0 +1,4 @@
+import Std.Map
+import Std.Set
+
+main () = println "${insert 1 Set.empty}"

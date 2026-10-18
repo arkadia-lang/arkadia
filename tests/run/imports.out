@@ -1,0 +1,5 @@
+[2, 4, 6] 2
+Map.fromList [("ann", 30), ("bob", 0)]
+ABC
+ann, bob
+["a", "b"] Err 4

@@ -1,0 +1,20 @@
+-- Imports without `as`: a module's names are reachable qualified by the last
+-- component of its path, while unqualified names follow a precedence
+-- (listed names > Prelude > wildcard imports).
+import Std.String
+import Std.Char
+import Std.Map
+import Std.Option (withDefault)
+import Std.Result (mapErr)
+
+main () =
+  -- `map` and `length` stay the Prelude's despite the wildcard imports
+  println "${map (\x -> x * 2) [1, 2, 3]} ${length [1, 2]}"
+  -- qualified names reach each module's own functions
+  let ages = Map.fromList [("ann", "30"), ("bob", "x")]
+  println "${Map.map (\s -> withDefault 0 (String.toInt s)) ages}"
+  println (String.map Char.toUpper "abc")
+  -- the full path works too
+  println (Std.String.join ", " (Map.keys ages))
+  -- names a module does not share with the Prelude are unqualified
+  println "${split "," "a,b"} ${mapErr String.length (Err "oops" : Result String Int)}"
