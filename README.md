@@ -1,4 +1,8 @@
-# Arkadia Lang
+<p align="center">
+  <img src="docs/assets/logo.png" alt="Arkadia のロゴ" width="160">
+</p>
+
+<h1 align="center">Arkadia Lang</h1>
 
 **Arkadia** は、代数的エフェクトと型クラスを備えた、正格評価の静的型付き関数型プログラミング言語です。
 ネイティブバイナリにコンパイルされ、構造化された軽量タスクがすべてのプロセッサで並列に動きます。
