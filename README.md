@@ -50,10 +50,29 @@ main () =
 
 ## インストール
 
-Go 1.22 以降と [just](https://github.com/casey/just) が必要です（Go はブートストラップと、生成コードのビルドの両方に使います）。
+対応プラットフォームは Linux と macOS（amd64・arm64）です。
+`ark` は Arkadia を Go に変換して `go build` するので、どちらの方法でも **Go 1.22 以降**が必要です。
+
+### ビルド済みのアーカイブから
+
+[Releases](https://github.com/verniyyy/arkadia/releases) から環境に合ったアーカイブを取得して展開し、`bin/` を `PATH` に加えます。
 
 ```sh
-git clone <this repository> arkadia && cd arkadia
+curl -LO https://github.com/verniyyy/arkadia/releases/download/v0.1.0/arkadia-0.1.0-linux-amd64.tar.gz
+tar xzf arkadia-0.1.0-linux-amd64.tar.gz
+export PATH="$PWD/arkadia-0.1.0-linux-amd64/bin:$PATH"
+ark version
+```
+
+アーカイブには `ark` 本体と、それが使う標準ライブラリ（`lib/`）と Go ランタイム（`runtime/rt/`）が入っています。
+展開したディレクトリの中の配置は変えずに使ってください。
+
+### ソースから
+
+ソースからのビルドには Go と [just](https://github.com/casey/just) が必要です。
+
+```sh
+git clone https://github.com/verniyyy/arkadia.git && cd arkadia
 just build      # ブートストラップ: bin/ark0 (Go) → bin/ark1 → bin/ark
 just install    # $GOBIN/ark から bin/ark へのシンボリックリンクを張る
 ```
@@ -404,6 +423,10 @@ editors/vscode     VS Code 拡張（シンタックスハイライト + LSP ク�
 - `Ref`・`MArray`・`HashMap` はタスク間で同時に使えません（データ競合になります）。タスク間の共有には `Std.Channel`・`Std.Atomic`・`Std.Mutex` を使ってください。
 - 標準入力の読み込み（`readLine`）と外部コマンドの実行はキャンセルポイントではありません。
 
+## 変更履歴
+
+[CHANGELOG.md](CHANGELOG.md) を参照してください。リリースの手順は [docs/releasing.md](docs/releasing.md) にあります。
+
 ## ライセンス
 
-MIT
+[MIT](LICENSE)
