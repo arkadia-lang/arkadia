@@ -565,20 +565,25 @@ deriveInstances c decls = concat (map (\d -> match d with
     Some ti ->
       let pks = paramKinds (typeInfoKind ti) (length params)
       let refines = typeRefines (cG c) (typeInfoName ti)
-      filterMap (\cls ->
-        let isJson = cls == "ToJson" || cls == "FromJson"
-        let qual = match isJson with
-          True -> "#" ++ jsonMod
-          False -> "#Prelude"
+      filterMap (\written ->
+        -- the class is named like in any other type: `Json.ToJson`, or
+        -- `ToJson` when imported unqualified
+        let full = match lookupClass c p (qualifierOf written) (shortName written) with
+          Some cl -> className cl
+          None -> ""
+        let cls = shortName full
+        let isJson = full == jsonMod ++ ".ToJson" || full == jsonMod ++ ".FromJson"
+        let qual = "#" ++ qualifierOf full
         let ok = match isJson with
-          _ | anyOf ctorExistential (typeInfoCtors ti) ->
-            errorf c p "cannot derive ${cls} for a type whose constructors have existential type variables"
-            False
+          _ | full == "" -> False
+            | not (isJson || elem full ["Prelude.Eq", "Prelude.Ord", "Prelude.Show"]) ->
+                errorf c p "cannot derive class '${written}' (only Eq, Ord, Show, Json.ToJson and Json.FromJson can be derived)"
+                False
+            | anyOf ctorExistential (typeInfoCtors ti) ->
+                errorf c p "cannot derive ${cls} for a type whose constructors have existential type variables"
+                False
           False -> True
           True
-            | not (Map.member jsonMod (readRef (gModules (cG c)))) ->
-                errorf c p "deriving ${cls} requires importing ${jsonMod}"
-                False
             | isEmpty ctors ->
                 errorf c p "cannot derive ${cls} for a type without constructors"
                 False
@@ -604,10 +609,7 @@ deriveInstances c decls = concat (map (\d -> match d with
               "Ord" -> Some (deriveOrd p ctors selfType)
               "Show" -> Some (deriveShow p ctors)
               "ToJson" -> Some (deriveToJson p ctors)
-              "FromJson" -> Some (deriveFromJson p name ctors)
-              _ ->
-                errorf c p "cannot derive class '${cls}' (only Eq, Ord, Show, ToJson and FromJson can be derived)"
-                None
+              _ -> Some (deriveFromJson p name ctors)
             match bind with
               Some b -> Some (DInstance p ctx qual cls head [b] True)
               None -> None) deriv

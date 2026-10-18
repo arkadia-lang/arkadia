@@ -1,4 +1,4 @@
--- deriving (ToJson, FromJson)
+-- deriving (Json.ToJson, Json.FromJson)
 
 import Std.Json as Json
 import Std.Map as Map
@@ -7,24 +7,24 @@ type Role = Admin | Member | Guest
   deriving (Show, Eq, Json.ToJson, Json.FromJson)
 
 type User = User { name : String, age : Int, role : Role, email : Option String, tags : List String }
-  deriving (Show, Eq, ToJson, FromJson)
+  deriving (Show, Eq, Json.ToJson, Json.FromJson)
 
 type Shape
   = Circle { radius : Float }
   | Rect { w, h : Float }
   | Polygon (List (Float, Float))
   | Dot
-  deriving (Show, ToJson, FromJson)
+  deriving (Show, Json.ToJson, Json.FromJson)
 
 -- a single positional constructor is its argument (or an array of them)
 type UserId = UserId Int
-  deriving (Show, ToJson, FromJson)
+  deriving (Show, Json.ToJson, Json.FromJson)
 
 type Pair a = Pair a a
-  deriving (Show, ToJson, FromJson)
+  deriving (Show, Json.ToJson, Json.FromJson)
 
 type Team = Team { members : List User, scores : Map.Map String Int, lead : Option UserId }
-  deriving (Show, ToJson, FromJson)
+  deriving (Show, Json.ToJson, Json.FromJson)
 
 roundTrip : (Json.ToJson a, Json.FromJson a) => a -> Result String a
 roundTrip x = Json.decode (Json.encode x)

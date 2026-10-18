@@ -1,0 +1,6 @@
+import Std.Json
+
+type P = P Int
+  deriving (ToJson)
+
+main () = println "x"

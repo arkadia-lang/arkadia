@@ -582,22 +582,28 @@ ctorAlts p acc =
     True -> ctorAlts p (snoc acc c)
     False -> snoc acc c
 
+-- The class names as written, qualified ones as "Json.ToJson".
 derivingClause : P -> <Exn Diag, IO> List String
 derivingClause p =
   skip p
+  let className _ =
+    let t = expect p UIDENT
+    match tokQual t with
+      "" -> tokText t
+      q -> q ++ "." ++ tokText t
   match accept p LPAREN with
     True ->
       let loop acc = match at p RPAREN with
         True -> reverse acc
         False ->
-          let n = tokText (expect p UIDENT)
+          let n = className ()
           match accept p COMMA with
             True -> loop (n :: acc)
             False -> reverse (n :: acc)
       let names = loop []
       expect_ p RPAREN
       names
-    False -> [tokText (expect p UIDENT)]
+    False -> [className ()]
 
 ctorDecl : P -> <Exn Diag, IO> CtorDecl
 ctorDecl p =

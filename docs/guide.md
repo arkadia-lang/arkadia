@@ -214,7 +214,7 @@ type Handle
 alias Point = (Float, Float)
 ```
 
-`deriving` できるのは `Eq`, `Ord`, `Show`、および `Std.Json` をインポートしたモジュールでは `ToJson`, `FromJson` です（`deriving (Json.ToJson)` のように修飾しても書けます）。
+`deriving` できるのは `Eq`, `Ord`, `Show` と、`Std.Json` の `ToJson`, `FromJson` です。クラス名は制約に書くときと同じように解決されるので、`import Std.Json` なら `deriving (Json.ToJson)`、`import Std.Json (ToJson)` なら `deriving (ToJson)` と書きます。
 
 `ToJson` / `FromJson` の導出は次の形の JSON と相互に変換します。
 
